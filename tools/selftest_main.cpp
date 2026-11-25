@@ -18,6 +18,9 @@
 #include "Grooves.h"
 #include "SynthPresets.h"
 #include "WavFile.h"
+#include "WavStream.h"
+#include "Recorder.h"
+#include "MultitrackRecorder.h"
 #include "CustomPatterns.h"
 #include "MasterChain.h"
 #include "Stereo.h"
@@ -6453,6 +6456,139 @@ int main(int argc, char** argv) {
         a.engine.GetMixer().audioXruns.store(3); a.engine.GetMixer().audioLongestUs.store(9000); a.engine.GetMixer().dropouts[1].lenUs.store(5);
         a.engine.GetMixer().ResetDropouts(); sm.ResetMaxHold();
         check(a.engine.GetMixer().audioXruns.load() == 0 && a.engine.GetMixer().audioLongestUs.load() == 0 && a.engine.GetMixer().dropouts[1].lenUs.load() == 0 && sm.MaxHoldUs() == 0, "n1: a click on the readout clears the dropout log");
+    }
+    {   // N1 (LIVE-1 / LIVE-3 / LIVE-7, TEST-4): the recorders write the take while it plays; STOP only closes the file
+        namespace fs = std::filesystem;
+        const std::string dir = "selftest_rec";
+        fs::remove_all(dir); fs::create_directories(dir);
+        const int sr = 44100;
+        auto sine = [](int64_t i) { return 0.5f * std::sin(static_cast<float>(i) * 0.031f); };
+        auto readDataSize = [](const std::string& path) -> uint32_t {   // the "data" size field of a 44-byte header, as on disk now
+            std::ifstream f(path, std::ios::binary); unsigned char h[44] = {};
+            f.read(reinterpret_cast<char*>(h), 44);
+            return f.gcount() == 44 ? static_cast<uint32_t>(h[40] | (h[41] << 8) | (h[42] << 16) | (static_cast<uint32_t>(h[43]) << 24)) : 0u;
+        };
+        {
+            Recorder rec; rec.Init(sr);
+            const std::string path = dir + "/take.wav";
+            check(rec.Toggle(path) == "RECORDING" && rec.IsRecording(), "rec: REC starts at once");
+            std::vector<float> blk(128 * 2);
+            int64_t n = 0;
+            const int64_t total = sr * 3 / 2;   // 1.5 s, pushed in real time-ish so the drain thread writes along the way
+            const auto t0 = std::chrono::steady_clock::now();
+            while (n < total) {
+                for (int i = 0; i < 128; ++i) { blk[i * 2] = sine(n + i); blk[i * 2 + 1] = -sine(n + i); }
+                rec.Push(blk.data(), 128);
+                n += 128;
+                std::this_thread::sleep_until(t0 + std::chrono::microseconds(n * 1000000 / sr / 4));   // 4x faster than real time
+            }
+            const int64_t pushed = n;   // whole blocks: a little more than `total`
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            check(readDataSize(path) > 0, "rec: the file on disk already holds audio while recording (a crash keeps it)");
+            const auto s0 = std::chrono::steady_clock::now();
+            const std::string stopMsg = rec.Toggle();
+            const double stopMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count();
+            check(stopMsg == "SAVING RECORDING..." && !rec.IsRecording(), "rec: STOP returns at once and REC goes off");
+            check(stopMs < 5.0, "rec: STOP costs the UI thread almost nothing (" + std::to_string(stopMs) + " ms)");
+            rec.WaitIdleForTest();
+            std::string msg, outPath;
+            const bool gotRec = rec.TakeResult(msg, outPath);
+            check(gotRec && msg.rfind("SAVED", 0) == 0 && outPath == path, "rec: the result arrives once the file is closed: " + msg);
+            check(!rec.TakeResult(msg, outPath), "rec: the result is given only once");
+            SampleBuffer b;
+            const bool loaded = LoadWav(path, b, sr);
+            check(loaded && b.channels == 2 && b.frames() == pushed, "rec: every pushed frame is in the file (" + std::to_string(b.frames()) + " of " + std::to_string(pushed) + ")");
+            bool same = loaded && b.frames() == pushed;
+            for (int64_t i = 0; same && i < total; i += 997) same = std::fabs(b.data[static_cast<size_t>(i) * 2] - sine(i)) < 1e-3f && std::fabs(b.data[static_cast<size_t>(i) * 2 + 1] + sine(i)) < 1e-3f;
+            check(same, "rec: the file holds exactly what was played (left and right)");
+            check(readDataSize(path) == static_cast<uint32_t>(pushed * 4), "rec: the header gives the final length");
+            check(rec.DroppedFrames() == 0, "rec: nothing was dropped");
+
+            // LIVE-3: the audio thread keeps pushing while REC is pressed on and off quickly (the old final drain raced here)
+            std::atomic<bool> run{true};
+            std::thread audio([&] { std::vector<float> z(128 * 2, 0.25f); while (run) { rec.Push(z.data(), 128); std::this_thread::sleep_for(std::chrono::microseconds(300)); } });
+            int good = 0;
+            for (int k = 0; k < 12; ++k) {
+                const std::string pk = dir + "/quick" + std::to_string(k) + ".wav";
+                rec.Toggle(pk);
+                std::this_thread::sleep_for(std::chrono::milliseconds(k % 3 == 0 ? 0 : 30));
+                rec.Toggle();
+                rec.WaitIdleForTest();
+                std::string m2, p2;
+                if (rec.TakeResult(m2, p2) && m2.rfind("SAVED", 0) == 0) {
+                    SampleBuffer qb;
+                    if (LoadWav(pk, qb, sr) || readDataSize(pk) == 0) ++good;
+                }
+            }
+            run = false; audio.join();
+            check(good == 12, "rec: twelve quick REC on / off while the audio runs each leave a valid file (" + std::to_string(good) + ")");
+
+            // the 4 GB WAV limit (pretend it is 0.5 s): recording stops by itself and says so, the file stays valid
+            WavStreamWriter::SetMaxDataBytesForTest(static_cast<uint64_t>(sr / 2) * 4);
+            const std::string lp = dir + "/limit.wav";
+            rec.Toggle(lp);
+            for (int i = 0; i < sr / 128 && rec.IsRecording(); ++i) { rec.Push(blk.data(), 128); std::this_thread::sleep_for(std::chrono::microseconds(700)); }
+            rec.WaitIdleForTest();
+            for (int i = 0; i < 100 && rec.IsRecording(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            rec.WaitIdleForTest();
+            WavStreamWriter::SetMaxDataBytesForTest(0);
+            SampleBuffer lb;
+            const bool gotLim = rec.TakeResult(msg, outPath);
+            check(gotLim && msg.find("4 GB") != std::string::npos && !rec.IsRecording(), "rec: at the WAV size limit the take stops by itself and says so: " + msg);
+            check(LoadWav(lp, lb, sr) && lb.frames() == sr / 2, "rec: the file stopped at the limit is complete and valid");
+
+            // quitting while recording closes the file properly
+            const std::string qp = dir + "/quit.wav";
+            rec.Toggle(qp);
+            for (int i = 0; i < 40; ++i) { rec.Push(blk.data(), 128); std::this_thread::sleep_for(std::chrono::microseconds(500)); }
+            std::this_thread::sleep_for(std::chrono::milliseconds(60));
+            rec.Shutdown();
+            SampleBuffer qb;
+            check(LoadWav(qp, qb, sr) && qb.frames() == 40 * 128, "rec: quitting during a take keeps the whole take in a valid file");
+        }
+        {
+            MultitrackRecorder mt; mt.Init(sr);
+            const std::string folder = dir + "/stems";
+            fs::create_directories(folder);
+            check(mt.Toggle(folder).rfind("STEMS ARMED", 0) == 0 && mt.IsRecording() && !mt.HasStarted(), "stems: arming waits for the first sound");
+            std::vector<std::vector<float>> bufs(kNumStemGroups, std::vector<float>(128 * 2, 0.0f));
+            std::vector<const float*> ptrs(kNumStemGroups);
+            for (int g = 0; g < kNumStemGroups; ++g) ptrs[g] = bufs[g].data();
+            mt.Push(128, ptrs.data());   // silence: nothing is written
+            int64_t written = 0;
+            for (int blkN = 0; blkN < 200; ++blkN) {
+                for (int i = 0; i < 128; ++i) {
+                    const bool sound = blkN > 0 || i >= 50;
+                    bufs[3][i * 2] = bufs[3][i * 2 + 1] = sound ? 0.3f : 0.0f;   // only HATS plays
+                }
+                mt.Push(128, ptrs.data());
+                written += blkN == 0 ? 128 - 50 : 128;
+                if (blkN % 8 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            check(mt.HasStarted(), "stems: the first sound starts the take");
+            mt.Toggle();
+            mt.WaitIdleForTest();
+            std::string msg, outPath;
+            const bool gotStems = mt.TakeResult(msg, outPath);
+            check(gotStems && msg.rfind("SAVED 8 STEMS", 0) == 0 && outPath == folder, "stems: the result arrives once the files are closed: " + msg);
+            bool allSame = true;
+            for (int g = 0; g < kNumStemGroups; ++g) {
+                SampleBuffer sb;
+                allSame = allSame && LoadWav(folder + "/" + kStemGroupFileNames[g], sb, sr) && sb.frames() == written;
+            }
+            check(allSame, "stems: all 8 files exist, start at the first sound and have exactly the same length (" + std::to_string(written) + " frames)");
+            // armed and stopped before any sound: nothing is left behind
+            const std::string empty = dir + "/stems_empty";
+            fs::create_directories(empty);
+            mt.Toggle(empty);
+            for (auto& bf : bufs) std::fill(bf.begin(), bf.end(), 0.0f);
+            mt.Push(128, ptrs.data());
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            mt.Toggle(); mt.WaitIdleForTest();
+            const bool gotEmpty = mt.TakeResult(msg, outPath);
+            check(gotEmpty && msg.find("NOTHING CAPTURED") != std::string::npos && outPath.empty() && !fs::exists(empty), "stems: a take with no sound leaves no folder: " + msg);
+        }
+        fs::remove_all(dir);
     }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;

@@ -90,7 +90,7 @@ void MenuBar::Draw(AppState& app) {
             ImGui::Separator();
             if (ImGui::BeginMenu("Export")) {
                 const bool stems = app.engine.Multitrack().IsRecording();
-                if (Item("Record Stems", nullptr, "Record Kick / Snare+Clap+Perc / Hats / Synth 1-3 / Chord as separate WAVs, zipped on stop - for mixing in another program. The master recording is the REC button.",
+                if (Item("Record Stems", nullptr, "Record Kick / Snare+Clap+Perc / Hats / Synth 1-3 / Chord as separate WAVs in one folder (written while you play) - for mixing in another program. The master recording is the REC button.",
                          true, stems)) app.SetStatus(app.engine.Multitrack().Toggle());
                 const bool capNow = app.midiCaptureActive;
                 if (Item("Record MIDI", nullptr, "Log every note / drum hit that plays (steps, fills, live input). Stop to get a .mid file and a text grid in Recordings.",

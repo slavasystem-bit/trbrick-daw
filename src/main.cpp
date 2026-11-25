@@ -377,6 +377,13 @@ int main(int argc, char** argv) {
             // Escape closes popups (ImGui); quitting is via the window close button, Cmd+Q or File > Quit.
         }
 
+        {   // N1: a recording is closed on its own thread; its "SAVED ..." arrives here
+            std::string msg, path;
+            if (app.recorder.TakeResult(msg, path) || app.engine.Multitrack().TakeResult(msg, path)) {
+                app.SetStatus(msg);
+                if (!path.empty()) userdirs::SetLastOutput(path);
+            }
+        }
         app.PollSamplePick();   // v44.50: a file chosen in the native window (takes the scene lock itself, after the file is read)
         if (app.statusMessageTimer > 0.0f) app.statusMessageTimer -= static_cast<float>(dt);
         {
@@ -833,6 +840,8 @@ int main(int argc, char** argv) {
     // (no save at exit: the window close / Cmd+Q asked "Save / Don't Save / Cancel" when something was unsaved)
 
     if (audioDev != 0) SDL_CloseAudioDevice(audioDev);
+    app.recorder.Shutdown();               // N1: a take still running at quit is closed properly (the file is already on disk)
+    app.engine.Multitrack().Shutdown();
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();

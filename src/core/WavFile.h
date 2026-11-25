@@ -55,9 +55,8 @@ bool WriteWavPCM24(const std::string& path, const std::vector<float>& interleave
 
 // Same encoding as WriteWavPCM16, but returns the complete file bytes
 // (RIFF/WAVE header + 16-bit PCM data) in memory instead of writing to
-// disk -- used by MultitrackRecorder to build each stem's WAV bytes
-// before bundling all of them into one ZIP archive (see ZipWriter.h),
-// without round-tripping through a temporary file per stem.
+// disk (WriteWavPCM16 writes these bytes; the live recorders stream with
+// WavStreamWriter, see WavStream.h, using the same encoding).
 std::vector<uint8_t> BuildWavPCM16Bytes(const std::vector<float>& interleaved,
                                          int channels, int sampleRate);
 

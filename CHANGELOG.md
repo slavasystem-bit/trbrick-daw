@@ -2,6 +2,17 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage N1 (part 2): recordings go straight to disk
+
+Audit v44.58 LIVE-1, LIVE-3, LIVE-7, part of TEST-4.
+
+- **`WavStreamWriter` (new, `src/core/WavStream.*`):** 16-bit PCM WAV appended while it is recorded; the header sizes are refreshed about once a second, so a crash leaves a playable file up to the last second. Stops at the 32-bit WAV limit (4 GB) and says so.
+- **Recorder (REC):** the drain thread writes into the file; the take no longer grows in RAM. STOP only flips a flag and returns ("SAVING RECORDING..."); the drain thread closes the file and the "SAVED ..." message arrives through `Recorder::TakeResult()` (polled by the main loop, which also sets the last-output path on the UI thread). Before, STOP wrote the whole WAV on the UI thread inside the header panel's scene lock: about 0.25 s of silence per 10 minutes recorded (LIVE-1).
+- **LIVE-3 race fixed:** only the drain thread reads the ring and touches the file; the old final drain on the UI thread ran concurrently with the drain thread on the same vector. The ring is 4 seconds deep (was 1 s at 44.1 kHz, less at 48 kHz) and frames dropped on overflow are counted and reported.
+- **MultitrackRecorder (Record Stems):** same design, eight WAV files in `Recordings/<project> <date> stems/` (new `userdirs::RecordingFolder`) instead of a ZIP built on stop (a ZIP could not exceed 4 GB; a one-hour set in stems is about 5 GB). All stems take the same number of frames per pass, so the files stay exactly the same length. A take with no sound leaves no folder.
+- **Quit during a take:** `Recorder::Shutdown()` / `MultitrackRecorder::Shutdown()` (called after the audio device is closed) finish the file instead of dropping the take.
+- Selftest (TEST-4): every pushed frame lands in the file, exact sample values, the file is on disk while recording, STOP costs the UI thread < 5 ms, twelve quick REC on/off with the audio thread pushing, the WAV-limit stop, quit during a take, stems same length from the first sound, an empty stems take leaves nothing.
+
 ## v44.59 (stage Н2): nothing gets lost when saving and opening
 
 Audit v44.58 items DATA-1, DATA-2, DATA-3, DATA-4, DATA-5 (project files), DATA-7 and LIVE-4.

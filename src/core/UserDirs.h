@@ -54,6 +54,8 @@ std::string StampedPath(const std::string& dir, const std::string& project, cons
                         long long unixTime = 0);
 // The same inside RecordingsDir() for the open project.
 std::string RecordingPath(const std::string& suffix, const std::string& ext);
+// N1: a new folder "<Recordings>/<project> 2026-10-26 14.32<suffix>" (" 2", " 3" ... when taken), created; "" if it cannot be made.
+std::string RecordingFolder(const std::string& suffix);
 
 // "Recordings/Name 2026-10-26 14.32.wav": the path as shown in the status line (relative to the data root, else unchanged).
 std::string DisplayPath(const std::string& path);

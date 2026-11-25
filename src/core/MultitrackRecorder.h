@@ -23,6 +23,8 @@
 // allocation-free and lock-free, same as Recorder::Push, so it costs
 // nothing extra on the audio thread when not recording.
 #include "Types.h"
+#include "WavStream.h"
+#include <mutex>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -51,7 +53,7 @@ constexpr int kStemGroupForTrack[kNumTracks] = {
 };
 
 // Display names (for status text) and the filenames each stem gets inside
-// the exported ZIP -- numbered so they sort/import into Ableton in a
+// the take's folder -- numbered so they sort/import into Ableton in a
 // sensible, stable order rather than alphabetically scrambling.
 constexpr const char* kStemGroupNames[kNumStemGroups] = {
     "KICK", "SNARE+CLAP+PERC", "HATS", "SYNTH 1", "SYNTH 2", "SYNTH 3", "CHORD", "SAMPLER"
@@ -61,6 +63,12 @@ constexpr const char* kStemGroupFileNames[kNumStemGroups] = {
     "04_synth1.wav", "05_synth2.wav", "06_synth3.wav", "07_chord.wav", "08_sampler.wav",
 };
 
+// N1 (audit v44.58 LIVE-1 / LIVE-3 / LIVE-7): the stems are written into
+// their WAV files while they are recorded (WavStream.h), into a folder
+// "Recordings/<project> <date> stems/". Before, all of them grew in memory
+// (about 10 GB for a one-hour set) and STOP built a ZIP on the UI thread
+// while the sound waited; the ZIP format also could not hold more than 4 GB.
+// Only the drain thread touches the files and the read side of the rings.
 class MultitrackRecorder {
 public:
     ~MultitrackRecorder() { Shutdown(); }
@@ -92,12 +100,16 @@ public:
     // trimming pass needed.
     void Push(int numFrames, const float* const* stemBlocks);
 
-    // Starts or stops the multitrack take. Starting ARMS it (see Push's
-    // comment above -- actual sample capture begins on the first sound).
-    // On stop, writes all 7 stems as one ZIP archive under exports/ (see
-    // ZipWriter.h) and returns a short human-readable message for
-    // SetStatus.
-    std::string Toggle();
+    // Starts or stops the multitrack take (UI thread). Starting ARMS it
+    // (see Push's comment above -- actual sample capture begins on the
+    // first sound). Returns at once with a short message for SetStatus; the
+    // final "SAVED ..." comes from TakeResult() once the files are closed.
+    // `folder` empty = a new stamped folder in Documents/TR-Brick/Recordings.
+    std::string Toggle(const std::string& folder = std::string());
+
+    // UI thread, once per frame: true once when a take has been closed;
+    // `message` for SetStatus, `path` = the folder ("" if nothing was kept).
+    bool TakeResult(std::string& message, std::string& path);
 
     // True from the moment Toggle() arms the take until the matching stop
     // -- covers BOTH the "waiting for the first sound" phase and actual
@@ -108,28 +120,43 @@ public:
     // sample capture is underway (as opposed to still armed-and-waiting).
     bool HasStarted() const { return started_.load(std::memory_order_relaxed); }
     double ElapsedSeconds() const;
+    uint64_t DroppedFrames() const { return dropped_.load(std::memory_order_relaxed); }
+
+    // Tests: wait until the last take is closed.
+    void WaitIdleForTest();
 
 private:
+    enum class State { Idle, Starting, Recording };
     void DrainLoop();
-    void DrainRingIntoCaptured(); // caller's thread does the (cheap) copy, all 7 stems in one pass
+    void DrainToFiles();   // drain thread only, all stems in one pass
+    void FinishTake();     // drain thread only
 
     int sampleRate_ = 44100;
     std::atomic<bool> armed_{false};   // Toggle()'s start press -- may still be waiting for the first sound
     std::atomic<bool> started_{false}; // first sound detected -- real sample capture is underway
+    std::atomic<State> state_{State::Idle};
     std::atomic<bool> shuttingDown_{false};
     std::thread drainThread_;
 
-    // One lock-free single-producer/single-consumer ring per stem, same
-    // ~1s capacity and overwrite-on-full-drop behavior as Recorder's own
-    // ring (see Recorder.h) -- all 7 are pushed in lockstep (same
-    // numFrames) every Render() block and drained together every pass, so
-    // they stay sample-aligned with each other in practice.
-    static constexpr int kRingCapacityFrames = 44100; // ~1s @ 44.1kHz, per stem
+    // One lock-free single-producer/single-consumer ring per stem, four
+    // seconds deep, drop-on-full like Recorder's (counted in dropped_).
+    // All stems are pushed in lockstep (same numFrames) every Render()
+    // block and drained together every pass, so they stay sample-aligned.
+    int ringFrames_ = 0;
     std::array<std::vector<float>, kNumStemGroups> ring_;
     std::array<std::atomic<int>, kNumStemGroups> ringWrite_;
     std::array<std::atomic<int>, kNumStemGroups> ringRead_;
-    std::array<std::vector<float>, kNumStemGroups> captured_; // grows only on the background thread (or Toggle()'s final drain)
-    std::atomic<int64_t> capturedFrames_{0}; // frames captured so far (same for every stem), for ElapsedSeconds()
+    std::atomic<uint64_t> dropped_{0};
+
+    std::array<WavStreamWriter, kNumStemGroups> wav_;  // drain thread only
+    std::string folder_, shownFolder_;                 // drain thread only (copied from pendingFolder_ / pendingShown_)
+    uint64_t framesSinceFlush_ = 0;                    // drain thread only
+    std::atomic<int64_t> writtenFrames_{0};            // frames written so far (stem 0), for ElapsedSeconds()
+
+    std::mutex msgMutex_;                              // UI <-> drain thread (never the audio thread)
+    std::string pendingFolder_, pendingShown_;
+    std::string resultMsg_, resultPath_;
+    bool hasResult_ = false;
 };
 
 } // namespace t8

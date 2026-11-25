@@ -96,7 +96,7 @@ public:
     // Live multitrack recording (see MultitrackRecorder.h) -- captures
     // the same live performance Capture()/Recorder do, but as 7 separate
     // stem buses (Kick / Snare+Clap+Perc / Hats / Synth 1/2/3 / Chord)
-    // bundled into one ZIP on stop, ready to drop into Ableton Live. A
+    // written into one folder of WAVs while playing, ready to drop into Ableton Live. A
     // no-op while inactive.
     MultitrackRecorder& Multitrack() { return multitrack_; }
 
