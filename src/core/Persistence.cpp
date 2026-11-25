@@ -1341,11 +1341,18 @@ std::string StemOf(const std::string& projectPath) {
     return dot == std::string::npos ? base : base.substr(0, dot);
 }
 // 8 hex digits naming the folder of `projectPath` (FNV-1a of its absolute path).
-std::string FolderCodeOf(const std::string& projectPath) {
-    size_t slash = projectPath.find_last_of("/\\");
-    std::string dir = slash == std::string::npos ? std::string(".") : projectPath.substr(0, slash);
+// The absolute path of a folder (as given when it cannot be resolved).
+std::string RealPathOf(std::string dir) {
     if (dir.empty()) dir = "/";
     if (char* real = ::realpath(dir.c_str(), nullptr)) { dir = real; std::free(real); }
+    return dir;
+}
+std::string FolderOf(const std::string& path) {
+    size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
+}
+std::string FolderCodeOf(const std::string& projectPath) {
+    const std::string dir = RealPathOf(FolderOf(projectPath));
     uint32_t h = 2166136261u;
     for (unsigned char c : dir) { h ^= c; h *= 16777619u; }
     char buf[9];
@@ -1407,6 +1414,8 @@ bool BackupProjectFile(const std::string& path, int keep) {
     const std::string stem = StemOf(path);
     const std::string code = FolderCodeOf(path);
     const std::string bdir = BackupDirFor(path);
+    // A file opened from the backups folder itself (the Versions list, or by hand): no copy of the copy, they would only pile up.
+    if (RealPathOf(FolderOf(path)) == RealPathOf(bdir)) return true;
     ::mkdir(bdir.c_str(), 0755);
     std::vector<std::string> mine;
     if (DIR* d = ::opendir(bdir.c_str())) {
