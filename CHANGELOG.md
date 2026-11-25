@@ -2,6 +2,15 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage N1 (part 1): measure audio dropouts
+
+First step of "the sound never stops" (audit v44.58, LIVE-5 / TEST-6): measure before fixing.
+
+- **DSP / XRUN readout moved to the tab row**, right-aligned left of PITCH (`HeaderPanel::DrawDropouts`). At the end of the header row it was hidden whenever the window was 1440 px or narrower. It is always shown now: grey `XRUN 0`, red `XRUN 3 (250 ms)` with the longest dropout.
+- **Who held the sound:** the audio thread measures how long it waited for the scene lock in every callback (`Mixer::audioLockWaitUs`), and `SceneMutex` measures how long any other thread held it (`MaxHoldUs`, the audio thread's own holds are not counted). The info-line text of the readout shows the longest dropout, how much of it was spent waiting for the screen, the longest screen hold overall, and the last 5 dropouts (time ago, length, wait). A click resets all of it.
+- Dropout log: the callback keeps the last 8 dropouts (`Mixer::dropouts`, length and lock wait), no allocation on the audio thread.
+- Selftest: the lock wait and the screen hold are measured, the audio thread's own render is not counted, the reset clears the log.
+
 ## Stage N0: safety net for merges
 
 Nothing gets played or merged without green tests (audit v44.58: TEST-1, TEST-2, part of CODE-5 and TEST-7).
