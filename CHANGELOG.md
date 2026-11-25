@@ -2,6 +2,10 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## v44.59.1: SCENES row controls line up
+
+- The CLICK label and the LAUNCH | OPEN, GO and LINK buttons under the SCENES pads now sit on one line with one height (`ChainPanel`): ImGui's `SameLine` put every button after LAUNCH on the top of the CLICK label, 2 px lower (reported on the Mac). Texts are centred on the buttons.
+
 ## Stage N1 (part 3): samples, kits and folder scans off the scene lock
 
 Audit v44.58 LIVE-2 and LIVE-10.
