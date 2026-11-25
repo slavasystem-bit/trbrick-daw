@@ -220,20 +220,28 @@ void ChainPanel::Draw(AppState& app) {
         ImGui::PushID(i);
         bool active = (i == proj.currentPattern);
         bool hasContent = PatternHasContent(proj.patterns[i]);
+        const bool selected = (app.sceneSel >> i) & 1u;   // v44.59: Shift+click / Cmd+click selection (the LINK button acts on it)
 
-        ImGui::PushStyleColor(ImGuiCol_Button, active ? ImVec4(0.23f, 0.17f, 0.08f, 1.0f) : ImVec4(0.12f, 0.13f, 0.16f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, active ? ImVec4(0.29f, 0.21f, 0.09f, 1.0f) : ImVec4(0.17f, 0.18f, 0.22f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_Border, active ? ImVec4(0.95f, 0.64f, 0.24f, 1.0f) : ImVec4(0.18f, 0.19f, 0.24f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImVec4(0.15f, 0.19f, 0.27f, 1.0f) : active ? ImVec4(0.23f, 0.17f, 0.08f, 1.0f) : ImVec4(0.12f, 0.13f, 0.16f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selected ? ImVec4(0.19f, 0.24f, 0.33f, 1.0f) : active ? ImVec4(0.29f, 0.21f, 0.09f, 1.0f) : ImVec4(0.17f, 0.18f, 0.22f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Border, active ? ImVec4(0.95f, 0.64f, 0.24f, 1.0f) : selected ? ImVec4(0.50f, 0.66f, 1.0f, 1.0f) : ImVec4(0.18f, 0.19f, 0.24f, 1.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, active ? 2.0f : 1.0f);
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%02d", i + 1);
+        // v44.59: Shift+click = select a range, Cmd+click = select one more (the Mac rule); a plain click launches or opens (CLICK switch);
+        // a double click always opens without launching. Linking is the LINK button / the right-click menu (one undo step each).
+        const bool shiftDown = ImGui::GetIO().KeyShift, cmdDown = ImGui::GetIO().KeySuper || ImGui::GetIO().KeyCtrl;
         if (ImGui::Button(buf, ImVec2(cellW, kPadH))) {
-            if (ImGui::GetIO().KeyShift || app.linkMode) app.ToggleSceneLink(i);   // v44.58: LINK - join / leave the group of the edited scene
-            else if (app.editOnly && !songOn) app.SelectSceneForEdit(i);          // v44.58: EDIT - only open it; GO (or a double click) launches
-            else LaunchOrSwitchScene(app, i);
+            if (shiftDown || cmdDown) app.SelectScenePad(i, shiftDown, !shiftDown);
+            else {
+                app.SelectScenePad(i, false, false);
+                if (songOn) LaunchOrSwitchScene(app, i);
+                else if (app.clickOpens) app.SelectSceneForEdit(i);
+                else app.LaunchScenePad(i);
+            }
         }
-        if (app.editOnly && !songOn && !ImGui::GetIO().KeyShift && !app.linkMode && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
-            app.SelectSceneForEdit(i); app.GoToEditedScene();
+        if (!shiftDown && !cmdDown && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+            if (songOn) SwitchPattern(app, i); else app.OpenScenePad(i);
         }
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
             ImGui::SetDragDropPayload("T8_SCENE", &i, sizeof(int));
@@ -247,9 +255,9 @@ void ChainPanel::Draw(AppState& app) {
             ImGui::EndDragDropTarget();
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-            Hint("Scene %02d%s%s\nClick: %s  -  Shift+click: link / unlink with the edited scene (same mute and solo)  -  Drag onto another scene: swap  -  Right-click: menu",
+            Hint("Scene %02d%s%s\nClick: %s  -  Double-click: open without launching  -  Shift+click: select several (then LINK)  -  Drag onto another scene: swap  -  Right-click: menu",
                               i + 1, app.SceneGroupOf(i) ? "  -  linked " : "", app.LinkLabel(i).c_str(),
-                              app.linkMode ? "link / unlink (LINK is lit)" : (app.editOnly && !songOn ? "open it (EDIT); double click or GO = launch" : (songOn ? "edit" : (app.sequencer.LaunchQuantize() == 0 ? "edit / play" : "edit / launch (see LAUNCH in the header)"))));
+                              songOn ? "edit" : (app.clickOpens ? "open it (CLICK: OPEN); GO launches it" : (app.sequencer.LaunchQuantize() == 0 ? "launch" : "launch (see LAUNCH in the header)")));
         ImGui::PopStyleVar();
         ImGui::PopStyleColor(3);
         if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
@@ -419,39 +427,61 @@ void ChainPanel::Draw(AppState& app) {
             Hint("Makes the sound of this scene (synths, chord, kick, drum voices, kit) the sound of the WHOLE track: every brick switches to it.\nThe notes and the brick settings stay. Undoable.\nWithout this a thrown brick keeps the sound the track already has, so you can jam with other sounds here.");
     }
 
-    {   // v44.58: EDIT / GO / LINK - what a click on a pad does, and what is held apart or linked right now
+    {   // v44.59: the controls of the SCENES row (no separate PADS row): CLICK: LAUNCH | OPEN, GO, and the LINK action
         const float ry = rowY + 36.0f, bh = 20.0f;
-        ImGui::SetCursorPos(ImVec2(x0, ry + 2.0f));
-        ImGui::TextDisabled("PADS");
-        ImGui::SetCursorPos(ImVec2(x0 + kLabelW, ry));
+        ImGui::SetCursorPos(ImVec2(x0 + kLabelW, ry + 2.0f));
+        ImGui::TextDisabled("CLICK");
+        ImGui::SameLine(0, 6);
+        ImGui::SetCursorPosY(ry);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 0.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
         ToggleColors ec; ec.on = ImVec4(0.37f, 0.88f, 0.79f, 1.0f); ec.textOn = ImVec4(0.06f, 0.09f, 0.09f, 1.0f);
-        if (ToggleButton("EDIT", app.editOnly, ImVec2(48, bh), ec)) {
-            app.editOnly = !app.editOnly;
-            if (!app.editOnly && app.sequencer.IsPlaying() && !songOn) app.sequencer.ReleasePin();   // back to "the edited scene is the played one"
-            app.SetStatus(app.editOnly ? "EDIT: A CLICK ON A PAD ONLY OPENS THE SCENE; GO (OR A DOUBLE CLICK) LAUNCHES IT" : "EDIT OFF: A CLICK ON A PAD LAUNCHES IT");
+        if (ToggleButton("LAUNCH", !app.clickOpens, ImVec2(60, bh), ec) && app.clickOpens) {
+            app.clickOpens = false;
+            app.SetStatus("CLICK: LAUNCH - A CLICK ON A PAD LAUNCHES IT; A DOUBLE CLICK OPENS IT WITHOUT LAUNCHING");
         }
-        if (ImGui::IsItemHovered()) Hint("EDIT: while the music plays, a click on a pad only opens that scene in the editor - correct it, then press GO (or double-click the pad) to launch it. The scene that plays keeps playing. Off = a click launches, as before.");
-        ImGui::SameLine(0, 4);
+        if (ImGui::IsItemHovered()) Hint("CLICK: LAUNCH - a click on a pad launches the scene (quantized by LAUNCH in the header). A double click opens it without launching.");
+        ImGui::SameLine(0, 0);
+        if (ToggleButton("OPEN", app.clickOpens, ImVec2(52, bh), ec) && !app.clickOpens) {
+            app.clickOpens = true;
+            app.SetStatus("CLICK: OPEN - A CLICK ON A PAD ONLY OPENS THE SCENE; GO LAUNCHES IT");
+        }
+        if (ImGui::IsItemHovered()) Hint("CLICK: OPEN - while the music plays, a click on a pad only opens that scene in the editor: correct it, nothing is heard. GO launches it. The scene that plays keeps playing.");
+        ImGui::PopStyleVar();
+        ImGui::SameLine(0, 8);
         const bool apart = app.SceneIsHeldApart();
+        char goLbl[24];
+        std::snprintf(goLbl, sizeof(goLbl), apart ? "GO %02d###go" : "GO###go", proj.currentPattern + 1);
         ImGui::BeginDisabled(!apart);
-        if (ToggleButton("GO", false, ImVec2(40, bh))) app.GoToEditedScene();
+        ToggleColors gc; gc.on = ImVec4(0.95f, 0.64f, 0.24f, 1.0f); gc.textOn = ImVec4(0.10f, 0.07f, 0.03f, 1.0f);
+        if (ToggleButton(goLbl, apart, ImVec2(54, bh), gc)) app.GoToEditedScene();
         ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint(apart ? "GO: launch the scene in the editor (quantized by LAUNCH in the header)." : "GO: lights up when the scene in the editor is not the one that plays.");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint(apart ? "GO: launch the open scene (quantized by LAUNCH in the header)." : "GO: lights up when the open scene is not the one that plays.");
         ImGui::SameLine(0, 4);
-        ToggleColors lc; lc.on = ImVec4(0.37f, 0.88f, 0.79f, 1.0f); lc.textOn = ImVec4(0.06f, 0.09f, 0.09f, 1.0f);
-        if (ToggleButton("LINK", app.linkMode, ImVec2(48, bh), lc)) {
-            app.linkMode = !app.linkMode;
-            app.SetStatus(app.linkMode ? "LINK: CLICK A PAD TO LINK / UNLINK IT WITH THE EDITED SCENE (SAME MUTE AND SOLO)" : "LINK OFF: A CLICK ON A PAD LAUNCHES IT");
+        // LINK acts on the selected pads; with none selected and the open scene linked it takes the open scene out of its group.
+        const int nSel = app.SceneSelCount();
+        const bool openLinked = proj.currentPattern < kNumLiveScenes && app.SceneGroupOf(proj.currentPattern) != 0;
+        char linkLbl[64];
+        if (nSel >= 2) std::snprintf(linkLbl, sizeof(linkLbl), "LINK %s###link", app.SceneSelLabel().c_str());
+        else if (openLinked) std::snprintf(linkLbl, sizeof(linkLbl), "UNLINK %02d###link", proj.currentPattern + 1);
+        else std::snprintf(linkLbl, sizeof(linkLbl), "LINK###link");
+        ImGui::BeginDisabled(nSel < 2 && !openLinked);
+        const float lw = std::max(52.0f, ImGui::CalcTextSize(linkLbl, nullptr, true).x + 14.0f);
+        if (ToggleButton(linkLbl, nSel >= 2, ImVec2(lw, bh), ec)) {
+            if (nSel >= 2) app.LinkSelectedScenes(); else app.UnlinkSceneUndoable(proj.currentPattern);
         }
-        if (ImGui::IsItemHovered()) Hint("LINK: linked scenes share mute and solo, so you can play across them without anything changing.\nLit: a click on a pad links / unlinks it with the edited scene. Without it: Shift+click does the same. Scenes that are not linked keep their own mute and solo.");
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            Hint("LINK: linked scenes share mute and solo, so you can play across them without anything changing.\nSelect the scenes with Shift+click (a range) or Cmd+click (one by one), then LINK. With a linked scene open and nothing selected: UNLINK takes it out of its group.\nThe mute / solo come from the open scene. Cmd+Z undoes a link, mutes included.");
         ImGui::PopStyleVar();
         ImGui::SameLine(0, 10);
         ImGui::AlignTextToFramePadding();
         char info[160] = "";
-        if (apart) std::snprintf(info, sizeof(info), "EDITING %02d  -  PLAYING %02d  -  GO launches %02d", proj.currentPattern + 1, app.sequencer.PlayPatternIndex() + 1, proj.currentPattern + 1);
+        ImVec4 infoCol(0.55f, 0.85f, 0.65f, 1.0f);
+        if (nSel >= 2) { std::snprintf(info, sizeof(info), "%d SCENES SELECTED - LINK makes them share mute / solo", nSel); infoCol = ImVec4(0.62f, 0.74f, 1.0f, 1.0f); }
+        else if (apart) { std::snprintf(info, sizeof(info), "OPEN %02d  -  PLAYING %02d  -  GO launches %02d", proj.currentPattern + 1, app.sequencer.PlayPatternIndex() + 1, proj.currentPattern + 1); infoCol = ImVec4(0.95f, 0.78f, 0.45f, 1.0f); }
         else if (app.SceneGroupOf(proj.currentPattern)) std::snprintf(info, sizeof(info), "LINKED %s: SAME MUTE / SOLO", app.LinkLabel(proj.currentPattern).c_str());
-        if (info[0]) ImGui::TextColored(apart ? ImVec4(0.95f, 0.78f, 0.45f, 1.0f) : ImVec4(0.55f, 0.85f, 0.65f, 1.0f), "%s", info);
+        if (info[0]) ImGui::TextColored(infoCol, "%s", info);
     }
 
     // ---- popups (opened outside the per-widget PushID scopes) -----------
@@ -461,8 +491,8 @@ void ChainPanel::Draw(AppState& app) {
         if (i >= 0 && i < kNumLiveScenes) {
             ImGui::TextDisabled("SCENE %02d", i + 1);
             ImGui::Separator();
-            if (i != proj.currentPattern && proj.currentPattern < kNumLiveScenes && ImGui::MenuItem(app.ScenesLinked(i, proj.currentPattern) ? "Unlink from the edited scene" : "Link with the edited scene (same mute / solo)")) app.ToggleSceneLink(i);
-            if (app.SceneGroupOf(i) && ImGui::MenuItem("Leave its link group")) app.UnlinkScene(i);
+            if (i != proj.currentPattern && proj.currentPattern < kNumLiveScenes && ImGui::MenuItem(app.ScenesLinked(i, proj.currentPattern) ? "Unlink from the open scene" : "Link with the open scene (same mute / solo)")) app.ToggleSceneLink(i);
+            if (app.SceneGroupOf(i) && ImGui::MenuItem("Leave its link group")) app.UnlinkSceneUndoable(i);
             if (ImGui::MenuItem("Duplicate as new scene")) {
                 int dst = FindFreeSlotAfter(proj, i);
                 if (dst < 0) {
