@@ -2,12 +2,22 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage N1 (part 5): Settings > Audio (output and buffer size)
+
+Audit v44.58 LIVE-5 (buffer choice), LIVE-6 (output picker). Mockup approved by the person.
+
+- **Settings > Audio...** (new dialog, `MenuBar::DrawAudioDialog`): OUTPUT = the system default (follows the Mac) or a device by name; BUFFER = 128 / 256 / 512 frames as a Segmented control with the length in ms at the running rate. A change is saved in `ui_settings.cfg` (`audiobuf=`, `audioout=`) and restarts audio through the same path as Settings > Restart Audio. The default stays the system output with 128 frames.
+- **Fallback and return:** a chosen output that is not plugged in opens the system default (status line and dialog say so, `AppState::audioOnFallback`); when that device is plugged in again (`SDL_AUDIODEVICEADDED` with the same name) audio moves back to it. A damaged saved buffer size becomes 128.
+- The dialog shows what the device really gave (`have.freq`, the callback's frame count) and the dropouts of this session.
+- `main.cpp`: one `openAudio` helper is used at startup (rate follows the device) and on every restart (engine rate, SDL converts). Rules without SDL in `src/app/AudioSettings.h`; selftest "audio-set:" checks.
+- Not verified: real devices on a Mac (cloud has only the dummy driver, so the device list there is empty).
+
 ## Stage N1 (part 4): the callback never blocks for long, the watchdog stops restarting for nothing
 
 Audit v44.58 LIVE-5 (short-term part), LIVE-6, LIVE-9, LIVE-11, TEST-6.
 
 - **LIVE-5, protective mode:** the audio callback takes the scene lock itself (`Sequencer::LockForAudio`), waiting at most two buffers (at least 4 ms; shorter holds are absorbed by the device buffering as before). If the lock is still busy it plays a 64-frame fade to silence and returns, so the device keeps getting buffers and the watchdog does not restart it; the next callback tries again. `Mixer::audioSkippedBlocks` counts those buffers. Consecutive late buffers are now logged as ONE dropout whose length is their sum (the XRUN readout keeps showing the real length of a stall).
-- **LIVE-6, watchdog:** a device that appears no longer restarts audio; a removed one restarts it only if our output stopped (not playing, or no callback since the event). A long frame counts as a sleep only when the callback did not run through it (fewer than a quarter of the expected buffers), so a slow screen frame no longer restarts the device and resets the effects. (Output device picker: needs a mockup, later.)
+- **LIVE-6, watchdog:** a device that appears no longer restarts audio; a removed one restarts it only if our output stopped (not playing, or no callback since the event). A long frame counts as a sleep only when the callback did not run through it (fewer than a quarter of the expected buffers), so a slow screen frame no longer restarts the device and resets the effects. (Output device picker: part 5, Settings > Audio.)
 - **LIVE-9, no allocation on the audio thread:** drum and riser interpolation kernels come from a bank built at startup (`SharedSincForRate`, cutoff rounded down to a 0.01 grid; 96 tables, ~0.8 MB) instead of `make_shared` per new tune value; MIDI capture reserves room at Start and drops (counts) events past it; ratchet events are reserved in `Sequencer::Init`; `AppState::SetStatus(const char*)` returns before building a `std::string` when a NEXT BAR switch is applied on the audio thread. Not done: `AudioEngine` can still drop the last reference of an audition sample on the audio thread when the UI no longer holds it (the UI keeps the last 16).
 - **LIVE-11:** FTZ + DAZ (x86 MXCSR) / FZ (arm64 FPCR) at the top of every audio callback.
 - **TEST-6:** the selftest counts heap allocations and frees on the rendering thread (global `operator new` / `delete` hook) while a busy set plays for 6 s: tuned drums, ratchets, MIDI capture and NEXT BAR DROP / mute applied at the bar line. Must be 0 (it reports 14 with the old kernel cache and MIDI capture). `LockForAudio` is tested for a free lock, a busy lock given up after the limit, and the next buffer after release.
