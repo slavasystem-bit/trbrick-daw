@@ -48,6 +48,7 @@
 #include "ui_desktop/DynPresets.h"
 #include "ui_desktop/ValueField.h"
 #include "ui_desktop/InfoLine.h"
+#include "ui_desktop/SampleBrowser.h"
 #include "app/SynthParams.h"
 #include "SynthFilter.h"
 #include "Effects.h"
@@ -6720,6 +6721,24 @@ int main(int argc, char** argv) {
         }
         a.loader.Stop();
         fs::remove_all(dir);
+    }
+    {   // C4b part 2: the SAMPLES browser's folder tree and column sort
+        using SB = t8::desktop::SampleBrowser;
+        const auto ch = SB::FolderChain("Solid Sounds/Drum Loops/funk_95.wav");
+        check(ch.size() == 2 && ch[0] == "Solid Sounds" && ch[1] == "Solid Sounds/Drum Loops" && SB::FolderChain("kick.wav").empty(),
+              "c4b: a library file counts in every folder above it (the tree with counts)");
+        std::vector<SB::Item> v(3);
+        v[0].name = "b"; v[0].folder = "Z"; v[0].type = "LOOP"; v[0].bpm = 120;
+        v[1].name = "A"; v[1].folder = "y"; v[1].type = "KICK"; v[1].bpm = 95;
+        v[2].name = "c"; v[2].folder = "x"; v[2].type = "LOOP"; v[2].bpm = 0;
+        SB::SortItems(v, 0, false);
+        check(v[0].name == "A" && v[1].name == "b" && v[2].name == "c", "c4b: NAME sorts A..Z, case ignored");
+        SB::SortItems(v, 3, true);
+        check(v[0].bpm == 120 && v[2].bpm == 0, "c4b: a second click on BPM sorts the other way round");
+        SB::SortItems(v, 2, false);
+        check(v[0].type == "KICK" && v[1].name == "b" && v[2].name == "c", "c4b: TYPE sorts by type, then by name");
+        SB::SortItems(v, 1, false);
+        check(v[0].folder == "x" && v[1].folder == "y" && v[2].folder == "Z", "c4b: FOLDER sorts case-blind");
     }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;

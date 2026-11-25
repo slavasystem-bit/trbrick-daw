@@ -2,6 +2,20 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage C4b (part 2): one SAMPLES browser
+
+ROADMAP "Samples in one place" (C4b), items 2, 3 and the list view of item 4; approved mockup `docs/mockups/v45_samples_unified.png`, section 2. No project data changes.
+
+- **One browser** (`src/ui_desktop/SampleBrowser.{h,cpp}`) replaces the MY SAMPLES card browser and the lists under the sample names. The name of every SAMPLE row opens it (and a click on the sampler's empty waveform); its title says where the file goes (`SAMPLE FOR: KICK (scene 3)`).
+- **Left:** SOURCE = THIS PROJECT (sampler / synth: `samples/`; drums: THIS KIT = the variants of this drum in its kit; transitions: `samples/transitions`), MY LIBRARY, KITS (drums: the same drum in every kit folder, listed on the loader thread), BUILT-IN (transitions), FROM FINDER... (sampler / synth); LIBRARY FOLDERS as a tree with file counts (triangle = open / close, name = show that folder); MY COLLECTIONS = FAVORITES and RECENT (the last 20 files taken, newest first, `Favorites/recent_samples.txt`). Favourites keep using `favorites_samples.txt` (library files keep their old keys).
+- **Middle:** LIST (default) with columns star / NAME / FOLDER / TYPE / BPM, a click on a column title sorts and a second click reverses; GRID = cards. TYPE chips filter the library and the collections (the drums open on their own type, transitions on FX). Rows are clipped (`ImGuiListClipper`), so thousands of files scroll smoothly.
+- **Right:** the selected file: waveform when it is in memory (after HEAR, or a project / kit sample), type, tempo, where it lives; HEAR, AUTO, USE FOR <target>.
+- **Keys as in every browser:** click = select (silent), Space / HEAR = listen, AUTO = listen to every selection, Up / Down / PageUp / PageDown = move, Left / Right = up a folder / open the folder (LIST, library), Return / double-click = take, Esc = clear the search, then close, Cmd+F = search. Typing anywhere searches (every word must match).
+- **Taking:** a kit variant = every step of the drum follows it (one Undo step, as the `< >` arrows); a library or kit file for a drum = copied into the scene's kit as before (copying into the project is a later part); sampler / synth = copied into the project (a LOOP from the library gets loop mode, as before); a transition = set on the brick (Undo) or copied into `samples/transitions`.
+- **HEAR:** library files through the existing loader audition; project and kit samples from memory; a kit file not in memory is read on the loader thread and plays only if it is still the selected one when it arrives; transitions through the riser player at the brick's LEVEL. The last 16 heard samples stay referenced on the UI side.
+- **Kit browser:** a click only selects (was: loads the kit); HEAR plays the short phrase from the SELECTED kit's own samples without loading it (its bank is read on the loader thread, up to 3 s); Return / double-click loads it. Trying kits while it plays: `< >` in the KIT row.
+- **Transitions:** the list under the name is gone; right-click on the name = No transition.
+
 ## Stage C4b (part 1): one sample row everywhere
 
 ROADMAP "Samples in one place" (C4b), item 1 and the words; approved mockup `docs/mockups/v45_samples_unified.png`. No project data changes.

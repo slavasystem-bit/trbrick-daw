@@ -141,6 +141,7 @@ add_executable(trbrick_daw
     src/ui_desktop/SoundPanel.cpp
     src/ui_desktop/PresetBrowser.cpp
     src/ui_desktop/ListBrowser.cpp
+    src/ui_desktop/SampleBrowser.cpp
     src/ui_desktop/Shortcuts.cpp
     src/ui_desktop/BottomPanel.cpp
     src/ui_desktop/FxPanel.cpp

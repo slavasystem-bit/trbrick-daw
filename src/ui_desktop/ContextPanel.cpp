@@ -541,27 +541,14 @@ void ContextPanel::DrawKitBlock(AppState& app, int ti, float width) {
     ss.dot = TrackColor(ti);
     ss.canStep = nVar > 1; ss.canHear = buf != nullptr;
     ss.nameHint = mixed ? "Some steps play their own sample (right-click on a step). < > or a pick from the list makes every step follow this track again."
-                        : "The sample of this drum (steps set to AUTO follow it). Click = the samples of this drum in the kit, or your library.";
+                        : "The sample of this drum (steps set to AUTO follow it). Click = the SAMPLES browser: this kit, your library, the other kits.";
     ss.stepHint = "< > = the neighbour sample of this drum in the kit (kick, kick_2 ...), at once and silently";
     ss.hearHint = "Play this drum once, as it sounds here (TUNE, DECAY, START / LENGTH)";
     ss.noHearHint = slot == DrumSlot::Kick ? "This kit has no kick sample: the kick is the built-in KICK SYNTH." : "This kit has no sample for this drum.";
     const SampleRowHit sh = SampleRow(ss);
     if (sh.step != 0 && nVar > 1) pickVariant(((cur + sh.step) % nVar + nVar) % nVar);
     if (sh.hear && buf) HearDrum(app, t, buf);
-    if (sh.open) ImGui::OpenPopup("##drumSmpList");
-    if (ImGui::BeginPopup("##drumSmpList")) {
-        if (ImGui::Selectable("MY LIBRARY...")) app.OpenLibrary(AppState::LibTarget::Drum);
-        if (ImGui::IsItemHovered()) Hint("Your own samples (Library > Show Samples Folder). The one you pick replaces this drum's sample in a kit of the scene (copied, the library is never touched).");
-        ImGui::Separator();
-        ImGui::TextDisabled("IN THIS KIT");
-        for (int v = 0; v < nVar && buf; ++v) {
-            ImGui::PushID(v);
-            if (ImGui::Selectable(DrumVariantLabel(app, ti, v, nVar).c_str(), !mixed && v == cur)) pickVariant(v);
-            ImGui::PopID();
-        }
-        if (!buf) ImGui::TextDisabled(slot == DrumSlot::Kick ? "no kick sample (the KICK SYNTH plays)" : "no sample for this drum");
-        ImGui::EndPopup();
-    }
+    if (sh.open) app.OpenLibrary(AppState::LibTarget::Drum);   // C4b: the SAMPLES browser, on the samples of this drum in its kit
     {   // v44.52: the waveform of that sample, with the START / LENGTH of the SAMPLE knobs (the same card the sampler has)
         ImGui::Dummy(ImVec2(1, 3));
         DrawWaveCard(app, "##drumWave", buf ? buf->data.data() : nullptr, buf ? buf->frames() : 0, buf ? buf->channels : 1, buf ? buf->sampleRate : kSampleRate, t.edit,
@@ -723,8 +710,8 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
     ss.canStep = n >= 2; ss.canHear = smp != nullptr;
     std::string nameHint;
     if (app.SampleMissing(sp.file)) nameHint = sp.file + " is not in the samples folder next to the project any more. Put it back there, or pick another sample.";
-    else nameHint = synthTgt ? "The sample this sound plays: a note plays it at its pitch (ROOT = unchanged). ENV + LFO, FILTER, EQ, FX and AUTO shape it like any synth sound. Click = the project's samples, your library or a file from Finder."
-                             : "The sample this scene plays. Click = the project's samples, your library or a file from Finder. Drop a .wav or .aif on the window to add one.";
+    else nameHint = synthTgt ? "The sample this sound plays: a note plays it at its pitch (ROOT = unchanged). ENV + LFO, FILTER, EQ, FX and AUTO shape it like any synth sound. Click = the SAMPLES browser (this project, your library, Finder)."
+                             : "The sample this scene plays. Click = the SAMPLES browser (this project, your library, Finder). Drop a .wav or .aif on the window to add one.";
     ss.nameHint = nameHint.c_str();
     ss.stepHint = "< > = the neighbour sample of this project (samples/ beside it), at once and silently";
     ss.hearHint = synthTgt ? "Play the note ROOT through this synth (its envelope, filter and LFO), once." : sp.mode == 2 ? "Play the loop once at the project tempo." : "Play the sample once at its ROOT note.";
@@ -755,18 +742,7 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
             hearTgt_ = tgt;
         }
     }
-    if (sh.open) ImGui::OpenPopup("##smpList");
-    if (ImGui::BeginPopup("##smpList")) {
-        if (ImGui::Selectable("MY LIBRARY...")) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);   // v44.51
-        if (ImGui::IsItemHovered()) Hint("Your own samples (Library > Show Samples Folder). The file you choose is copied into this project.");
-        if (ImGui::Selectable("FROM FINDER...")) app.RequestSamplePick(tgt);
-        if (ImGui::IsItemHovered()) Hint("Choose a .wav or .aif anywhere on the Mac. It is copied into this project (samples/ beside it).");
-        ImGui::Separator();
-        ImGui::TextDisabled("THIS PROJECT");
-        if (names.empty()) ImGui::TextDisabled("samples/ is empty");
-        for (const std::string& nm : names) if (ImGui::Selectable(nm.c_str(), nm == sp.file)) app.SetSamplerFile(nm, tgt);
-        ImGui::EndPopup();
-    }
+    if (sh.open) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);   // C4b: the SAMPLES browser
 
     // waveform card (v44.52: the same card the drum tracks have)
     ImGui::Dummy(ImVec2(1, 3));
@@ -778,7 +754,7 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
         DrawWaveCard(app, "##smpWave", smp ? smp->data.data() : nullptr, smp ? smp->frames() : 0, smp ? smp->channels : 1, smp ? smp->sampleRate : kSampleRate, ed,
                      width, synthTgt ? 40.0f : std::max(40.0f, cellSize_.y - 8.0f), TrackColor(ti), sp.mode == 1 ? sp.slices : 0, msg, marksMode ? nullptr : &clicked,
                      marksMode ? sp.marks.data() : nullptr, marksMode ? sp.markCount : 0);
-        if (clicked) ImGui::OpenPopup("##smpList");   // C4b: the same list as the name (project, library, Finder)
+        if (clicked) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);   // C4b: the same browser as the name
         if (marksMode) {
             const ImVec2 rmin = ImGui::GetItemRectMin();
             const float frac = std::clamp((ImGui::GetMousePos().x - (rmin.x + 6.0f)) / std::max(1.0f, width - 12.0f), 0.0f, 1.0f);

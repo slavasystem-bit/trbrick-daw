@@ -22,6 +22,7 @@ struct SampleRowHit {
     int step = 0;        // -1 = <, +1 = >
     bool open = false;   // the name was clicked: open the list
     bool hear = false;   // HEAR
+    bool menu = false;   // right-click on the name (the program's menu gesture)
 };
 
 struct SampleRowSpec {
@@ -64,6 +65,7 @@ inline SampleRowHit SampleRow(const SampleRowSpec& s) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && s.stepHint) Hint("%s", s.stepHint);
     ImGui::SameLine(0, kSampleRowGap);
     if (NameButton("##name", nameW, s.label, s.dot ? s.dot : vis::kAccent)) hit.open = true;
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) hit.menu = true;
     if (ImGui::IsItemHovered() && s.nameHint) Hint("%s", s.nameHint);
     ImGui::SameLine(0, kSampleRowGap);
     ImGui::BeginDisabled(!s.canStep);
