@@ -1211,7 +1211,8 @@ int main(int argc, char** argv) {
         hSeq.Play();
         std::vector<float> hbuf(256 * 2);
         const double spH = 60.0 / 120.0 / 4.0 * kSampleRate;
-        int hn = static_cast<int>(spH * 45.8);   // chain step 2, step 5: the note from step 6 ended at step 4 for (int r = 0; r < hn; r += 256) hSeq.RenderAndAdvance(hbuf.data(), 256, kSampleRate);
+        int hn = static_cast<int>(spH * 45.8);   // chain step 2, step 5: the note from step 6 ended at step 4
+        for (int r = 0; r < hn; r += 256) hSeq.RenderAndAdvance(hbuf.data(), 256, kSampleRate);
         check(!hEngine.Synth(0).IsActive(), "notes: a long note across a chain step is released (no hanging note)");
         hSeq.Stop();
     }
@@ -3356,7 +3357,8 @@ int main(int argc, char** argv) {
             Project lp; check(LoadProject(lp, path) && lp.songChain[0].automation == a && lp.songChain[0].muteMask == kMuteKickBass && !lp.songChain[1].automation.Any(), "dynamics: lanes survive save / load (the step without lanes stays clean)");
             std::ifstream in(path); std::string line, out;
             while (std::getline(in, line)) {
-                if (line.rfind("dyn0=", 0) == 0) continue; if (line.rfind("arr0=", 0) == 0) { size_t c = 0; for (int k = 0; k < 10 && c != std::string::npos; ++k) c = line.find(',', c + 1); line = line.substr(0, c); }
+                if (line.rfind("dyn0=", 0) == 0) continue;
+                if (line.rfind("arr0=", 0) == 0) { size_t c = 0; for (int k = 0; k < 10 && c != std::string::npos; ++k) c = line.find(',', c + 1); line = line.substr(0, c); }
                 out += line + "\n";
             }
             in.close(); { std::ofstream o(path, std::ios::trunc); o << out; }
