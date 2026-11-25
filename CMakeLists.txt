@@ -22,6 +22,7 @@ set(T8_TOOL_WERROR_FLAGS -Werror=unused-variable -Werror=misleading-indentation 
 if(T8_SANITIZE)
     add_compile_options(-fsanitize=${T8_SANITIZE} -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=${T8_SANITIZE})
+    add_compile_definitions(T8_SANITIZED=1)   # lets the selftest skip its CPU-time checks
 endif()
 function(t8_first_party target)
     target_compile_options(${target} PRIVATE ${T8_WARN_FLAGS})

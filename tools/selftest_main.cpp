@@ -656,7 +656,7 @@ int main(int argc, char** argv) {
             if (cutShort) out.resize(out.size() - ssnd.size() / 2);
             return out;
         };
-        auto writeFile = [](const std::string& path, const std::vector<uint8_t>& b) { FILE* f = std::fopen(path.c_str(), "wb"); if (!f) return false; std::fwrite(b.data(), 1, b.size(), f); std::fclose(f); return true; };
+        auto writeFile = [](const std::string& path, const std::vector<uint8_t>& b) { FILE* f = std::fopen(path.c_str(), "wb"); if (!f) return false; if (!b.empty()) std::fwrite(b.data(), 1, b.size(), f); std::fclose(f); return true; };
         std::vector<float> ramp;   // 64 frames, stereo: left rises, right falls
         for (int i = 0; i < 64; ++i) { ramp.push_back(-0.8f + 1.6f * static_cast<float>(i) / 63.0f); ramp.push_back(0.8f - 1.6f * static_cast<float>(i) / 63.0f); }
         auto maxDiff = [&](const SampleBuffer& b, const std::vector<float>& ref) { if (b.data.size() != ref.size()) return 9.0f; float m = 0; for (size_t i = 0; i < ref.size(); ++i) m = std::max(m, std::fabs(b.data[i] - ref[i])); return m; };
@@ -1774,7 +1774,11 @@ int main(int argc, char** argv) {
                 secs = std::min(secs, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
             }
             std::printf("[info] worst-case synth load on this machine: %.1f%% of real time (x86_64)\n", secs * 100.0);
+#ifdef T8_SANITIZED
+            std::printf("[info] thick synths CPU check skipped: sanitizer builds run several times slower\n");
+#else
             check(secs < 0.7, "thick synths: worst case (all voices maxed, six-note chord) uses < 70% of real time");   // v44.43: was 50% with four chord voices; the shared build machine measures 37-57%
+#endif
         }
     }
 
@@ -5774,7 +5778,7 @@ int main(int argc, char** argv) {
         {   // SynthSample: the name field, comparable as plain memory
             SynthPatch a, b; a.sample.SetFile("a_very_long_name.wav"); a.sample.SetFile("x.wav");
             b.sample.SetFile("x.wav");
-            check(std::memcmp(&a, &b, sizeof(SynthPatch)) == 0 && a.sample.File() == "x.wav", "sample engine: the file name field is cleared on every write (patches compare with memcmp)");
+            check(std::memcmp(a.sample.file, b.sample.file, sizeof(a.sample.file)) == 0 && a.sample.File() == "x.wav", "sample engine: the file name field is cleared on every write (patches compare with memcmp)");   // the name bytes only: the padding between fields of two separately made patches is not defined (it differs on macOS)
             SynthPatch c; c.sample.SetFile(std::string(300, 'z'));
             check(c.sample.File().size() == SynthSample::kFileMax - 1, "sample engine: a name that is too long is cut, never overruns");
         }

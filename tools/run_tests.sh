@@ -35,5 +35,8 @@ for e in "$REPO"/* "$REPO"/.[!.]*; do
     ln -s "$e" "$TMP/$name"
 done
 
+# t8_selftest is one very large main(); sanitizer builds need more than the default 8 MB stack
+ulimit -s "$(ulimit -H -s)" 2>/dev/null
+
 cd "$TMP" || exit 2
 "$BIN" "$@"

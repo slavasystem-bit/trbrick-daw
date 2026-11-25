@@ -243,6 +243,37 @@ cd "$APP" || fail "Cannot open $APP"
 
 # ---- build (only what changed) --------------------------------------------------------------------------------------------
 command -v cmake >/dev/null 2>&1 || fail "cmake is not installed. One-time setup, run in Terminal:  brew install cmake sdl2"
+CUR_ID="$(cat "$STATE" 2>/dev/null)"
+IS_TEST=""; case "$CUR_ID" in *refs/pull/*) IS_TEST=1 ;; esac   # the installed version is a pull request (also when offline)
+
+# The last main version that passed the self-check on this Mac (a pull request never becomes the fallback).
+# Only the program file is kept: it starts beside the newer version's kits / presets / assets in $APP.
+build_failed() {
+    if [ -z "$IS_TEST" ] && [ -x "$GOOD/trbrick_daw" ]; then
+        warn "$1
+   Starting the last version that passed the self-check instead. Tell Claude in the project."
+        cd "$APP" || exit 1
+        [ -n "${TRB_NO_LAUNCH:-}" ] && { echo "-- Fallback ready (start skipped) --"; exit 0; }
+        "$GOOD/trbrick_daw"; echo ""; echo "TR-Brick closed."; pause; exit 0
+    fi
+    fail "$1 Your tracks are safe in ~/Documents/TR-Brick/Projects."
+}
+
+# Runs t8_selftest in a throw-away folder (the same idea as tools/run_tests.sh, built in here so that it
+# also works for older versions that do not have that script): the folder links to the program files,
+# and whatever the test writes stays in the folder.
+run_selftest() {
+    local tmp e name rc
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/trb_selftest.XXXXXX")" || return 1
+    for e in "$APP"/*; do
+        name="$(basename "$e")"
+        case "$name" in build|build-*|selftest_*|ui_settings.cfg|imgui.ini) continue ;; esac
+        ln -s "$e" "$tmp/$name"
+    done
+    ( cd "$tmp" && ulimit -s "$(ulimit -H -s)" 2>/dev/null; "$APP/build-mac/t8_selftest" ); rc=$?
+    rm -rf "$tmp"
+    return $rc
+}
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
 
 mkdir -p build-mac
@@ -254,14 +285,13 @@ cd build-mac || fail "Cannot open the build folder."
 if [ ! -f CMakeCache.txt ]; then
     echo "-- First build (slower, one time only) --"
     # shellcheck disable=SC2086
-    cmake .. -DCMAKE_BUILD_TYPE=Release ${TRB_CMAKE_ARGS:-} || fail "cmake configure failed -- see the error above."
+    cmake .. -DCMAKE_BUILD_TYPE=Release ${TRB_CMAKE_ARGS:-} || { rm -f CMakeCache.txt; build_failed "cmake configure failed -- see the error above."; }
 fi
 echo "-- Building (only what changed) --"
-make -j"$JOBS" trbrick_daw || fail "Build failed -- see the errors above. Your tracks are safe in ~/Documents/TR-Brick/Projects."
+make -j"$JOBS" trbrick_daw || build_failed "Build failed -- see the errors above."
 cd "$APP" || exit 1
 
 # ---- self-check on this Mac (only when the installed version changed) ---------------------------------------------------
-CUR_ID="$(cat "$STATE" 2>/dev/null)"
 APP_BIN="./build-mac/trbrick_daw"
 if [ -n "${TRB_SKIP_SELFTEST:-}" ]; then
     echo "-- Self-check skipped (TRB_SKIP_SELFTEST) --"
@@ -270,16 +300,17 @@ elif [ -n "$CUR_ID" ] && [ "$(cat "$TESTED" 2>/dev/null)" = "$CUR_ID" ]; then
 else
     echo "-- Self-check on this Mac (about a minute, only after an update) --"
     LOG="$ROOT/selftest-last.log"
-    if ( cd build-mac && make -j"$JOBS" t8_selftest ) > "$LOG" 2>&1 && [ -x tools/run_tests.sh ] \
-       && tools/run_tests.sh build-mac selftest >> "$LOG" 2>&1; then
+    if ( cd build-mac && make -j"$JOBS" t8_selftest ) > "$LOG" 2>&1 && run_selftest >> "$LOG" 2>&1; then
         echo "   Self-check passed ($(grep -c '^\[ OK \]' "$LOG") checks)."
         printf '%s' "$CUR_ID" > "$TESTED"
-        mkdir -p "$GOOD" && cp -p "$APP_BIN" "$GOOD/trbrick_daw.new" && mv "$GOOD/trbrick_daw.new" "$GOOD/trbrick_daw" \
-            && printf '%s' "$CUR_ID" > "$GOOD/version.txt"
+        if [ -z "$IS_TEST" ]; then
+            mkdir -p "$GOOD" && cp -p "$APP_BIN" "$GOOD/trbrick_daw.new" && mv "$GOOD/trbrick_daw.new" "$GOOD/trbrick_daw" \
+                && printf '%s' "$CUR_ID" > "$GOOD/version.txt"
+        fi
     else
         rm -f "$TESTED"
         grep '^\[FAIL\]' "$LOG" 2>/dev/null | head -5
-        if [ -n "$PR" ]; then
+        if [ -n "$IS_TEST" ]; then
             fail "The self-check FAILED on this Mac for $LABEL, so it will NOT be started.
    Do not merge it. Tell Claude in the project (details: $LOG)."
         elif [ -x "$GOOD/trbrick_daw" ]; then
