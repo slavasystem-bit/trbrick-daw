@@ -411,6 +411,185 @@ int main(int argc, char** argv) {
         check(!ListProjectBackups(path).empty(), "safety: opening a project writes a dated backup");
     }
 
+    // ---- v44.59 (stage Н2): nothing gets lost: damaged values, newer files, backups, failed loads, the starter brick ------------
+    {
+        namespace ud = t8::userdirs;
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::remove_all("selftest_n2", ec);
+        ud::SetRootsForTest("selftest_n2/Documents", "selftest_n2/Service");
+        fs::create_directories(ud::ProjectsDir(), ec);
+        auto slurp = [](const std::string& path) { std::ifstream in(path, std::ios::binary); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+        auto put = [](const std::string& path, const std::string& txt) { std::ofstream o(path, std::ios::trunc | std::ios::binary); o << txt; };
+        auto replaceLine = [](std::string txt, const std::string& start, const std::string& with) {
+            const size_t at = txt.find("\n" + start);
+            if (at == std::string::npos) return txt;
+            const size_t eol = txt.find('\n', at + 1);
+            return txt.replace(at + 1, eol - at - 1, with);
+        };
+
+        // DATA-3: damaged numbers are put back into range, a healthy file is not touched
+        {
+            const std::string path = ud::ProjectsDir() + "/damaged.t8proj";
+            Project a;
+            a.patterns[0].tracks[0].steps[0].active = true;
+            check(SaveProject(a, path), "n2 data-3: save");
+            Project clean;
+            check(LoadProject(clean, path) && LastLoadFixedValues() == 0 && LastLoadNote().empty(), "n2 data-3: a healthy file loads with nothing repaired");
+            std::string txt = slurp(path);
+            txt = replaceLine(txt, "masterLength=", "masterLength=500");
+            txt = replaceLine(txt, "bpm=", "bpm=nan");
+            const size_t t0 = txt.find("[pattern0.track0]");
+            txt.insert(txt.find("\n[", t0) + 1, "slotIndex=40\nlength=-3\nvolume=inf\ntype=Synth\n");   // at the end of the section: wins over the healthy lines
+            put(path, txt);
+            Project d;
+            check(LoadProject(d, path), "n2 data-3: a file with damaged values still opens");
+            const Pattern& p0 = d.patterns[0];
+            check(p0.masterLength == kMaxSteps && p0.bpm == 120.0f && p0.tracks[0].slotIndex == 0 && p0.tracks[0].type == TrackType::Drum &&
+                  p0.tracks[0].length == 1 && std::isfinite(p0.tracks[0].volume), "n2 data-3: lengths, slots, types and NaN / inf are put back to safe values");
+            check(LastLoadFixedValues() >= 5 && LastLoadNote().find("REPAIRED") != std::string::npos, "n2 data-3: the repair is counted and said");
+            Project r;
+            check(LoadProject(r, "examples/rolling.t8proj") && LastLoadFixedValues() == 0, "n2 data-3: the example project needs no repair");
+        }
+
+        // DATA-1: the format guard and a file from a newer version
+        {
+            std::ifstream ks("tools/project_format_keys.txt");
+            std::string line; int listedFormat = -1; std::set<std::string> listed;
+            while (std::getline(ks, line)) {
+                if (line.empty() || line[0] == '#') continue;
+                if (line.rfind("format=", 0) == 0) listedFormat = std::atoi(line.c_str() + 7); else listed.insert(line);
+            }
+            const std::string src = slurp("src/core/Persistence.cpp");
+            const std::string writer = src.substr(0, src.find("std::string ProjectToString("));
+            std::set<std::string> written;
+            const std::regex lit("\"([A-Za-z][A-Za-z0-9_]*)="), idx("\"([A-Za-z][A-Za-z0-9_]*)\" << \\w+ << \"=");
+            for (std::sregex_iterator it(writer.begin(), writer.end(), lit), e; it != e; ++it) written.insert((*it)[1]);
+            for (std::sregex_iterator it(writer.begin(), writer.end(), idx), e; it != e; ++it) written.insert((*it)[1].str() + "N");
+            std::string unknown;
+            for (const auto& k : written) if (!listed.count(k)) unknown += " " + k;
+            check(!src.empty() && listedFormat > 0, "n2 data-1: the writer and tools/project_format_keys.txt are found (run from the repository root)");
+            check(unknown.empty(), "n2 data-1: every key the writer can write is in tools/project_format_keys.txt (a new key: raise kProjectFormatVersion, add it there)" + (unknown.empty() ? std::string() : " NEW:" + unknown));
+            check(listedFormat == kProjectFormatVersion, "n2 data-1: the key list belongs to the current format number");
+        }
+        {
+            const std::string path = ud::ProjectsDir() + "/newer.t8proj";
+            Project a; a.name = "newer";
+            check(SaveProject(a, path), "n2 data-1: save");
+            std::string txt = replaceLine(slurp(path), "format=", "format=99");
+            txt.insert(txt.find("[end]"), "[futurestuff]\nsomethingNew=1\n");
+            put(path, txt);
+            const std::string before = slurp(path);
+            AppState app; app.engine.Init(kSampleRate); app.sequencer.Init(&app.engine, &app.project);
+            check(app.LoadProjectFile(path) && app.docNewerFormat == 99 && LastLoadNewerFormat() == 99, "n2 data-1: a file from a newer version opens and is marked");
+            check(!app.docNoticeTitle.empty() && app.docNoticeTitle.find("newer") != std::string::npos, "n2 data-1: the window says it was saved by a newer TR-Brick");
+            app.project.patterns[0].tracks[0].steps[3].active = true;
+            check(!app.SaveDocument() && app.docNameOpen && slurp(path) == before, "n2 data-1: Cmd+S does not write over it, it asks for a name");
+            app.docNameOpen = false;
+            check(app.RenameDocument("newer renamed") && slurp(ud::ProjectsDir() + "/newer renamed.t8proj") == before, "n2 data-1: rename moves the file without rewriting it");
+            check(app.SaveProjectAs("newer copy") && app.docNewerFormat == 0 && slurp(ud::ProjectsDir() + "/newer renamed.t8proj") == before, "n2 data-1: SAVE AS makes this version's own copy; the newer file stays as it was");
+            check(app.SaveDocument(), "n2 data-1: the copy saves normally");
+        }
+
+        // DATA-4: backups: no copy when nothing changed, one list per folder, days kept, a readable label
+        {
+            const std::string pa = ud::ProjectsDir() + "/song.t8proj";
+            fs::create_directories("selftest_n2/Other", ec);
+            const std::string pb = "selftest_n2/Other/song.t8proj";
+            Project a; a.name = "song";
+            check(SaveProject(a, pa) && SaveProject(a, pb), "n2 data-4: two projects with the same name in two folders");
+            const size_t n0 = ListProjectBackups(pa).size();
+            Project l;
+            LoadProject(l, pa); LoadProject(l, pa); LoadProject(l, pa);
+            check(ListProjectBackups(pa).size() == n0 + 1, "n2 data-4: opening the same file three times leaves one copy, not three");
+            a.patterns[0].tracks[0].steps[1].active = true; SaveProject(a, pa, false);
+            LoadProject(l, pa);
+            check(ListProjectBackups(pa).size() == n0 + 2, "n2 data-4: a changed file gets a new copy (even in the same second)");
+            for (int i = 0; i < 12; ++i) LoadProject(l, pb);
+            check(ListProjectBackups(pa).size() == n0 + 2 && ListProjectBackups(pb).size() == 1, "n2 data-4: the same name in another folder does not push out the copies");
+            // the days: 25 old copies, one per day, plus today's 10: the newest 10 and the newest of 14 older days stay
+            const std::string bdir = ud::BackupsDir();
+            const std::string stem = fs::path(ListProjectBackups(pa).front()).stem().string();
+            const std::string code = stem.substr(stem.find('~') + 1, 8);
+            for (int d = 1; d <= 25; ++d) { char nm[96]; std::snprintf(nm, sizeof nm, "/song~%s-202601%02d-120000.t8proj", code.c_str(), d); put(bdir + nm, "x" + std::to_string(d)); }
+            for (int i = 0; i < 12; ++i) { a.patterns[0].tracks[1].steps[i].active = true; SaveProject(a, pa, false); LoadProject(l, pa); }
+            const auto all = ListProjectBackups(pa);
+            int old = 0; for (const auto& b : all) if (b.find("-202601") != std::string::npos) ++old;
+            // today has 14 copies: the newest 10 stay, the older 4 count as one day; with 13 of the January days that makes 14 days
+            check(old == 13 && all.size() == 24 && all.back().find("-20260113-") != std::string::npos, "n2 data-4: the newest 10 copies and one copy for each of 14 older days are kept");
+            check(BackupLabel(bdir + "/song~" + code + "-20260105-120000.t8proj") == "2026-01-05  12:00:00", "n2 data-4: the Versions list shows the date and time");
+            put(bdir + "/song-20250101-101010.t8proj", "legacy");
+            check(ListProjectBackups(pa).back().find("song-20250101-101010") != std::string::npos, "n2 data-4: copies from before v44.59 are still listed");
+        }
+
+        // DATA-5: the save checks every write; a failed one is never shown as saved
+        {
+            AppState app; app.engine.Init(kSampleRate); app.sequencer.Init(&app.engine, &app.project);
+            const std::string path = ud::ProjectsDir() + "/restore.t8proj";
+            Project a; a.name = "restore";
+            check(SaveProject(a, path), "n2 data-5: save");
+            check(app.LoadProjectFile(path), "n2 data-5: open");
+            const auto copies = ListProjectBackups(path);
+            app.projectPath = "selftest_n2/no_such_folder/restore.t8proj";   // a place that cannot be written
+            check(!copies.empty() && app.RestoreBackupFile(copies.front()) && app.IsEditedNow(), "n2 data-5: a restore that cannot write stays Edited (not shown as saved)");
+            check(app.statusMessage.find("FAILED") != std::string::npos || app.statusMessage.find("STOPPED") != std::string::npos, "n2 data-5: and says why");
+            check(!fs::exists(path + ".tmp") && fs::exists(path + ".bak") == false, "n2 data-5: no stray .tmp");
+            SaveProject(a, path); a.name = "second"; SaveProject(a, path);
+            check(slurp(path + ".bak").find("name=restore") != std::string::npos && slurp(path).find("name=second") != std::string::npos, "n2 data-5: the previous save is kept as .bak");
+        }
+
+        // DATA-2: a project that cannot be opened is said, nothing is written over it, the newest copy brings it back
+        {
+            AppState app; app.engine.Init(kSampleRate); app.sequencer.Init(&app.engine, &app.project);
+            const std::string path = ud::ProjectsDir() + "/broken.t8proj";
+            Project a; a.name = "broken"; a.patterns[2].tracks[0].steps[5].active = true;
+            check(SaveProject(a, path, false) && app.LoadProjectFile(path), "n2 data-2: open once (a dated copy is made)");
+            app.NewDocument();
+            put(path, "[project]\nformat=8\nname=bro");   // cut short: no [end]
+            check(!app.LoadProjectFile(path) && app.docNoticeFailedPath == path && app.docNoticeTitle.find("could not be opened") != std::string::npos, "n2 data-2: a failed open is said in the window");
+            check(fs::exists(path + ".corrupt") && app.IsUntitled(), "n2 data-2: the damaged file is kept and the open project is untouched");
+            check(app.RestoreFailedFromBackup() && app.projectPath == path && app.project.patterns[2].tracks[0].steps[5].active && fs::exists(path) && !app.IsEditedNow(),
+                  "n2 data-2: RESTORE NEWEST COPY brings the project back as the project file");
+        }
+
+        // DATA-7: a chain step that points at a LIVE scene (the old starter brick) gets a brick slot of its own
+        {
+            const std::string path = ud::ProjectsDir() + "/starter.t8proj";
+            Project a;
+            a.patterns[0].tracks[0].steps[0].active = true; a.patterns[0].synthPatches[0].cutoffHz = 777.0f;
+            a.songChain[0] = ChainStep{0, 4}; a.songChainLength = 1;
+            check(SaveProject(a, path, false), "n2 data-7: save an old starter project");
+            Project l;
+            check(LoadProject(l, path), "n2 data-7: it opens");
+            const int sl = l.songChain[0].patternIndex;
+            check(AppState::IsBrickSlot(sl) && l.songChain[0].repeats == 4 && l.patterns[static_cast<size_t>(sl)].tracks[0].steps[0].active &&
+                  l.patterns[static_cast<size_t>(sl)].synthPatches[0].cutoffHz == 777.0f, "n2 data-7: brick 1 is a copy of scene 1 in its own slot (same notes and sound)");
+            l.patterns[static_cast<size_t>(sl)].tracks[0].steps[8].active = true;
+            check(!l.patterns[0].tracks[0].steps[8].active, "n2 data-7: editing the brick no longer changes LIVE scene 1");
+            SaveProject(l, path, false);
+            Project l2; LoadProject(l2, path);
+            check(l2.songChain[0].patternIndex == sl && LastLoadFixedValues() == 0, "n2 data-7: the next load keeps it as it is");
+            AppState app; app.engine.Init(kSampleRate); app.sequencer.Init(&app.engine, &app.project);
+            uint16_t mm = 0; StepParams spr;
+            const int slot = app.CopySceneToBrickSlot(0, true, &mm, &spr);
+            check(AppState::IsBrickSlot(slot), "n2 data-7: the starter brick of a first start is copied into a brick slot");
+        }
+
+        // LIVE-4: the "Edited" check builds its text from a copy, so the lock is held only for the copy
+        {
+            AppState app; app.engine.Init(kSampleRate); app.sequencer.Init(&app.engine, &app.project);
+            app.MarkSaved();
+            check(!app.IsEditedNow(), "n2 live-4: a just-saved project is not Edited");
+            app.project.patterns[1].tracks[2].steps[2].active = true;
+            check(app.IsEditedNow(), "n2 live-4: a change makes it Edited");
+            app.project.currentPattern = 3;
+            app.project.patterns[1].tracks[2].steps[2].active = false;
+            check(!app.IsEditedNow(), "n2 live-4: looking at another scene is not an edit; undoing the change clears Edited");
+        }
+        ud::SetRootsForTest("selftest_data/Documents", "selftest_data/Service");
+        fs::remove_all("selftest_n2", ec);
+    }
+
     // ---- Undo is tied to scenes and also covers sound / chain ---------------
     {
         AppState app;
@@ -2890,7 +3069,8 @@ int main(int argc, char** argv) {
                 check(SaveProject(pa, "selftest_arr.t8proj"), "arrangement v44.5: save");
                 Project pb; check(LoadProject(pb, "selftest_arr.t8proj"), "arrangement v44.5: load");
                 const ChainStep& b1 = pb.songChain[1];
-                check(b1.patternIndex == 1 && b1.repeats == 4 && b1.muteMask == kMuteKickBass && b1.fillMode == FillMode::Own && b1.fill == FillRule{FillWhen::EveryBars, FillKind::HatRoll, 4, 8, 3} &&
+                // DATA-7: a chain step that pointed at LIVE scene 2 now points at a brick slot holding a copy of it
+                check(AppState::IsBrickSlot(b1.patternIndex) && pb.patterns[static_cast<size_t>(b1.patternIndex)].role == SceneRole::Drop && b1.repeats == 4 && b1.muteMask == kMuteKickBass && b1.fillMode == FillMode::Own && b1.fill == FillRule{FillWhen::EveryBars, FillKind::HatRoll, 4, 8, 3} &&
                       b1.riser == 11 && b1.riserBars == 4 && b1.trimSteps == 12, "arrangement v44.5: mutes, fill, transition and trim of a chain step survive a save / load");
                 check(pb.songChain[0].muteMask == 0 && pb.songChain[0].fillMode == FillMode::Scene && pb.songChain[0].riser == -1 && pb.songChain[0].trimSteps == 0 && pb.songChain[2].chordScene == 3 && pb.songChain[2].muteMask == 0,
                       "arrangement v44.5: plain steps stay plain (an old project has no overlays)");
@@ -3626,7 +3806,7 @@ int main(int argc, char** argv) {
             const std::string path = "selftest_s1a.t8proj";
             check(SaveProject(sp, path), "s1a: save");
             const std::string txt = slurp(path);
-            check(count(txt, "[pattern16]") == 1 && count(txt, "[pattern17]") == 1 && count(txt, "[pattern18]") == 0 && count(txt, "[pattern40]") == 0 && count(txt, "[pattern15]") == 1 && count(txt, "format=7") == 1,
+            check(count(txt, "[pattern16]") == 1 && count(txt, "[pattern17]") == 1 && count(txt, "[pattern18]") == 0 && count(txt, "[pattern40]") == 0 && count(txt, "[pattern15]") == 1 && count(txt, "format=" + std::to_string(kProjectFormatVersion)) == 1,
                   "s1a: format 5 writes the live scenes and only the brick slots a brick points at");
             Project lp;
             check(LoadProject(lp, path) && lp.songChainLength == 3 && lp.songChain[0].patternIndex == 16 && lp.songChain[1].patternIndex == 17 && lp.songChain[2].patternIndex == 16 &&
@@ -3714,7 +3894,7 @@ int main(int argc, char** argv) {
             Project lp;
             check(LoadProject(lp, path) && lp.trackSoundMask == 255 && lp.patterns[static_cast<size_t>(kTrackSoundSlot)].synthPatches[0].cutoffHz == 3333.0f, "s1b: the track's sound survives save / load");
             // a file from before v44.23: no track sound in it -> the first brick's sound becomes the track's
-            std::string old; { std::istringstream in(txt); std::string line; while (std::getline(in, line)) { if (line.rfind("trackSound=", 0) == 0) continue; if (line == "format=7") line = "format=5"; old += line + "\n"; } }
+            std::string old; { std::istringstream in(txt); std::string line; while (std::getline(in, line)) { if (line.rfind("trackSound=", 0) == 0) continue; if (line == "format=" + std::to_string(kProjectFormatVersion)) line = "format=5"; old += line + "\n"; } }
             { std::ofstream o(path, std::ios::trunc); o << old; }
             Project ol;
             check(LoadProject(ol, path) && ol.trackSoundMask == 127 && ol.patterns[static_cast<size_t>(kTrackSoundSlot)].synthPatches[0].cutoffHz == ol.patterns[static_cast<size_t>(ol.songChain[0].patternIndex)].synthPatches[0].cutoffHz, "s1b: an older file gets the sound of its first brick as the sound of the track");
@@ -3805,7 +3985,7 @@ int main(int argc, char** argv) {
             Project lp;
             check(LoadProject(lp, path) && lp.patterns[static_cast<size_t>(s1)].ownSound == pj.patterns[static_cast<size_t>(s1)].ownSound && lp.patterns[static_cast<size_t>(s2)].ownSound == pj.patterns[static_cast<size_t>(s2)].ownSound && lp.patterns[static_cast<size_t>(s0)].ownSound == 0, "s2: ... and come back");
             // a file older than v44.24: bricks that sounded different keep that as their own, the first brick's sound is the track's
-            std::string old; { std::istringstream in(txt); std::string line; while (std::getline(in, line)) { if (line.rfind("ownSound=", 0) == 0 || line.rfind("trackSound=", 0) == 0) continue; if (line == "format=7") line = "format=5"; old += line + "\n"; } }
+            std::string old; { std::istringstream in(txt); std::string line; while (std::getline(in, line)) { if (line.rfind("ownSound=", 0) == 0 || line.rfind("trackSound=", 0) == 0) continue; if (line == "format=" + std::to_string(kProjectFormatVersion)) line = "format=5"; old += line + "\n"; } }
             { std::ofstream o(path, std::ios::trunc); o << old; }
             Project ol;
             check(LoadProject(ol, path) && ol.songChainLength == pj.songChainLength, "s2: an older file loads");
@@ -4571,7 +4751,7 @@ int main(int argc, char** argv) {
             check(SaveProject(proj, pa) && SaveProject(proj, pab), "u8a: projects save into Projects");
             check(BackupProjectFile(pa) && BackupProjectFile(pab), "u8a: backups are written");
             const auto ba = ListProjectBackups(pa), bab = ListProjectBackups(pab);
-            check(ba.size() == 1 && bab.size() == 1 && ba[0].find("/Svc2/Backups/a-2") != std::string::npos, "u8a: backups sit in the service folder and are listed per project");
+            check(ba.size() == 1 && bab.size() == 1 && ba[0].find("/Svc2/Backups/a~") != std::string::npos, "u8a: backups sit in the service folder and are listed per project");
         }
         ud::SetRootsForTest("selftest_data/Documents", "selftest_data/Service");   // back to the scratch folder of the other tests
         fs::remove_all("selftest_u8a", ec);
@@ -5447,7 +5627,7 @@ int main(int argc, char** argv) {
                     if (line.find(".track10]") != std::string::npos) skip = true;
                     if (skip) continue;
                     if (line.rfind("sampler=", 0) == 0) continue;
-                    if (line == "format=7") line = "format=6";
+                    if (line == "format=" + std::to_string(kProjectFormatVersion)) line = "format=6";
                     old += line + "\n"; } }
             { std::ofstream o("selftest_smp/old.t8proj", std::ios::trunc); o << old; }
             Project ol;

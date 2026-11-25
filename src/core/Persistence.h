@@ -10,7 +10,7 @@ namespace t8 {
 
 // File format version written as "format=N" under [project]. 1 = files from
 // before the key existed; 2 adds the trailing [end] completeness marker.
-constexpr int kProjectFormatVersion = 7;   // 3: v44.5.4, the sound (patches, kick, kit) is saved per scene; 4: v44.21, dynamics lanes with free points (dyn / lv2); 5: v44.22, every brick has its own scene slot (pattern16..79); 7: v44.50, the sampler is the 11th track (sampler= per scene; the kit part of ownSound moved from bit 10 to bit 11); 6: v44.24, a brick can have its own sound for some instruments (ownSound), the sound of the track holds whole channels
+constexpr int kProjectFormatVersion = 8;   // 8: v44.59, keys added in v44.51-v44.58 (sceneLink, euclid, sedit, sample, keytrack ...); every new key bumps it (selftest checks); 3: v44.5.4, the sound (patches, kick, kit) is saved per scene; 4: v44.21, dynamics lanes with free points (dyn / lv2); 5: v44.22, every brick has its own scene slot (pattern16..79); 7: v44.50, the sampler is the 11th track (sampler= per scene; the kit part of ownSound moved from bit 10 to bit 11); 6: v44.24, a brick can have its own sound for some instruments (ownSound), the sound of the track holds whole channels
 
 // Crash-safe: writes <path>.tmp, fsyncs, renames over <path>, keeps the old
 // file as <path>.bak.
@@ -23,6 +23,13 @@ std::string ProjectToString(const Project& project);
 // dated copy is also written to backups/ (BackupProjectFile).
 bool LoadProject(Project& project, const std::string& path);
 const std::string& LastLoadNote();
+// After LoadProject: the format number of a file written by a NEWER version (0 = not newer). Such a file may hold data this
+// version does not know; saving over it would drop that data, so the app saves a copy instead (DATA-1).
+int LastLoadNewerFormat();
+// After LoadProject: how many damaged values (out of range, NaN) the load had to put back into range (DATA-3).
+int LastLoadFixedValues();
+// Writes `bytes` to <dest>.tmp, flushes to the disk, renames over `dest` (never half a file).
+bool WriteFileAtomic(const std::string& dest, const std::string& bytes);
 // Plain-text dump of one instrument's sound (synth patch / drum voice + kick synth, track mixer / EQ / sends / steps, the
 // effects) -- the COPY PARAMS button puts it on the clipboard so it can be pasted into a question.
 std::string DescribeInstrument(const Project& project, const Pattern& pattern, int trackIndex);
@@ -31,5 +38,7 @@ std::string SoundPartText(const Pattern& pattern, int part);
 bool BackupProjectFile(const std::string& path, int keep = 10);
 // All backups/*.t8proj next to `path`, newest first.
 std::vector<std::string> ListProjectBackups(const std::string& path);
+// "2026-11-25  14:03:12" for a backup file name (what the Versions list shows).
+std::string BackupLabel(const std::string& backupPath);
 
 } // namespace t8
