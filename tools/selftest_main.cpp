@@ -6663,6 +6663,7 @@ int main(int argc, char** argv) {
         a.CurrentPattern().samplerPatch.file = "in.wav"; a.SyncSceneSamples(true); a.loader.FinishAllForTest();
         // library audition
         SetSamplesRoot(dir + "/lib"); a.libValid_ = false;
+        a.LibraryList();   // as in the app: the library list is on screen (scanned) before a file in it can be heard
         const double hearMs = heldFor([&] { a.AuditionLibrary("loop.wav"); });
         check(hearMs < 5.0, "async: HEAR in the library holds the scene lock only briefly (" + std::to_string(hearMs) + " ms)");
         check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 0, "async: the file is not in memory yet");
