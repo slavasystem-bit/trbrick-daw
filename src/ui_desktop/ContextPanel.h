@@ -18,7 +18,6 @@
 #include "PresetBrowser.h"
 #include "app/AppState.h"
 #include "ParamCell.h"
-#include <map>
 #include <string>
 #include <vector>
 
@@ -71,7 +70,6 @@ private:
     void DrawKitBlock(AppState& app, int ti, float width);
     std::string DrumVariantLabel(AppState& app, int ti, int v, int nVar);   // C4b: kick.wav, kick_2.wav ... of the edited scene's kit
     void HearDrum(AppState& app, const Track& t, const std::shared_ptr<const SampleBuffer>& buf);
-    std::map<std::string, std::vector<std::string>> drumVarNames_;
     std::vector<SamplePtr> hearKeep_;   // C4b: the last few HEAR samples stay alive here (the audio thread may hold the one that plays)
     void DrawSampler(AppState& app, int ti);        // v44.50: the 11th instrument -- SAMPLE block + OUTPUT | VOICE / EQ / FX / AUTO
     void DrawSamplerVoice(AppState& app, int ti);

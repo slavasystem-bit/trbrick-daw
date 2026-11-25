@@ -28,7 +28,6 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
-#include <sys/stat.h>
 #include <string>
 #include <vector>
 
@@ -571,24 +570,12 @@ void ContextPanel::DrawKitBlock(AppState& app, int ti, float width) {
     BlockEnd();
 }
 
-// C4b: the file name of variant `v` of a drum in the kit of the edited scene (kick.wav, kick_2.wav ...), read the way the kit is
-// built (DrumKit::Build: <stem>.wav, then <stem>_2 .. _8 that exist). Cached per kit folder and count; when they do not match what
-// the kit loaded (a file that would not read), it falls back to "SAMPLE 2 / 3".
+// C4b: the file name of variant `v` of a drum in the kit of the edited scene (kick.wav, kick_2.wav ...). The names are filled
+// by DrumKit::Build on the loader thread, so nothing here touches the disk (this runs under the scene lock).
 std::string ContextPanel::DrumVariantLabel(AppState& app, int ti, int v, int nVar) {
     const int slot = std::clamp(ti, 0, kNumDrumTracks - 1);
-    const std::string folder = app.TrackKitFolder(app.project.currentPattern, slot);
-    const std::string key = folder + "|" + std::to_string(slot) + "|" + std::to_string(nVar);   // read the folder again only when the kit changed
-    auto it = drumVarNames_.find(key);
-    if (it == drumVarNames_.end()) {
-        if (drumVarNames_.size() > 64) drumVarNames_.clear();
-        std::vector<std::string> names;
-        const std::string stem = DrumSlotFileStem(static_cast<DrumSlot>(slot));
-        auto exists = [](const std::string& p) { struct stat st{}; return ::stat(p.c_str(), &st) == 0; };
-        if (exists(folder + "/" + stem + ".wav")) names.push_back(stem + ".wav");
-        for (int k = 2; k <= kMaxKitVariants; ++k) { const std::string f = stem + "_" + std::to_string(k) + ".wav"; if (exists(folder + "/" + f)) names.push_back(f); }
-        it = drumVarNames_.emplace(key, std::move(names)).first;
-    }
-    if (static_cast<int>(it->second.size()) == nVar && v >= 0 && v < nVar) return it->second[static_cast<size_t>(v)];
+    const DrumKit::BankPtr b = app.KitBank(app.TrackKitFolder(app.project.currentPattern, slot));
+    if (b && v >= 0 && v < static_cast<int>(b->names[static_cast<size_t>(slot)].size())) return b->names[static_cast<size_t>(slot)][static_cast<size_t>(v)];
     return "SAMPLE " + std::to_string(v + 1) + " / " + std::to_string(nVar);
 }
 
