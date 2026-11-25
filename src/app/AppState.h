@@ -2823,6 +2823,31 @@ struct AppState {
         if (sequencer.PendingScene() == scene) sequencer.ClearPendingScene();
         SelectSceneForEdit(scene);
     }
+    // What one frame of mouse input on a SCENES pad means (ChainPanel passes ImGui's facts; the selftest replays real click sequences).
+    // released = the pad's Button returned true (it fires on EVERY release, also the one that ends a double click);
+    // doubleClicked = the second press of a double click landed on the pad; clickCount = io.MouseClickedLastCount[0] (2 on that second
+    // release). A double click is: release 1 -> Click, press 2 -> DoubleClick, release 2 -> None (the release that ends a double click
+    // must not launch again, or LAUNCH = BEAT / BAR would queue the scene the double click just cancelled).
+    enum class PadGesture { None, Click, DoubleClick, SelectRange, SelectAdd };
+    static PadGesture ScenePadGesture(bool released, bool doubleClicked, int clickCount, bool shift, bool cmd) {
+        if (shift || cmd) return (released && clickCount < 2) ? (shift ? PadGesture::SelectRange : PadGesture::SelectAdd) : PadGesture::None;
+        if (doubleClicked) return PadGesture::DoubleClick;
+        if (released && clickCount < 2) return PadGesture::Click;
+        return PadGesture::None;
+    }
+    // A gesture on pad `scene` outside song mode (song mode: ChainPanel keeps its own LaunchOrSwitchScene / SwitchPattern).
+    void ScenePadInput(int scene, PadGesture g) {
+        switch (g) {
+            case PadGesture::SelectRange: SelectScenePad(scene, true, false); break;
+            case PadGesture::SelectAdd:   SelectScenePad(scene, false, true); break;
+            case PadGesture::Click:
+                SelectScenePad(scene, false, false);
+                if (clickOpens) SelectSceneForEdit(scene); else LaunchScenePad(scene);
+                break;
+            case PadGesture::DoubleClick: OpenScenePad(scene); break;
+            case PadGesture::None: break;
+        }
+    }
     // A launch click while a scene is held apart: the editor first goes back to the scene that plays (the player is not moved), then the
     // clicked scene is launched as usual.
     void LaunchScenePad(int scene) {

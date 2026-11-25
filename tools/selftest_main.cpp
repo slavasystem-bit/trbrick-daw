@@ -6380,6 +6380,35 @@ int main(int argc, char** argv) {
             check(a.project.currentPattern == pl && !a.sequencer.IsPinned() && a.sequencer.PendingScene() == third,
                   "pads v44.59: a launch click while a scene is open apart: the editor goes back to the playing scene, the clicked one is queued");
             a.sequencer.ClearPendingScene();
+            // The real mouse path, frame by frame as ImGui reports it (its Button fires on BOTH releases of a double click; the
+            // second release comes with MouseClickedLastCount = 2). Replayed through ScenePadGesture + ScenePadInput like ChainPanel.
+            using G = AppState::PadGesture;
+            auto frame = [&](int pad, bool released, bool dbl, int count, bool shift = false, bool cmd = false) {
+                a.ScenePadInput(pad, AppState::ScenePadGesture(released, dbl, count, shift, cmd));
+            };
+            a.project.currentPattern = pl; a.sequencer.ReleasePin(); a.clickOpens = false;
+            frame(other, false, false, 1);   // press 1
+            frame(other, true, false, 1);    // release 1: launch queued
+            check(a.sequencer.PendingScene() == other, "pads v44.59 (mouse): release 1 of a double click queues the launch (LAUNCH = BAR)");
+            frame(other, false, true, 2);    // press 2: double click
+            frame(other, true, false, 2);    // release 2: must do nothing
+            frame(other, false, false, 2);   // the frames after
+            check(a.sequencer.PendingScene() < 0 && a.project.currentPattern == other && a.sequencer.PlayPatternIndex() == pl && a.SceneIsHeldApart(),
+                  "pads v44.59 (mouse): after the whole double click nothing is queued and the scene is only open");
+            check(AppState::ScenePadGesture(true, false, 2, false, false) == G::None && AppState::ScenePadGesture(true, false, 3, false, false) == G::None,
+                  "pads v44.59 (mouse): the release ending a double / triple click is not a click");
+            frame(third, true, false, 1);
+            check(a.project.currentPattern == pl && a.sequencer.PendingScene() == third, "pads v44.59 (mouse): a later single click launches as before");
+            a.sequencer.ClearPendingScene();
+            a.SelectScenePad(3, false, false);
+            frame(3, true, false, 1, false, true); frame(3, false, true, 2, false, true); frame(3, true, false, 2, false, true);
+            check(((a.sceneSel >> 3) & 1u) && a.sequencer.PendingScene() < 0, "pads v44.59 (mouse): a Cmd+double click selects once, launches nothing");
+            a.SelectScenePad(3, false, false);
+            a.clickOpens = true;
+            frame(third, true, false, 1); frame(third, false, true, 2); frame(third, true, false, 2);
+            check(a.project.currentPattern == third && a.sequencer.PendingScene() < 0, "pads v44.59 (mouse): CLICK: OPEN, a double click only opens");
+            a.clickOpens = false;
+            a.project.currentPattern = pl; a.sequencer.ReleasePin();
         }
         // --- ARM: while a launch waits, the switches are for the scene that is coming
         a.project.currentPattern = 4; a.sequencer.ReleasePin(); a.SetMuteScene(snare, false);
