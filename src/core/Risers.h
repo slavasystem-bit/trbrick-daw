@@ -158,9 +158,6 @@ private:
     std::array<RiserVoice, kMaxVoices> voices_{};
     int nextVoice_ = 0;
     std::shared_ptr<const SincTable> SincFor(double rate);
-    struct CachedSinc { double rate = 0.0; std::shared_ptr<const SincTable> table; };
-    std::array<CachedSinc, 8> sincCache_{};
-    int sincNext_ = 0;
 };
 
 } // namespace t8

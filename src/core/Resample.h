@@ -81,4 +81,20 @@ inline std::vector<float> ResampleInterleaved(const std::vector<float>& src, int
     return out;
 }
 
+// N1 (audit v44.58 LIVE-9): every kernel the drums and risers can ask for, built once. They used to build a table (129 x 16
+// Kaiser taps) with make_shared on the audio thread for every new tune value and free an old one. The cutoff (0.95 / rate when
+// pitching up, else 1.0) is rounded DOWN to a 0.01 grid (a hair more conservative, never more aliasing); 96 tables, ~0.8 MB.
+// Call WarmSincBank() once off the audio thread (AudioEngine::Init); after that a lookup only copies a shared_ptr.
+inline const std::shared_ptr<const SincTable>& SharedSincForCutoff(double cutoff) {
+    static const std::vector<std::shared_ptr<const SincTable>> bank = [] {
+        std::vector<std::shared_ptr<const SincTable>> b;
+        for (int i = 5; i <= 100; ++i) b.push_back(std::make_shared<const SincTable>(16, 128, i / 100.0));
+        return b;
+    }();
+    const int idx = std::clamp(static_cast<int>(std::floor(cutoff * 100.0 + 1e-9)), 5, 100);
+    return bank[static_cast<size_t>(idx - 5)];
+}
+inline std::shared_ptr<const SincTable> SharedSincForRate(double rate) { return SharedSincForCutoff(rate > 0.0 ? std::min(1.0, 0.95 / rate) : 1.0); }
+inline void WarmSincBank() { (void)SharedSincForCutoff(1.0); }
+
 } // namespace t8

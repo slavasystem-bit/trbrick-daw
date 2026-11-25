@@ -19,6 +19,7 @@ int TrackSampleVariant(const Track& t) {
 void Sequencer::Init(AudioEngine* engine, Project* project) {
     engine_ = engine;
     project_ = project;
+    pendingRatchets_.reserve(kMaxPendingRatchets);   // N1 (LIVE-9): filled on the audio thread, so the room is made here
     globalTick_ = 0;
     chordBaseTick_ = 0;
     samplesIntoStep_ = 0.0;
@@ -140,7 +141,7 @@ void Sequencer::ScheduleHit(double x, const RatchetEvent& ev) {
     if (x <= 0.0) { FireRatchetEvent(ev); return; }
     RatchetEvent e = ev;
     e.fraction = static_cast<float>(std::min(x, 0.999));
-    pendingRatchets_.push_back(e);
+    if (pendingRatchets_.size() < pendingRatchets_.capacity()) pendingRatchets_.push_back(e);   // full: the hit is dropped (never grows on the audio thread)
 }
 
 int Sequencer::StepForTrack(int trackIndex) const {
@@ -583,7 +584,7 @@ void Sequencer::LookaheadEarlyHits(int tick) {
             const double x = off + static_cast<double>(r) * (1.0 - off) / ratchet;   // in steps from the start of tick nt
             if (x >= 0.0) break;
             ev.fraction = static_cast<float>(1.0 + x);                                // in the running tick
-            pendingRatchets_.push_back(ev);
+            if (pendingRatchets_.size() < pendingRatchets_.capacity()) pendingRatchets_.push_back(ev);
         }
     }
 }
@@ -722,6 +723,21 @@ void Sequencer::FireRatchetEvent(const RatchetEvent& ev) {
         // is what makes consecutive hits from the same mono synth voice
         // audibly distinct rather than one sustained note.
         engine_->SynthNoteOn(ev.synthIndex, ev.synthNote, ev.velocity, ev.slide);
+    }
+}
+
+bool Sequencer::LockForAudio(unsigned maxWaitUs, unsigned& waitedUs) {
+    patternMutex_.MarkAudioThread();
+    waitedUs = 0;
+    if (patternMutex_.try_lock()) return true;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (;;) {
+        std::this_thread::yield();
+        const bool got = patternMutex_.try_lock();
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+        waitedUs = static_cast<unsigned>(std::max<long long>(0, us));
+        if (got) return true;
+        if (waitedUs >= maxWaitUs) return false;
     }
 }
 

@@ -86,6 +86,13 @@ public:
     // triggering steps at the correct sample offsets along the way.
     void RenderAndAdvance(float* out, int numFrames, int sampleRate);
 
+    // N1 (audit v44.58 LIVE-5): the audio callback takes the scene lock itself, waiting at most `maxWaitUs`. True = locked (call
+    // UnlockForAudio after rendering; RenderAndAdvance re-locks for free, the lock is recursive). False = the screen (or a loader)
+    // still holds it: the callback plays a short fade to silence instead of waiting longer, so the device keeps getting buffers,
+    // the watchdog does not restart it, and the stall ends as soon as the lock is free. `waitedUs` = time spent waiting.
+    bool LockForAudio(unsigned maxWaitUs, unsigned& waitedUs);
+    void UnlockForAudio() { patternMutex_.unlock(); }
+
     // ---- Live break (see DrumBreaks.h / AppState::UpdateLiveBreakHold) --
     // Launch-quantized, Session-View style: SetLiveBreak only ARMS the
     // break -- it does NOT cut into the bar that's currently playing.
@@ -516,6 +523,7 @@ private:
         bool slide = false;    // v39: a delayed main hit carries its legato / tie flag
     };
     std::vector<RatchetEvent> pendingRatchets_;
+    static constexpr size_t kMaxPendingRatchets = 512;   // N1: reserved in Init (11 tracks x 4 ratchets per tick is far below)
 
     // v39 microtiming. Every tick has the same length (swing and nudge are offsets of the HITS, not of the grid, so a
     // bar never changes its length). A hit that is due before its own tick (negative nudge, drum tracks only) is

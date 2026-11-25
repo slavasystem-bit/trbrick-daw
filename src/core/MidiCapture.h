@@ -18,6 +18,7 @@
 // immune to UI-thread scheduling jitter, unlike the original
 // std::chrono::steady_clock-based v1 implementation.
 #include "Types.h"
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -37,56 +38,64 @@ struct CapturedEvent {
 
 class MidiCapture {
 public:
+    // N1 (LIVE-9): the Log* calls run on the audio thread, so the room is made here (UI thread): about 2 hours of a busy pattern.
+    // When it is full, further events are dropped (counted) instead of growing the vector on the audio thread.
+    static constexpr size_t kCapacity = 200000;
     void Start() {
-        active_ = true;
-        elapsedSeconds_ = 0.0;
         events_.clear();
+        events_.reserve(kCapacity);
+        dropped_ = 0;
+        elapsedSeconds_ = 0.0;
+        active_.store(true, std::memory_order_release);   // the events above are visible to the audio thread before it logs
     }
-    void Stop() { active_ = false; }
-    bool IsActive() const { return active_; }
+    size_t Dropped() const { return dropped_; }
+    void Stop() { active_.store(false, std::memory_order_release); }
+    bool IsActive() const { return active_.load(std::memory_order_acquire); }
     double ElapsedSeconds() const { return elapsedSeconds_; }
 
     // Called once per AudioEngine::Render block (any time, active or not,
     // same as Recorder::Push) so the internal clock always matches the
     // audio actually rendered.
     void Advance(int numFrames, int sampleRate) {
-        if (!active_ || sampleRate <= 0) return;
+        if (!IsActive() || sampleRate <= 0) return;
         elapsedSeconds_ += static_cast<double>(numFrames) / static_cast<double>(sampleRate);
     }
 
     void LogDrum(DrumSlot slot) {
-        if (!active_) return;
+        if (!IsActive()) return;
         CapturedEvent e;
         e.timeSeconds = elapsedSeconds_;
         e.isDrum = true;
         e.drumSlot = slot;
-        events_.push_back(e);
+        Add(e);
     }
 
     void LogSynth(int synthIndex, int8_t note) {
-        if (!active_) return;
+        if (!IsActive()) return;
         CapturedEvent e;
         e.timeSeconds = elapsedSeconds_;
         e.synthIndex = synthIndex;
         e.noteCount = 1;
         e.notes[0] = note;
-        events_.push_back(e);
+        Add(e);
     }
 
     void LogChord(const int8_t* notes, int count) {
-        if (!active_) return;
+        if (!IsActive()) return;
         CapturedEvent e;
         e.timeSeconds = elapsedSeconds_;
         e.isChord = true;
         e.noteCount = count < 0 ? 0 : (count > kMaxChordVoices ? kMaxChordVoices : count);   // v44.44: was 4, a six-note chord lost two notes
         for (int i = 0; i < e.noteCount; ++i) e.notes[i] = notes[i];
-        events_.push_back(e);
+        Add(e);
     }
 
     const std::vector<CapturedEvent>& Events() const { return events_; }
 
 private:
-    bool active_ = false;
+    void Add(const CapturedEvent& e) { if (events_.size() < events_.capacity()) events_.push_back(e); else ++dropped_; }
+    size_t dropped_ = 0;
+    std::atomic<bool> active_{false};   // Start/Stop on the UI thread, Log* on the audio thread
     double elapsedSeconds_ = 0.0;
     std::vector<CapturedEvent> events_;
 };
