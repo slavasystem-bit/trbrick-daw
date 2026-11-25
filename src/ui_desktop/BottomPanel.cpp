@@ -171,9 +171,14 @@ void BottomPanel::OpenLibraryBrowser(AppState& app, AppState::LibTarget target, 
         who = TrackDisplayName(tr);
         static const char* const kSlotCat[6] = {"KICK", "SNARE", "CLAP", "HAT", "HAT", "PERC"};
         if (tr.type == TrackType::Drum && tr.slotIndex >= 0 && tr.slotIndex < 6) cfg.startCategory = kSlotCat[tr.slotIndex];
-    } else if (target == AppState::LibTarget::Sampler) who = "THE SAMPLER";
-    else { who = "THE TRANSITION BEFORE BRICK " + std::to_string(std::max(0, brick) + 1); cfg.startCategory = "FX"; }
-    cfg.title = target == AppState::LibTarget::Drum ? "MY SAMPLES: DRUM" : target == AppState::LibTarget::Sampler ? "MY SAMPLES: SAMPLER" : "MY SAMPLES: TRANSITION";
+    } else if (target == AppState::LibTarget::Sampler) {
+        // C4b: say where the file goes: the sampler, or the synth / chord whose ENGINE is SAMPLE
+        const int st = app.libSampleTarget;
+        who = st < 0 ? "SAMPLER" : st >= kNumSynthTracks ? "CHORD" : TrackDisplayName(app.CurrentPattern().tracks[static_cast<size_t>(std::clamp(kNumDrumTracks + st, 0, kNumTracks - 1))]);
+    }
+    else { who = "TRANSITION BEFORE BRICK " + std::to_string(std::max(0, brick) + 1); cfg.startCategory = "FX"; }
+    for (char& c : who) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    cfg.title = "SAMPLE FOR: " + who;   // C4b: one browser, its title says where the file goes
     cfg.categories.assign(kLibCategories, kLibCategories + kNumLibCategories);
     cfg.favFile = userdirs::FavoritesDir() + "/favorites_samples.txt";
     cfg.liveSelect = false;

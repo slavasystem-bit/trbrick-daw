@@ -3187,7 +3187,7 @@ struct AppState {
                     const std::string& tf = pat.tracks[static_cast<size_t>(t)].kitFolder;
                     if (tf.empty()) continue;
                     DrumKit::BankPtr tb = KitBank(tf);
-                    if (tb && !tb->variants[static_cast<size_t>(t)].empty()) nb->variants[static_cast<size_t>(t)] = tb->variants[static_cast<size_t>(t)];
+                    if (tb && !tb->variants[static_cast<size_t>(t)].empty()) { nb->variants[static_cast<size_t>(t)] = tb->variants[static_cast<size_t>(t)]; nb->names[static_cast<size_t>(t)] = tb->names[static_cast<size_t>(t)]; }
                 }
                 if (it != kitMixed_.end()) kitRetired_.push_back(it->second);
                 kitMixed_[key] = nb;

@@ -38,6 +38,7 @@ DrumKit::BankPtr DrumKit::Build(const std::string& folder, int sampleRate, int* 
         auto buf = std::make_shared<SampleBuffer>();
         if (LoadWav(primary, *buf, sampleRate)) {
             bank->variants[i].push_back(buf);
+            bank->names[i].push_back(stem + ".wav");
             ++loadedRequired;
         } else {
             std::cerr << "[kit] missing required sample: " << primary << "\n";
@@ -48,7 +49,7 @@ DrumKit::BankPtr DrumKit::Build(const std::string& folder, int sampleRate, int* 
             std::string alt = folder + "/" + stem + "_" + std::to_string(v) + ".wav";
             if (!FileExists(alt)) continue;
             auto vb = std::make_shared<SampleBuffer>();
-            if (LoadWav(alt, *vb, sampleRate)) bank->variants[i].push_back(vb);
+            if (LoadWav(alt, *vb, sampleRate)) { bank->variants[i].push_back(vb); bank->names[i].push_back(stem + "_" + std::to_string(v) + ".wav"); }
         }
     }
     if (loadedOut) *loadedOut = loadedRequired;

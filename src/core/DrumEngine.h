@@ -59,6 +59,7 @@ class DrumKit {
 public:
     struct Bank {
         std::array<std::vector<std::shared_ptr<const SampleBuffer>>, kNumDrumTracks> variants;
+        std::array<std::vector<std::string>, kNumDrumTracks> names;   // C4b: the file of each variant (kick.wav, kick_2.wav ...), same order
     };
     using BankPtr = std::shared_ptr<const Bank>;
     // v44.5.4: a kit can belong to a scene. Build() reads a folder into a bank WITHOUT making it the sounding one (UI thread; reads

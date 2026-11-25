@@ -4623,6 +4623,12 @@ int main(int argc, char** argv) {
         check(n808 > 0 && n909 > 0 && da.SceneKitVariantCount(0, 1) == static_cast<int>(da.KitBank("kits/808")->variants[1].size()), "v44.26: the variants of that drum are counted in its own kit");
         da.SyncSceneKits();
         const auto b808 = da.KitBank("kits/808"), b909 = da.KitBank("kits/909");
+        {   // C4b: the bank knows the file of each variant (shown in the SAMPLE row without reading the disk under the scene lock)
+            bool namesOk = b909 != nullptr;
+            for (int sl = 0; namesOk && sl < kNumDrumTracks; ++sl) namesOk = b909->names[static_cast<size_t>(sl)].size() == b909->variants[static_cast<size_t>(sl)].size();
+            check(namesOk && !b909->names[0].empty() && b909->names[0][0] == "kick.wav" && b909->names[0].size() >= 2 && b909->names[0][1] == "kick_2.wav",
+                  "c4b: a kit bank names its variants (kick.wav, kick_2.wav ...) in the order they play");
+        }
         da.sequencer.ApplySceneSound(0);
         const auto cur = da.engine.GetKit()->CurrentBank();
         check(cur && cur->variants[1] == b808->variants[1] && cur->variants[0] == b909->variants[0] && cur->variants[3] == b909->variants[3], "v44.26: the sounding bank is the scene's kit with that one drum from the other kit");

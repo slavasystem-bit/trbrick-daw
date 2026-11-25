@@ -5,6 +5,7 @@
 #include "Visual.h"
 #include "Scope.h"
 #include "LiveWidgets.h"
+#include "SampleRow.h"
 #include "TrackStyle.h"
 #include "MixerSync.h"
 #include "SynthSync.h"
@@ -22,6 +23,7 @@
 #include "core/Wavetables.h"
 #include "app/SynthParams.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -478,44 +480,41 @@ void ContextPanel::DrawEq(AppState& app, int ti, float availW) {
 // DRUM
 // ===========================================================================
 
-// The left column of a drum track, built like the synth's PRESET block (same width, same two rows): the kit picker
-// (arrows load the neighbour kit, the wide button opens the kit browser) and a SAMPLE card that works like the ENGINE card.
+// The left column of a drum track, built like the synth's PRESET block (same width): the KIT row (the arrows load the
+// neighbour kit, the name opens the kit browser), then the SAMPLE row every instrument has (stage C4b): < > = the neighbour
+// variant of this drum in the kit (kick, kick_2 ...), the name = the list of them, HEAR plays it; under it the waveform.
 void ContextPanel::DrawKitBlock(AppState& app, int ti, float width) {
     Pattern& pat = app.CurrentPattern();
     Track& t = pat.tracks[ti];
-    BlockBegin("KIT");
+    const int scene = app.project.currentPattern;
+    {   // the block is named after the drum (KICK, SNARE ...): KIT and SAMPLE are the captions of its two rows
+        std::string title = TrackDisplayName(t);
+        for (char& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        BlockBegin(title.c_str());
+    }
+    constexpr float capW = 50.0f;
     const auto& kits = app.KitFolders();
-    const float arrowW = 26.0f;
     if (kits.empty()) {
         ImGui::TextDisabled("(no kit folders)");
     } else {
         const int n = static_cast<int>(kits.size());
         int cur = std::clamp(app.menuKitIndex, 0, n - 1);
-        for (int i = 0; i < n; ++i) if (kits[static_cast<size_t>(i)] == app.TrackKitFolder(app.project.currentPattern, ti)) cur = i;
+        for (int i = 0; i < n; ++i) if (kits[static_cast<size_t>(i)] == app.TrackKitFolder(scene, ti)) cur = i;
         std::string name = kits[static_cast<size_t>(cur)];
         if (name.rfind("kits/", 0) == 0) name = name.substr(5);
-        if (ImGui::Button("<##kitPrevC", ImVec2(arrowW, 0))) app.LoadKitFolder(kits[static_cast<size_t>((cur - 1 + n) % n)]);
-        ImGui::SameLine(0, 4);
-        if (NameButton("##kitOpenC", width - arrowW * 2 - 8.0f - 48.0f - 40.0f, name, vis::kAccent)) app.kitBrowserRequest = true;
-        if (ImGui::IsItemHovered()) Hint("Open the kit browser (categories, search, favorites)");
-        ImGui::SameLine(0, 4);
-        if (ImGui::Button(">##kitNextC", ImVec2(arrowW, 0))) app.LoadKitFolder(kits[static_cast<size_t>((cur + 1) % n)]);
-        ImGui::SameLine(0, 4);
-        if (ImGui::Button("ALL##kitAll", ImVec2(44, 0))) app.kitBrowserRequest = true;
-        if (ImGui::IsItemHovered()) Hint("Browse all kits");
-        ImGui::SameLine(0, 4);
-        if (ImGui::Button("MINE##kitLib", ImVec2(36, 0))) app.OpenLibrary(AppState::LibTarget::Drum);
-        if (ImGui::IsItemHovered()) Hint("MY SAMPLES: your own library (Library > Show Samples Folder). The one you pick replaces this track's sample in a kit of the scene (copied, the library is never touched).");
+        SampleRowSpec ks;
+        ks.id = "##kitRow"; ks.caption = "KIT"; ks.captionW = capW; ks.width = width; ks.label = name; ks.dot = vis::kAccent;
+        ks.canStep = n > 1; ks.showHear = false;
+        ks.nameHint = "The kit: all six drums at once (like a synth's PRESET). Click = the kit browser (categories, search, favorites).";
+        ks.stepHint = "< > = the neighbour kit, at once and silently (try kits while it plays)";
+        const SampleRowHit kh = SampleRow(ks);
+        if (kh.step != 0) app.LoadKitFolder(kits[static_cast<size_t>(((cur + kh.step) % n + n) % n)]);
+        if (kh.open) app.kitBrowserRequest = true;
     }
 
-    // SAMPLE card: the default sample of this track (steps set to AUTO follow it). Click = next, right-click = previous.
-    ImGui::Dummy(ImVec2(1, 3));
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const float bh = cellSize_.y - 8.0f;
-    ImGui::InvisibleButton("##sample", ImVec2(width, bh));
-    const bool hov = ImGui::IsItemHovered();
+    // SAMPLE row: the default sample of this track (steps set to AUTO follow it)
     const DrumSlot slot = static_cast<DrumSlot>(t.slotIndex);
-    const int nVar = std::max(1, app.SceneKitVariantCount(app.project.currentPattern, static_cast<int>(slot)));
+    const int nVar = std::max(1, app.SceneKitVariantCount(scene, static_cast<int>(slot)));
     int cur = -1; bool mixed = false;
     for (const Step& st : t.steps) {
         if (!st.active) continue;
@@ -523,43 +522,85 @@ void ContextPanel::DrawKitBlock(AppState& app, int ti, float width) {
         if (cur < 0) cur = ev; else if (cur != ev) mixed = true;
     }
     if (cur < 0) cur = t.defaultVariant;
-    int dir = 0;
-    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) dir = 1;
-    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) dir = -1;
-    if (dir != 0 && nVar > 1) {
-        const int nv = ((cur + dir) % nVar + nVar) % nVar;
+    cur = std::clamp(cur, 0, nVar - 1);
+    auto pickVariant = [&](int nv) {
         app.PushUndo();
         for (Step& st : t.steps) st.variant = kAutoVariant;   // every step follows the track default again
         t.defaultVariant = static_cast<uint8_t>(nv);
         cur = nv; mixed = false;
-        app.SetStatus(TrackDisplayName(t) + " SAMPLE VARIANT " + std::to_string(nv + 1) + "/" + std::to_string(nVar));
-    }
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 p1(p0.x + width, p0.y + bh);
-    dl->AddRectFilled(p0, p1, hov ? vis::kCellHover : vis::kCell, 5.0f);
-    dl->AddRect(p0, p1, IM_COL32(242, 163, 61, 160), 5.0f);
-    // little bar icon: one bar per variant, the chosen one lit
-    {
-        const int shown = std::min(nVar, 6);
-        const float bw = 6.0f, gap = 3.0f, x0 = p0.x + 12.0f, base = p1.y - 8.0f;
-        for (int i = 0; i < shown; ++i) {
-            const float hgt = 8.0f + 5.0f * ((i * 7) % 4);
-            const bool on = !mixed && i == cur;
-            dl->AddRectFilled(ImVec2(x0 + i * (bw + gap), base - hgt), ImVec2(x0 + i * (bw + gap) + bw, base), on ? vis::kAccent : vis::kLineHi, 2.0f);
+        app.SetStatus(TrackDisplayName(t) + " SAMPLE " + std::to_string(nv + 1) + " / " + std::to_string(nVar) + ": " + DrumVariantLabel(app, ti, nv, nVar));
+    };
+    const std::shared_ptr<const SampleBuffer> buf = app.SceneKitVariantBuffer(scene, static_cast<int>(slot), cur);
+    ImGui::Dummy(ImVec2(1, 2));
+    SampleRowSpec ss;
+    ss.id = "##drumSmpRow"; ss.caption = "SAMPLE"; ss.captionW = capW; ss.width = width;
+    const bool kitLoading = !buf && app.KitPending(app.TrackKitFolder(scene, ti));   // N1: the kit is read on the loader thread
+    ss.label = kitLoading ? std::string("(loading...)")
+             : !buf ? std::string(slot == DrumSlot::Kick ? "(synth kick)" : "(none in this kit)")
+             : mixed ? std::string("MIXED (steps choose)") : DrumVariantLabel(app, ti, cur, nVar);
+    ss.dot = TrackColor(ti);
+    ss.canStep = nVar > 1; ss.canHear = buf != nullptr;
+    ss.nameHint = mixed ? "Some steps play their own sample (right-click on a step). < > or a pick from the list makes every step follow this track again."
+                        : "The sample of this drum (steps set to AUTO follow it). Click = the samples of this drum in the kit, or your library.";
+    ss.stepHint = "< > = the neighbour sample of this drum in the kit (kick, kick_2 ...), at once and silently";
+    ss.hearHint = "Play this drum once, as it sounds here (TUNE, DECAY, START / LENGTH)";
+    ss.noHearHint = slot == DrumSlot::Kick ? "This kit has no kick sample: the kick is the built-in KICK SYNTH." : "This kit has no sample for this drum.";
+    const SampleRowHit sh = SampleRow(ss);
+    if (sh.step != 0 && nVar > 1) pickVariant(((cur + sh.step) % nVar + nVar) % nVar);
+    if (sh.hear && buf) HearDrum(app, t, buf);
+    if (sh.open) ImGui::OpenPopup("##drumSmpList");
+    if (ImGui::BeginPopup("##drumSmpList")) {
+        if (ImGui::Selectable("MY LIBRARY...")) app.OpenLibrary(AppState::LibTarget::Drum);
+        if (ImGui::IsItemHovered()) Hint("Your own samples (Library > Show Samples Folder). The one you pick replaces this drum's sample in a kit of the scene (copied, the library is never touched).");
+        ImGui::Separator();
+        ImGui::TextDisabled("IN THIS KIT");
+        for (int v = 0; v < nVar && buf; ++v) {
+            ImGui::PushID(v);
+            if (ImGui::Selectable(DrumVariantLabel(app, ti, v, nVar).c_str(), !mixed && v == cur)) pickVariant(v);
+            ImGui::PopID();
         }
+        if (!buf) ImGui::TextDisabled(slot == DrumSlot::Kick ? "no kick sample (the KICK SYNTH plays)" : "no sample for this drum");
+        ImGui::EndPopup();
     }
-    char buf[40];
-    if (mixed) std::snprintf(buf, sizeof(buf), "SAMPLE  MIXED"); else std::snprintf(buf, sizeof(buf), "SAMPLE  %d / %d", cur + 1, nVar);
-    dl->AddText(ImVec2(p0.x + 70, p0.y + 7), vis::kText, buf);
-    dl->AddText(ImVec2(p0.x + 70, p0.y + 7 + ImGui::GetTextLineHeight() + 1), vis::kTextDim, nVar > 1 ? "default for all steps" : "one sample in this kit");
-    if (hov) Hint("Default sample of this track (a step follows it until you set its own with right-click)\nclick = next, right-click = previous");
     {   // v44.52: the waveform of that sample, with the START / LENGTH of the SAMPLE knobs (the same card the sampler has)
         ImGui::Dummy(ImVec2(1, 3));
-        const std::shared_ptr<const SampleBuffer> buf2 = app.SceneKitVariantBuffer(app.project.currentPattern, static_cast<int>(slot), std::clamp(cur, 0, nVar - 1));
-        DrawWaveCard(app, "##drumWave", buf2 ? buf2->data.data() : nullptr, buf2 ? buf2->frames() : 0, buf2 ? buf2->channels : 1, buf2 ? buf2->sampleRate : kSampleRate, t.edit,
+        DrawWaveCard(app, "##drumWave", buf ? buf->data.data() : nullptr, buf ? buf->frames() : 0, buf ? buf->channels : 1, buf ? buf->sampleRate : kSampleRate, t.edit,
                      width, 40.0f, TrackColor(ti), 0, slot == DrumSlot::Kick ? "NO SAMPLE (SYNTH KICK)" : "NO SAMPLE IN THIS KIT", nullptr);
     }
     BlockEnd();
+}
+
+// C4b: the file name of variant `v` of a drum in the kit of the edited scene (kick.wav, kick_2.wav ...). The names are filled
+// by DrumKit::Build on the loader thread, so nothing here touches the disk (this runs under the scene lock).
+std::string ContextPanel::DrumVariantLabel(AppState& app, int ti, int v, int nVar) {
+    const int slot = std::clamp(ti, 0, kNumDrumTracks - 1);
+    const DrumKit::BankPtr b = app.KitBank(app.TrackKitFolder(app.project.currentPattern, slot));
+    if (b && v >= 0 && v < static_cast<int>(b->names[static_cast<size_t>(slot)].size())) return b->names[static_cast<size_t>(slot)][static_cast<size_t>(v)];
+    return "SAMPLE " + std::to_string(v + 1) + " / " + std::to_string(nVar);
+}
+
+// C4b: HEAR on a drum. When the engine holds this very sample (the edited scene's kit is the sounding one), the hit goes through
+// the drum voice, so TUNE, DECAY and START / LENGTH are heard; otherwise the sample is played as it is, quietly (like the library).
+void ContextPanel::HearDrum(AppState& app, const Track& t, const std::shared_ptr<const SampleBuffer>& buf) {
+    const int slot = std::clamp(t.slotIndex, 0, kNumDrumTracks - 1);
+    const DrumKit::BankPtr bank = app.engine.GetKit()->CurrentBank();
+    bool sounding = false;
+    if (bank) for (const auto& b : bank->variants[static_cast<size_t>(slot)]) if (b == buf) sounding = true;
+    if (sounding) {
+        int vi = 0;
+        for (size_t k = 0; k < bank->variants[static_cast<size_t>(slot)].size(); ++k) if (bank->variants[static_cast<size_t>(slot)][k] == buf) vi = static_cast<int>(k);
+        DrumVoiceParams p;
+        p.tune = t.drumTune; p.decay = t.drumDecay; p.edit = t.edit; p.level = 0.9f;
+        p.keyRoot = app.project.randomizerKeyRoot;
+        app.engine.TriggerDrum(static_cast<DrumSlot>(slot), 0.9f, vi, p);
+        return;
+    }
+    auto sd = std::make_shared<SampleData>();
+    sd->data = buf->data; sd->channels = std::clamp(buf->channels, 1, 2); sd->sampleRate = buf->sampleRate; sd->name = DrumSlotFileStem(static_cast<DrumSlot>(slot));
+    SamplePtr smp = sd;
+    hearKeep_.push_back(smp);   // the audio thread may still hold the one that plays: never let it drop the last reference there
+    while (hearKeep_.size() > 16) hearKeep_.erase(hearKeep_.begin());
+    app.engine.AuditionSample(smp, AppState::kAuditionGain);
 }
 
 void ContextPanel::DrawDrum(AppState& app, int ti) {
@@ -669,29 +710,30 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
     const SamplerPatch sp = app.GetSampleTarget(tgt);
     const bool synthTgt = tgt >= 0;
     BlockBegin("SAMPLE");
-    const float arrowW = 26.0f, hearW = synthTgt ? 44.0f : 52.0f, mineW = synthTgt ? 48.0f : 0.0f;
     const auto& names = app.SampleNames();
     const std::string label = sp.file.empty() ? std::string("(choose a sample)") : sp.file;
     int cur = -1;
     for (size_t i = 0; i < names.size(); ++i) if (names[i] == sp.file) cur = static_cast<int>(i);
     const int n = static_cast<int>(names.size());
-    ImGui::BeginDisabled(n < 2);
-    if (ImGui::Button("<##smpPrev", ImVec2(arrowW, 0)) && n > 0) app.SetSamplerFile(names[static_cast<size_t>(((cur < 0 ? 0 : cur) - 1 + n) % n)], tgt);
-    ImGui::EndDisabled();
-    ImGui::SameLine(0, 4);
-    if (NameButton("##smpOpen", width - arrowW * 2 - hearW - mineW - (synthTgt ? 16.0f : 12.0f), label, app.SampleMissing(sp.file) ? IM_COL32(230, 90, 80, 255) : TrackColor(ti))) ImGui::OpenPopup("##smpList");
-    if (ImGui::IsItemHovered()) Hint(app.SampleMissing(sp.file)
-        ? "%s is not in the samples folder next to the project any more. Put it back there, or pick another sample."
-        : synthTgt ? "The sample this sound plays: a note plays it at its pitch (ROOT = unchanged). ENV + LFO, FILTER, EQ, FX and AUTO shape it like any synth sound; a held note holds the sample, RELEASE lets it ring out. Click = the list of samples/ beside the project."
-        : "The sample this scene plays. Click = the list of samples/ beside the project. Drop a .wav or .aif on the window to add one.", sp.file.c_str());
-    ImGui::SameLine(0, 4);
-    ImGui::BeginDisabled(n < 2);
-    if (ImGui::Button(">##smpNext", ImVec2(arrowW, 0)) && n > 0) app.SetSamplerFile(names[static_cast<size_t>((cur + 1) % n)], tgt);
-    ImGui::EndDisabled();
-    ImGui::SameLine(0, 4);
     const SamplePtr smp = app.SampleFor(sp.file);
-    ImGui::BeginDisabled(!smp);
-    if (ImGui::Button("HEAR##smp", ImVec2(hearW, 0))) {
+    // C4b: the same SAMPLE row as the drums and the transitions: [<] [name v] [>] [HEAR]
+    SampleRowSpec ss;
+    ss.id = "##smpRow"; ss.width = width; ss.label = label;
+    ss.dot = app.SampleMissing(sp.file) ? IM_COL32(230, 90, 80, 255) : TrackColor(ti);
+    ss.canStep = n >= 2; ss.canHear = smp != nullptr;
+    std::string nameHint;
+    if (app.SampleMissing(sp.file)) nameHint = sp.file + " is not in the samples folder next to the project any more. Put it back there, or pick another sample.";
+    else nameHint = synthTgt ? "The sample this sound plays: a note plays it at its pitch (ROOT = unchanged). ENV + LFO, FILTER, EQ, FX and AUTO shape it like any synth sound. Click = the project's samples, your library or a file from Finder."
+                             : "The sample this scene plays. Click = the project's samples, your library or a file from Finder. Drop a .wav or .aif on the window to add one.";
+    ss.nameHint = nameHint.c_str();
+    ss.stepHint = "< > = the neighbour sample of this project (samples/ beside it), at once and silently";
+    ss.hearHint = synthTgt ? "Play the note ROOT through this synth (its envelope, filter and LFO), once." : sp.mode == 2 ? "Play the loop once at the project tempo." : "Play the sample once at its ROOT note.";
+    const SampleRowHit sh = SampleRow(ss);
+    if (sh.step != 0 && n > 0) {
+        const int base = cur >= 0 ? cur : (sh.step > 0 ? -1 : 0);   // no current one: > takes the first, < the last
+        app.SetSamplerFile(names[static_cast<size_t>(((base + sh.step) % n + n) % n)], tgt);
+    }
+    if (sh.hear && smp) {
         const bool live = app.sequencer.IsPlaying() && app.EditIsPlaying();   // the engine holds the sound of the PLAYED scene; the edited one may not be playing
         if (!synthTgt) {
             if (!live) app.engine.SamplerSet(smp, sp);
@@ -713,17 +755,14 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
             hearTgt_ = tgt;
         }
     }
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint(smp ? (synthTgt ? "Play the note ROOT through this synth (its envelope, filter and LFO), once." : sp.mode == 2 ? "Play the loop once at the project tempo." : "Play the sample once at its ROOT note.") : "There is no sample to hear yet.");
-    if (synthTgt) {
-        ImGui::SameLine(0, 4);
-        if (ImGui::Button("MINE##smpLib", ImVec2(mineW, 0))) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);
-        if (ImGui::IsItemHovered()) Hint("MY SAMPLES: your own folder of samples (the library). The file you choose is copied into this project.");
-    }
+    if (sh.open) ImGui::OpenPopup("##smpList");
     if (ImGui::BeginPopup("##smpList")) {
-        if (ImGui::Selectable("MY SAMPLES (LIBRARY)...")) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);   // v44.51
-        if (ImGui::Selectable("+ ADD A .WAV / .AIF FILE...")) app.RequestSamplePick(tgt);
+        if (ImGui::Selectable("MY LIBRARY...")) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);   // v44.51
+        if (ImGui::IsItemHovered()) Hint("Your own samples (Library > Show Samples Folder). The file you choose is copied into this project.");
+        if (ImGui::Selectable("FROM FINDER...")) app.RequestSamplePick(tgt);
+        if (ImGui::IsItemHovered()) Hint("Choose a .wav or .aif anywhere on the Mac. It is copied into this project (samples/ beside it).");
         ImGui::Separator();
+        ImGui::TextDisabled("THIS PROJECT");
         if (names.empty()) ImGui::TextDisabled("samples/ is empty");
         for (const std::string& nm : names) if (ImGui::Selectable(nm.c_str(), nm == sp.file)) app.SetSamplerFile(nm, tgt);
         ImGui::EndPopup();
@@ -735,11 +774,11 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
         SampleEdit ed; ed.start = sp.start; ed.length = sp.decay;
         bool clicked = false;
         const bool marksMode = sp.mode == 1 && sp.slices == 0 && smp;   // v44.52.1: on HITS slices a click on the waveform edits the marks
-        const char* msg = sp.file.empty() ? "CLICK TO CHOOSE A .WAV / .AIF" : "FILE NOT FOUND - CLICK TO CHOOSE";
+        const char* msg = sp.file.empty() ? "CLICK TO CHOOSE A SAMPLE" : "FILE NOT FOUND - CLICK TO CHOOSE";
         DrawWaveCard(app, "##smpWave", smp ? smp->data.data() : nullptr, smp ? smp->frames() : 0, smp ? smp->channels : 1, smp ? smp->sampleRate : kSampleRate, ed,
                      width, synthTgt ? 40.0f : std::max(40.0f, cellSize_.y - 8.0f), TrackColor(ti), sp.mode == 1 ? sp.slices : 0, msg, marksMode ? nullptr : &clicked,
                      marksMode ? sp.marks.data() : nullptr, marksMode ? sp.markCount : 0);
-        if (clicked) app.RequestSamplePick(tgt);   // click = the system's file window
+        if (clicked) ImGui::OpenPopup("##smpList");   // C4b: the same list as the name (project, library, Finder)
         if (marksMode) {
             const ImVec2 rmin = ImGui::GetItemRectMin();
             const float frac = std::clamp((ImGui::GetMousePos().x - (rmin.x + 6.0f)) / std::max(1.0f, width - 12.0f), 0.0f, 1.0f);

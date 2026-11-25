@@ -2,6 +2,17 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage C4b (part 1): one sample row everywhere
+
+ROADMAP "Samples in one place" (C4b), item 1 and the words; approved mockup `docs/mockups/v45_samples_unified.png`. No project data changes.
+
+- **One row** `[<] [name v] [>] [HEAR]` (`src/ui_desktop/SampleRow.h`) on the drums, the SAMPLER, a synth / the chord on ENGINE > SAMPLE and the TRANSITION page on TRACK. `< >` = the neighbour sample in the same place, at once and silently; the name opens the list; HEAR plays it once.
+- **Drums:** the block is named after the drum and has two rows: `KIT [<] [kit] [>]` (the kit as a preset of all six drums; the name opens the kit browser) and `SAMPLE [<] [kick_2.wav v] [>] [HEAR]`. The hidden gesture on the SAMPLE card (click = next, right-click = previous) is gone; the arrows step through the variants of this drum in the kit and the name lists them by file name. HEAR is new on the drums: through the drum voice (TUNE, DECAY, START / LENGTH) when the edited scene's kit is the sounding one, otherwise the plain sample at the library audition level. The ALL and MINE buttons are gone (the kit name opens the kit browser; MY LIBRARY... is in the SAMPLE list).
+- **SAMPLER, synth / chord SAMPLE:** MINE is gone; the list says MY LIBRARY..., FROM FINDER... and THIS PROJECT (was "MY SAMPLES (LIBRARY)..." and "+ ADD A .WAV / .AIF FILE..."). A click on the empty waveform opens the same list instead of going straight to Finder.
+- **Transitions:** the combo is the same row; `< >` step through the transitions that exist (missing stock files and empty user slots skipped), HEAR plays the chosen one at its LEVEL. The lead-in picture after LEVEL is drawn only when it fits (the inspector has no room for it at 1440 px; the lane under the bricks shows the same thing).
+- **The library browser's title says where the file goes:** `SAMPLE FOR: KICK`, `SAMPLE FOR: SAMPLER`, `SAMPLE FOR: BASS`, `SAMPLE FOR: TRANSITION BEFORE BRICK 3` (was "MY SAMPLES: DRUM / SAMPLER / TRANSITION", and "THE SAMPLER" for a bass on SAMPLE).
+- Not in this part (later C4b PRs): the one SAMPLES browser with sources / list view / folders, the kit browser's click = select, genres and tags, THIS PROJECT = in use only, waveform gestures, drum samples copied into the project (a file picked for a drum still replaces it in the kit as before), FILL: SAMPLE.
+
 ## v44.59.1: SCENES row controls line up
 
 - The CLICK label and the LAUNCH | OPEN, GO and LINK buttons under the SCENES pads now sit on one line with one height (`ChainPanel`): ImGui's `SameLine` put every button after LAUNCH on the top of the CLICK label, 2 px lower (reported on the Mac). Texts are centred on the buttons.
