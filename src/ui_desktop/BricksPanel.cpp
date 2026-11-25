@@ -1528,7 +1528,7 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
             std::string cur = tc.riser < 0 ? std::string("NONE") : (rp.NameAt(tc.riser).empty() ? std::string("?") : rp.NameAt(tc.riser));
             std::vector<int> valid;   // the transitions that exist (a missing stock file or an empty user slot is skipped)
             for (int r = 0; r < rp.Count(); ++r) if (!rp.NameAt(r).empty()) valid.push_back(r);
-            char rowHint[160];
+            char rowHint[256];
             std::snprintf(rowHint, sizeof rowHint, "A riser or impact on the border between brick %d and brick %d; its peak lands on the first beat of brick %d. Click = the SAMPLES browser, right-click = No transition.", target, target + 1, target + 1);
             SampleRowSpec ts;
             ts.id = "##transRow"; ts.width = 262.0f; ts.label = cur; ts.dot = colors::kTrans;

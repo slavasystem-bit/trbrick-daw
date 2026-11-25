@@ -97,6 +97,7 @@ private:
     std::vector<int> vis_;                     // indices into items_ shown, in order
     int sel_ = -1;
     bool scrollToSel_ = false, focusSearch_ = false, autoHear_ = false, dirty_ = true;
+    bool waitKit_ = false, waitLib_ = false;   // the last rebuild found the kit / the library still being read
     std::set<std::string> favs_;
     std::vector<std::string> recent_;          // newest first, at most 20
     // KITS: the files of the target drum in every kit folder, listed on the loader thread

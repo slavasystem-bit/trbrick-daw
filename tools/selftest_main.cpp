@@ -6611,6 +6611,9 @@ int main(int argc, char** argv) {
         a.RefreshSound();
         const auto before = a.engine.GetKit()->CurrentBank();
         a.loader.Start();
+        // "Briefly" is a loose bound: a shared CI runner can pause a thread for several ms. The checks just after each one
+        // (still pending, the old sound keeps playing, not in memory yet) are what prove the file was not read under the lock.
+        constexpr double kBriefMs = 25.0;
         auto heldFor = [&](const std::function<void()>& f) {   // as a panel does: the action runs while the scene lock is held
             const auto t0 = std::chrono::steady_clock::now();
             { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); f(); }
@@ -6619,7 +6622,7 @@ int main(int argc, char** argv) {
         // kit
         a.seqCursorTrack = 0;
         const double kitMs = heldFor([&] { a.LoadKitFolder("kits/909"); });
-        check(kitMs < 5.0, "async: picking a kit holds the scene lock only briefly (" + std::to_string(kitMs) + " ms)");
+        check(kitMs < kBriefMs, "async: picking a kit holds the scene lock only briefly (" + std::to_string(kitMs) + " ms)");
         check(a.KitPending("kits/909") && a.engine.GetKit()->CurrentBank() == before, "async: while the kit is read, the old kit keeps playing");
         a.loader.FinishAllForTest(); a.SyncSceneKits();
         check(!a.KitPending("kits/909") && a.engine.GetKit()->CurrentBank() == a.KitBank("kits/909") && AppState::KitSlotsLoaded(a.KitBank("kits/909")) == 6, "async: when it arrives, the new kit plays (6 of 6 samples)");
@@ -6627,7 +6630,7 @@ int main(int argc, char** argv) {
         // sampler: a dropped / library file
         a.project.patterns[a.project.currentPattern].tracks[kSamplerTrackIndex].type = TrackType::Sampler;
         const double smpMs = heldFor([&] { a.AssignSampleToSampler(dir + "/in.wav"); });
-        check(smpMs < 5.0, "async: giving the sampler a file holds the scene lock only briefly (" + std::to_string(smpMs) + " ms)");
+        check(smpMs < kBriefMs, "async: giving the sampler a file holds the scene lock only briefly (" + std::to_string(smpMs) + " ms)");
         check(a.CurrentPattern().samplerPatch.file.empty(), "async: the sampler gets the file only once it is read");
         a.loader.FinishAllForTest(); a.SyncSceneSamples();
         check(a.CurrentPattern().samplerPatch.file == "in.wav" && fs::exists(dir + "/samples/in.wav") && a.SampleFor("in.wav") != nullptr && a.loader.Busy() == 0, "async: then it is copied, set and loaded (read only once)");
@@ -6642,10 +6645,21 @@ int main(int argc, char** argv) {
         // library audition
         SetSamplesRoot(dir + "/lib"); a.libValid_ = false;
         const double hearMs = heldFor([&] { a.AuditionLibrary("loop.wav"); });
-        check(hearMs < 5.0, "async: HEAR in the library holds the scene lock only briefly (" + std::to_string(hearMs) + " ms)");
+        check(hearMs < kBriefMs, "async: HEAR in the library holds the scene lock only briefly (" + std::to_string(hearMs) + " ms)");
         check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 0, "async: the file is not in memory yet");
         a.loader.FinishAllForTest();
         check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 1 && a.libAudition_[a.LibraryPath("loop.wav")] != nullptr && a.libAuditionKeep_.size() == 1, "async: it plays once it is read");
+        // C4b review: the SAMPLES browser lists the library on the loader thread, never under the scene lock
+        a.libValid_ = false;
+        const std::vector<LibSample>* first = nullptr;
+        const double libMs = heldFor([&] { first = a.LibraryListIfReady(); });
+        check(first == nullptr && libMs < kBriefMs && a.LibraryListIfReady() == nullptr && a.loader.Busy() == 1, "c4b: the first look at the library starts one scan on the loader and returns nothing yet");
+        a.loader.FinishAllForTest();
+        const std::vector<LibSample>* ready = a.LibraryListIfReady();
+        check(ready && ready->size() == 1 && (*ready)[0].rel == "loop.wav", "c4b: the library list is there on the next frame");
+        a.libValid_ = false; a.LibraryListIfReady(); a.RescanLibrary(); const size_t afterRescan = a.LibraryList().size();
+        a.loader.FinishAllForTest();
+        check(a.libValid_ && a.LibraryList().size() == afterRescan, "c4b: a scan overtaken by Rescan Samples is dropped");
         SetSamplesRoot("");
         // folder lists (LIVE-10)
         a.kitFoldersCacheValid = false;

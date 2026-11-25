@@ -133,6 +133,7 @@ void SampleBrowser::Rebuild(AppState& app) {
         } else if (target_ == AppState::LibTarget::Drum) {
             const std::string kit = app.TrackKitFolder(scene_, drumTrack_);
             const DrumKit::BankPtr b = app.KitBank(kit);
+            if (!b) waitKit_ = app.KitPending(kit);   // still being read: rebuilt every frame until it is there
             if (b) {
                 const auto& names = b->names[static_cast<size_t>(drumTrack_)];
                 for (size_t v = 0; v < names.size(); ++v) {
@@ -147,7 +148,9 @@ void SampleBrowser::Rebuild(AppState& app) {
         }
     };
     auto library = [&](std::vector<Item>& out) {
-        for (const LibSample& ls : app.LibraryList()) {
+        const std::vector<LibSample>* lib = app.LibraryListIfReady();   // listed on the loader thread, never here
+        if (!lib) { waitLib_ = true; return; }
+        for (const LibSample& ls : *lib) {
             Item it; it.src = Source::Library; it.key = ls.rel; it.name = ls.locked ? ls.name + "  [LOCKED]" : ls.name; it.folder = DirOf(ls.rel); it.type = ls.category; it.bpm = ls.bpm; it.favKey = LibFavKey(ls.rel);
             out.push_back(std::move(it));
         }
@@ -162,6 +165,7 @@ void SampleBrowser::Rebuild(AppState& app) {
         if (target_ == AppState::LibTarget::Transition) builtIn(out);
     };
     items_.clear();
+    waitKit_ = waitLib_ = false;
     switch (src_) {
         case Source::Project: project(items_); break;
         case Source::Library: library(items_); break;
@@ -216,6 +220,7 @@ void SampleBrowser::Hear(AppState& app, const Item& it) {
         sd->data = b->data; sd->channels = std::clamp(b->channels, 1, 2); sd->sampleRate = b->sampleRate; sd->name = name;
         return sd;
     };
+    app.CancelLibraryAudition(); kitWanted_.clear();   // a file still being read for an earlier HEAR must not play over this one
     if (it.riser >= 0) {   // transitions play through the riser player (we hold the scene lock, like the sequencer)
         const int b = std::clamp(brick_, 0, std::max(0, app.project.songChainLength - 1));
         app.engine.Risers().TriggerAligned(it.riser, 0.0, 0.0, 1.0, LevelDbToGain(app.project.songChain[static_cast<size_t>(b)].levels.transitionDb));
@@ -292,7 +297,7 @@ void SampleBrowser::Take(AppState& app, const Item& it) {
     if (it.src == Source::Project) { app.SetSamplerFile(it.key, sampleTarget_); return; }
     const std::string path = it.src == Source::Library ? app.LibraryPath(it.key) : it.key;
     LibSample ls; bool isLoop = false;
-    if (it.src == Source::Library) for (const LibSample& l : app.LibraryList()) if (l.rel == it.key) { ls = l; isLoop = l.category == "LOOP"; break; }
+    if (it.src == Source::Library) if (const auto* lib = app.LibraryListIfReady()) for (const LibSample& l : *lib) if (l.rel == it.key) { ls = l; isLoop = l.category == "LOOP"; break; }
     const int tgt = sampleTarget_;
     AppState* ap = &app;
     app.AssignSampleToSampler(path, tgt, isLoop ? std::function<void(int)>([ap, ls, tgt](int scene) { ap->SetSamplerLoopFromLibraryInScene(ls, tgt, scene); }) : std::function<void(int)>());
@@ -355,7 +360,7 @@ void SampleBrowser::Draw(AppState& app) {
     }
     ImGui::PopStyleVar();
     // a source that needs data still on its way (a kit bank, the kit scan) is rebuilt every frame until it is there
-    if (src_ == Source::Project && target_ == AppState::LibTarget::Drum && items_.empty()) dirty_ = true;
+    if (waitKit_ || waitLib_) dirty_ = true;   // the kit or the library is still being read
     if (dirty_) Rebuild(app);
     const int n = static_cast<int>(vis_.size());
     const std::string who = Who(app);
@@ -435,7 +440,8 @@ void SampleBrowser::Draw(AppState& app) {
     if (ImGui::IsItemHovered()) Hint(target_ == AppState::LibTarget::Drum ? "The samples of this drum in its kit (kick.wav, kick_2.wav ...)."
                                      : target_ == AppState::LibTarget::Transition ? "The transitions of this project (samples/transitions beside it)."
                                      : "The samples of this project (samples/ beside it).");
-    if (row("src1", "MY LIBRARY", src_ == Source::Library && folder_.empty(), static_cast<int>(app.LibraryList().size()), 0, false, false)) { setSrc(Source::Library); if (!folder_.empty()) { folder_.clear(); dirty_ = true; } }
+    const std::vector<LibSample>* libList = app.LibraryListIfReady();
+    if (row("src1", libList ? "MY LIBRARY" : "MY LIBRARY (reading...)", src_ == Source::Library && folder_.empty(), libList ? static_cast<int>(libList->size()) : -1, 0, false, false)) { setSrc(Source::Library); if (!folder_.empty()) { folder_.clear(); dirty_ = true; } }
     if (ImGui::IsItemHovered()) Hint("Your own samples (Library > Show Samples Folder). A file you take is copied, the library is never changed.");
     if (target_ == AppState::LibTarget::Drum) {
         if (row("src2", kitScanDone_ ? "KITS" : "KITS (reading...)", src_ == Source::Kits, kitScanDone_ ? static_cast<int>(kitItems_.size()) : -1, 0, false, false)) setSrc(Source::Kits);
@@ -452,14 +458,16 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::Dummy(ImVec2(1, 6));
     ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "LIBRARY FOLDERS");
     {   // the folder tree of the library, with the number of files below each folder
-        const auto& lib = app.LibraryList();
-        if (folderCountsOf_ != lib.size()) {
+        static const std::vector<LibSample> kNone;
+        const auto& lib = libList ? *libList : kNone;
+        if (libList && folderCountsOf_ != lib.size()) {
             folderCounts_.clear();
             for (const LibSample& ls : lib) for (const std::string& f : FolderChain(ls.rel)) ++folderCounts_[f];
             folderCountsOf_ = lib.size();
         }
         const std::map<std::string, int>& counts = folderCounts_;
-        if (counts.empty()) ImGui::TextDisabled("  (no folders)");
+        if (!libList) ImGui::TextDisabled("  (reading...)");
+        else if (counts.empty()) ImGui::TextDisabled("  (no folders)");
         for (const auto& [f, cnt] : counts) {
             const std::vector<std::string> chain = FolderChain(f + "/x");
             bool shown = true;
@@ -614,11 +622,15 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::PopStyleVar();
     if (n == 0) {
         ImGui::Dummy(ImVec2(1, 20));
+        const bool narrowed = search_[0] || (type_ >= 0 && (src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent)) || (src_ == Source::Library && !folder_.empty());
         const char* msg = src_ == Source::Kits && !kitScanDone_ ? "Reading the kit folders ..."
-                        : src_ == Source::Project && target_ == AppState::LibTarget::Drum ? "Reading the kit ..."
+                        : waitKit_ ? "Reading the kit ..."
+                        : waitLib_ ? "Reading the library ..."
+                        : narrowed ? "Nothing here matches - clear the search or the TYPE."
+                        : src_ == Source::Project && target_ == AppState::LibTarget::Drum ? "This kit has no sample for this drum. Try KITS or MY LIBRARY."
                         : src_ == Source::Favorites && favs_.empty() ? "No favorites yet - click the star in a row."
                         : src_ == Source::Recent && recent_.empty() ? "Nothing taken yet."
-                        : src_ == Source::Library && app.LibraryList().empty() ? "The library is empty. Put .wav / .aif files in the samples folder (Library > Show Samples Folder) and use Library > Rescan Samples."
+                        : src_ == Source::Library && libList && libList->empty() ? "The library is empty. Put .wav / .aif files in the samples folder (Library > Show Samples Folder) and use Library > Rescan Samples."
                         : "Nothing here matches - clear the search or the TYPE.";
         ImGui::TextWrapped("%s", msg);
     }
