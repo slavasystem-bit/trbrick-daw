@@ -2,6 +2,19 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage N1 (part 3): samples, kits and folder scans off the scene lock
+
+Audit v44.58 LIVE-2 and LIVE-10.
+
+- **`AsyncLoader` (new, `src/app/AsyncLoader.h`):** one background thread; `Post(work, done)` runs the file part (`work`, must not touch AppState) there and the `done` part on the UI thread in `Poll()`, which `main()` calls once per frame outside every panel's scene lock. When it is not started (the tests), `Post()` runs both parts at once, so the old synchronous behaviour is kept there.
+- **Kits:** `KitBank()` reads an uncached kit on the loader thread (`KitPending()` meanwhile); `SyncSceneKits()` hands banks to the sequencer only when every bank it needs is cached, so the old kit keeps playing until the new one is there. `LoadKitFolder()` says "(LOADING)" and gives the "n/6 loaded" message when the kit arrives.
+- **Sampler samples:** `SampleFor()` reads on the loader thread (`SamplePending()`; a pending file is not shown as missing). `SyncSceneSamples()` waits for every needed file the same way. With the loader, missing files are retried only on a forced sync (otherwise a missing file would be read again on every frame).
+- **Dropped / library files:** `AssignSampleToSampler()`, `AssignSampleToSlot()` and `AssignLibraryTransition()` are split into a pure read-and-copy part (`CopySamplerFile`, `CopySlotFile`, `CopyTransitionFile`) on the loader thread and an apply part that changes the scene that was edited when the file was asked for. The sampler's decoded sound goes straight into the cache (read once). A library LOOP gets loop mode through a callback once the file is in place. `ReloadUserTransitions()` reads the folder on the loader thread.
+- **Library audition (HEAR):** a file not heard before is read on the loader thread and starts when it arrives (only the newest request plays).
+- **LIVE-10:** the 3-second rescan of the kit / project / pattern / preset lists runs on the loader thread (`RescanFoldersInBackground()`); the old lists stay until the new ones are swapped in.
+- Startup is unchanged: the loader starts after the first project's sound is loaded.
+- Selftest: with the loader running, picking a kit, giving the sampler a file and HEAR hold the scene lock < 5 ms (measured 0.03-0.1 ms), the old kit plays until the new one arrives, the file is set and read once, a missing file is not re-read every frame, the folder lists are swapped in.
+
 ## Stage N1 (part 2): recordings go straight to disk
 
 Audit v44.58 LIVE-1, LIVE-3, LIVE-7, part of TEST-4.

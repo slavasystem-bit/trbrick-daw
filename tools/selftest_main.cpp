@@ -6588,6 +6588,62 @@ int main(int argc, char** argv) {
             const bool gotEmpty = mt.TakeResult(msg, outPath);
             check(gotEmpty && msg.find("NOTHING CAPTURED") != std::string::npos && outPath.empty() && !fs::exists(empty), "stems: a take with no sound leaves no folder: " + msg);
         }
+    {   // N1 (LIVE-2 / LIVE-10): with the loader running, samples, kits and folder scans are read off the scene lock
+        namespace fs = std::filesystem;
+        const std::string dir = "selftest_async";
+        fs::remove_all(dir); fs::create_directories(dir + "/lib");
+        std::vector<float> tone(static_cast<size_t>(kSampleRate) * 2 * 2);
+        for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.3f * std::sin(static_cast<float>(i / 2) * 0.05f);
+        check(WriteWavPCM16(dir + "/in.wav", tone, 2, kSampleRate) && WriteWavPCM16(dir + "/lib/loop.wav", tone, 2, kSampleRate), "async: test files written");
+        AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);
+        a.projectPath = dir + "/p.t8proj";
+        a.project.kitFolder = "kits/808";
+        a.RefreshSound();
+        const auto before = a.engine.GetKit()->CurrentBank();
+        a.loader.Start();
+        auto heldFor = [&](const std::function<void()>& f) {   // as a panel does: the action runs while the scene lock is held
+            const auto t0 = std::chrono::steady_clock::now();
+            { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); f(); }
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        };
+        // kit
+        a.seqCursorTrack = 0;
+        const double kitMs = heldFor([&] { a.LoadKitFolder("kits/909"); });
+        check(kitMs < 5.0, "async: picking a kit holds the scene lock only briefly (" + std::to_string(kitMs) + " ms)");
+        check(a.KitPending("kits/909") && a.engine.GetKit()->CurrentBank() == before, "async: while the kit is read, the old kit keeps playing");
+        a.loader.FinishAllForTest(); a.SyncSceneKits();
+        check(!a.KitPending("kits/909") && a.engine.GetKit()->CurrentBank() == a.KitBank("kits/909") && AppState::KitSlotsLoaded(a.KitBank("kits/909")) == 6, "async: when it arrives, the new kit plays (6 of 6 samples)");
+        check(a.statusMessage.find("6/6 loaded") != std::string::npos, "async: the kit message comes when the kit is there: " + a.statusMessage);
+        // sampler: a dropped / library file
+        a.project.patterns[a.project.currentPattern].tracks[kSamplerTrackIndex].type = TrackType::Sampler;
+        const double smpMs = heldFor([&] { a.AssignSampleToSampler(dir + "/in.wav"); });
+        check(smpMs < 5.0, "async: giving the sampler a file holds the scene lock only briefly (" + std::to_string(smpMs) + " ms)");
+        check(a.CurrentPattern().samplerPatch.file.empty(), "async: the sampler gets the file only once it is read");
+        a.loader.FinishAllForTest(); a.SyncSceneSamples();
+        check(a.CurrentPattern().samplerPatch.file == "in.wav" && fs::exists(dir + "/samples/in.wav") && a.SampleFor("in.wav") != nullptr && a.loader.Busy() == 0, "async: then it is copied, set and loaded (read only once)");
+        // a missing file is not read again every frame
+        a.CurrentPattern().samplerPatch.file = "missing.wav";
+        a.SyncSceneSamples();
+        check(a.SamplePending("missing.wav") && !a.SampleMissing("missing.wav"), "async: a file being read is not shown as missing");
+        a.loader.FinishAllForTest();
+        for (int i = 0; i < 5; ++i) { a.SyncSceneSamples(); a.loader.Poll(); }
+        check(a.SampleMissing("missing.wav") && a.loader.Busy() == 0, "async: a missing file is shown as missing and not read again on every frame");
+        a.CurrentPattern().samplerPatch.file = "in.wav"; a.SyncSceneSamples(true); a.loader.FinishAllForTest();
+        // library audition
+        SetSamplesRoot(dir + "/lib"); a.libValid_ = false;
+        const double hearMs = heldFor([&] { a.AuditionLibrary("loop.wav"); });
+        check(hearMs < 5.0, "async: HEAR in the library holds the scene lock only briefly (" + std::to_string(hearMs) + " ms)");
+        check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 0, "async: the file is not in memory yet");
+        a.loader.FinishAllForTest();
+        check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 1 && a.libAudition_[a.LibraryPath("loop.wav")] != nullptr && a.libAuditionKeep_.size() == 1, "async: it plays once it is read");
+        SetSamplesRoot("");
+        // folder lists (LIVE-10)
+        a.kitFoldersCacheValid = false;
+        a.RescanFoldersInBackground();
+        check(!a.kitFoldersCacheValid, "async: the folder rescan runs on the loader thread");
+        a.loader.FinishAllForTest();
+        check(a.kitFoldersCacheValid && !a.cachedKitFolders.empty() && a.loader.Busy() == 0, "async: the new lists are swapped in on the next frame");
+        a.loader.Stop();
         fs::remove_all(dir);
     }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";

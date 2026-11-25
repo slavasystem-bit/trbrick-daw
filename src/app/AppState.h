@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <set>
 #include "FilePicker.h"
+#include "AsyncLoader.h"
 #include "SampleLibrary.h"
 #include "Onsets.h"
 #include <functional>
@@ -157,6 +158,10 @@ struct AppState {
     std::string statusSuffix;
     void SetStatus(const std::string& msg) { if (SwitchApplying()) return; statusMessage = msg + statusSuffix; statusSuffix.clear(); statusMessageTimer = statusMessage.size() > msg.size() ? 3.5f : 2.0f; }
 
+    // N1: slow file work (samples, kits, folder scans) runs here, off the scene lock; main() starts it, the tests leave it off
+    // (then every Post() runs at once, as the old code did). See AsyncLoader.h.
+    AsyncLoader loader;
+
     // ---- Cached folder listings (kits/, projects/, patterns/) -------------
     // ListKitFolders()/ListProjectFiles()/ListCustomPatternNames() (see
     // app/KitFolders.h, app/ProjectFiles.h, core/CustomPatterns.h) are cached:
@@ -188,6 +193,27 @@ struct AppState {
     const std::vector<std::string>& CustomSynthPresetNamesCached() {
         if (!customSynthPresetNamesCacheValid) { cachedCustomSynthPresetNames = ListCustomSynthPresetNames(); customSynthPresetNamesCacheValid = true; }
         return cachedCustomSynthPresetNames;
+    }
+    // N1 (LIVE-10): the periodic rescan (so files added in Finder show up) reads the folders on the loader thread and swaps the
+    // lists in on the next frame; until then the old lists stay. One scan at a time.
+    bool folderScanRunning_ = false;
+    void RescanFoldersInBackground() {
+        if (!loader.Running()) { InvalidateFolderCaches(); return; }
+        if (folderScanRunning_) return;
+        folderScanRunning_ = true;
+        struct Lists { std::vector<std::string> kits, projects, patterns, presets; };
+        auto out = std::make_shared<Lists>();
+        const std::string projDir = DirNameOf(projectPath);
+        loader.Post([out, projDir] {
+            out->kits = ListKitFolders(); out->projects = ListProjectFiles(projDir);
+            out->patterns = ListCustomPatternNames(); out->presets = ListCustomSynthPresetNames();
+        }, [this, out] {
+            folderScanRunning_ = false;
+            cachedKitFolders = std::move(out->kits); kitFoldersCacheValid = true;
+            cachedProjectFiles = std::move(out->projects); projectFilesCacheValid = true;
+            cachedCustomPatternNames = std::move(out->patterns); customPatternNamesCacheValid = true;
+            cachedCustomSynthPresetNames = std::move(out->presets); customSynthPresetNamesCacheValid = true;
+        });
     }
     // Cheap: only clears the flags; the rescan happens on the next accessor call.
     void InvalidateFolderCaches() {
@@ -2990,9 +3016,14 @@ struct AppState {
             if (st.type == TrackType::Drum && !st.kitFolder.empty()) st.kitFolder = kitPath; else CurrentPattern().kitFolder = kitPath;
         }
         SyncSceneKits();
-        const int loaded = KitSlotsLoaded(KitBank(kitPath));
         const auto& kits = KitFolders();
         for (size_t i = 0; i < kits.size(); ++i) if (kits[i] == kitPath) menuKitIndex = static_cast<int>(i);
+        if (KitPending(kitPath)) {   // N1: read on the loader thread; the count is said when it arrives
+            kitStatusFolder_ = kitPath;
+            SetStatus("KIT " + kitPath + " (LOADING) - SCENE " + std::to_string(project.currentPattern + 1));
+            return 0;
+        }
+        const int loaded = KitSlotsLoaded(KitBank(kitPath));
         SetStatus("KIT " + kitPath + " (" + std::to_string(loaded) + "/6 loaded) - SCENE " + std::to_string(project.currentPattern + 1));
         return loaded;
     }
@@ -3040,13 +3071,35 @@ struct AppState {
         if (track >= 0 && track < kNumDrumTracks) { const std::string& f = project.patterns[static_cast<size_t>(scene)].tracks[static_cast<size_t>(track)].kitFolder; if (!f.empty()) return f; }
         return SceneKitFolder(scene);
     }
+    // N1 (LIVE-2): with the loader running, a kit that is not cached yet is read on the loader thread; meanwhile this returns null
+    // and KitPending() is true. When it arrives the kits are synced again (kitsDirty_).
+    std::set<std::string> kitPending_;
+    std::string kitStatusFolder_;   // LoadKitFolder waits for this one to say how many samples it has
     DrumKit::BankPtr KitBank(const std::string& folder) {
         auto it = kitCache_.find(folder);
         if (it != kitCache_.end()) return it->second;
-        DrumKit::BankPtr b = engine.GetKit()->Build(folder, engine.SampleRate());
-        kitCache_[folder] = b;
-        return b;
+        if (kitPending_.count(folder)) return nullptr;
+        if (!loader.Running()) {
+            DrumKit::BankPtr b = engine.GetKit()->Build(folder, engine.SampleRate());
+            kitCache_[folder] = b;
+            return b;
+        }
+        kitPending_.insert(folder);
+        auto out = std::make_shared<DrumKit::BankPtr>();
+        const DrumKit* kit = engine.GetKit();   // Build() is const and only reads files
+        const int rate = engine.SampleRate();
+        loader.Post([out, kit, folder, rate] { *out = kit->Build(folder, rate); }, [this, out, folder] {
+            kitPending_.erase(folder);
+            kitCache_[folder] = *out;
+            kitsDirty_ = true;
+            if (folder == kitStatusFolder_) {
+                kitStatusFolder_.clear();
+                SetStatus("KIT " + folder + " (" + std::to_string(KitSlotsLoaded(*out)) + "/6 loaded) - SCENE " + std::to_string(project.currentPattern + 1));
+            }
+        });
+        return nullptr;
     }
+    bool KitPending(const std::string& folder) const { return kitPending_.count(folder) != 0; }
     static int KitSlotsLoaded(const DrumKit::BankPtr& b) {
         int n = 0;
         if (b) for (const auto& v : b->variants) if (!v.empty()) ++n;
@@ -3084,6 +3137,18 @@ struct AppState {
         bool changed = force || kitsDirty_ || kitSyncedDefault_ != project.kitFolder;
         for (int i = 0; i < kNumPatterns && !changed; ++i) if (kitSyncedFolder_[static_cast<size_t>(i)] != project.patterns[static_cast<size_t>(i)].kitFolder || trackKitsChanged(i) || kitSyncedInUse_[static_cast<size_t>(i)] != SlotInUse(i)) changed = true;
         if (!changed) return;
+        {   // N1: every bank this needs must be in the cache first; while one is still being read, the sequencer keeps what it has
+            bool waiting = false;
+            auto need = [&](const std::string& f) { if (!KitBank(f) && KitPending(f)) waiting = true; };
+            need(project.kitFolder);
+            for (int i = 0; i < kNumPatterns; ++i) {
+                if (!SlotInUse(i)) continue;
+                const Pattern& pat = project.patterns[static_cast<size_t>(i)];
+                if (!pat.kitFolder.empty()) need(pat.kitFolder);
+                for (int t = 0; t < kNumDrumTracks; ++t) if (!pat.tracks[static_cast<size_t>(t)].kitFolder.empty()) need(pat.tracks[static_cast<size_t>(t)].kitFolder);
+            }
+            if (waiting) { kitsDirty_ = true; return; }
+        }
         std::array<DrumKit::BankPtr, kNumPatterns> banks{};
         DrumKit::BankPtr def = KitBank(project.kitFolder);
         std::map<std::string, DrumKit::BankPtr> mixedNow;
@@ -3144,22 +3209,38 @@ struct AppState {
     bool sampleNamesValid_ = false;
     static constexpr double kMaxSampleSeconds = 180.0;
     // The sample `file` of the open project's samples/ folder, loaded once (nullptr = missing or unreadable, remembered until a sync is forced).
+    // N1 (LIVE-2): with the loader running, a file that is not cached yet is read on the loader thread (null meanwhile, SamplePending()).
+    std::set<std::string> samplePending_;
+    static SamplePtr ReadSampleFile(const std::string& path, const std::string& name, int rate) {   // any thread
+        SampleBuffer buf;
+        if (!(LoadWav(path, buf, rate) && !buf.empty() && buf.frames() >= 2 && buf.frames() <= kMaxSampleSeconds * rate)) return nullptr;
+        auto sd = std::make_shared<SampleData>();
+        sd->data = std::move(buf.data); sd->channels = std::clamp(buf.channels, 1, 2); sd->sampleRate = rate; sd->name = name;
+        return sd;
+    }
     SamplePtr SampleFor(const std::string& file) {
         if (file.empty()) return nullptr;
         const std::string path = SamplesDir() + "/" + file;
         auto it = sampleCache_.find(path);
         if (it != sampleCache_.end()) return it->second;
-        SamplePtr result;
-        SampleBuffer buf;
-        if (LoadWav(path, buf, engine.SampleRate()) && !buf.empty() && buf.frames() >= 2 && buf.frames() <= kMaxSampleSeconds * engine.SampleRate()) {
-            auto sd = std::make_shared<SampleData>();
-            sd->data = std::move(buf.data); sd->channels = std::clamp(buf.channels, 1, 2); sd->sampleRate = engine.SampleRate(); sd->name = file;
-            result = sd;
+        if (samplePending_.count(path)) return nullptr;
+        if (!loader.Running()) {
+            SamplePtr result = ReadSampleFile(path, file, engine.SampleRate());
+            sampleCache_[path] = result;
+            return result;
         }
-        sampleCache_[path] = result;
-        return result;
+        samplePending_.insert(path);
+        auto out = std::make_shared<SamplePtr>();
+        const int rate = engine.SampleRate();
+        loader.Post([out, path, file, rate] { *out = ReadSampleFile(path, file, rate); }, [this, out, path] {
+            samplePending_.erase(path);
+            sampleCache_[path] = *out;
+            samplesDirty_ = true;
+        });
+        return nullptr;
     }
-    bool SampleMissing(const std::string& file) { return !file.empty() && SampleFor(file) == nullptr; }
+    bool SamplePending(const std::string& file) const { return !file.empty() && samplePending_.count(SamplesDir() + "/" + file) != 0; }
+    bool SampleMissing(const std::string& file) { return !file.empty() && SampleFor(file) == nullptr && !SamplePending(file); }
     // Hands the samples of every scene in use to the sequencer when a file name (or the folder) changed. Cheap: names are compared.
     void SyncSceneSamples(bool force = false) {
         if (force) transDirty_ = true;
@@ -3173,7 +3254,16 @@ struct AppState {
                 if (SynthSampleWanted(i, k) != synthSampleSyncedFile_[static_cast<size_t>(i)][static_cast<size_t>(k)]) changed = true;
         }
         if (!changed) return;
-        for (auto it = sampleCache_.begin(); it != sampleCache_.end();) it = it->second ? std::next(it) : sampleCache_.erase(it);   // retry what was missing
+        if (force || !loader.Running())   // retry what was missing (N1: with the loader only on a forced sync, or a missing file would be read again every frame)
+            for (auto it = sampleCache_.begin(); it != sampleCache_.end();) it = it->second ? std::next(it) : sampleCache_.erase(it);
+        {   // N1: every file this needs must be in the cache first; while one is still being read, the sequencer keeps what it has
+            bool waiting = false;
+            for (int i = 0; i < kNumPatterns; ++i) {
+                if (SlotInUse(i)) { const std::string& f = project.patterns[static_cast<size_t>(i)].samplerPatch.file; if (!SampleFor(f) && SamplePending(f)) waiting = true; }
+                for (int k = 0; k <= kNumSynthTracks; ++k) { const std::string f = SynthSampleWanted(i, k); if (!SampleFor(f) && SamplePending(f)) waiting = true; }
+            }
+            if (waiting) { samplesDirty_ = true; return; }
+        }
         std::array<SamplePtr, kNumPatterns> ptrs{};
         for (int i = 0; i < kNumPatterns; ++i) {
             sampleSyncedFile_[static_cast<size_t>(i)] = SlotInUse(i) ? project.patterns[static_cast<size_t>(i)].samplerPatch.file : std::string();
@@ -3320,7 +3410,7 @@ struct AppState {
     // Picks a file that is already in samples/ for the sampler of the edited scene.
     bool SetSamplerFile(const std::string& file, int tgt = kTargetSampler) {
         std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        if (SampleFor(file) == nullptr) { SetStatus("CANNOT READ " + file); return false; }
+        if (SampleFor(file) == nullptr && !SamplePending(file)) { SetStatus("CANNOT READ " + file); return false; }
         PushUndo();
         if (tgt < 0) CurrentPattern().samplerPatch.file = file;
         else EditedPatch(tgt >= kNumSynthTracks, tgt).sample.SetFile(file);
@@ -3330,15 +3420,18 @@ struct AppState {
         return true;
     }
     // A WAV or AIFF dropped on the window with the sampler selected: copied into samples/ (as it is: the program reads both), then it is the sample of the edited scene.
-    bool AssignSampleToSampler(const std::string& wavPath, int tgt = kTargetSampler) {
+    // N1 (LIVE-2): the file is read and copied on the loader thread; the scene that was edited when it was asked for gets it then
+    // (the decoded sound goes straight into the cache, so it is not read a second time).
+    struct SamplerCopy { bool ok = false; std::string error, name; SamplePtr sound; int frames = 0; };
+    static SamplerCopy CopySamplerFile(const std::string& wavPath, const std::string& dir, int rate) {   // any thread
         namespace fs = std::filesystem;
+        SamplerCopy r;
         SampleBuffer probe;
-        if (!LoadWav(wavPath, probe, engine.SampleRate()) || probe.empty()) { const std::string why = UnreadableReason(wavPath); SetStatus(why.empty() ? "CANNOT READ THAT FILE (WAV OR AIFF: PCM 8 / 16 / 24 / 32 BIT OR FLOAT; NO COMPRESSED AIFF)" : why); statusMessageTimer = 6.0f; return false; }
-        if (probe.frames() > kMaxSampleSeconds * engine.SampleRate()) { SetStatus("SAMPLE TOO LONG (MAX 3 MINUTES)"); statusMessageTimer = 6.0f; return false; }
+        if (!LoadWav(wavPath, probe, rate) || probe.empty()) { const std::string why = UnreadableReason(wavPath); r.error = why.empty() ? "CANNOT READ THAT FILE (WAV OR AIFF: PCM 8 / 16 / 24 / 32 BIT OR FLOAT; NO COMPRESSED AIFF)" : why; return r; }
+        if (probe.frames() > kMaxSampleSeconds * rate) { r.error = "SAMPLE TOO LONG (MAX 3 MINUTES)"; return r; }
         std::error_code ec;
-        const std::string dir = SamplesDir();
         fs::create_directories(dir, ec);
-        if (ec) { SetStatus("CANNOT CREATE " + dir); return false; }
+        if (ec) { r.error = "CANNOT CREATE " + dir; return r; }
         std::string stem = SanitizeFileNamePart(fs::path(wavPath).stem().string(), "sample");
         if (stem.size() > 80) stem.resize(80);   // v44.53: a synth keeps the name in a fixed field (SynthSample::kFileMax)
         const std::string sampleExt = IsSampleFileName(wavPath) ? SampleFileExt(wavPath) : std::string(".wav");   // v44.56: an AIFF keeps its own extension in samples/
@@ -3353,17 +3446,40 @@ struct AppState {
         }
         if (copy) {
             fs::copy_file(wavPath, fs::path(dir) / name, fs::copy_options::overwrite_existing, ec);
-            if (ec) { SetStatus("CANNOT COPY THE FILE INTO " + dir); return false; }
+            if (ec) { r.error = "CANNOT COPY THE FILE INTO " + dir; return r; }
         }
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        PushUndo();
-        if (tgt < 0) CurrentPattern().samplerPatch.file = name;
-        else EditedPatch(tgt >= kNumSynthTracks, tgt).sample.SetFile(name);
-        sampleNamesValid_ = false; samplesDirty_ = true;
-        engine.SamplerFadeOut(); engine.AuditionStop();   // v44.52.1: the old sample stops sounding
-        SyncSceneSamples(true);
-        SetStatus(std::string(tgt < 0 ? "SAMPLER: " : "SAMPLE: ") + name + " (" + std::to_string(probe.frames() * 1000 / std::max(1, engine.SampleRate())) + " MS, COPIED INTO samples/)");
-        return true;
+        r.frames = probe.frames();
+        if (probe.frames() >= 2) {
+            auto sd = std::make_shared<SampleData>();
+            sd->data = std::move(probe.data); sd->channels = std::clamp(probe.channels, 1, 2); sd->sampleRate = rate; sd->name = name;
+            r.sound = sd;
+        }
+        r.ok = true; r.name = name;
+        return r;
+    }
+    // `then` runs after the sample is in place (UI thread), e.g. to set LOOP mode for a loop from the library.
+    bool AssignSampleToSampler(const std::string& wavPath, int tgt = kTargetSampler, std::function<void()> then = nullptr) {
+        auto res = std::make_shared<SamplerCopy>();
+        const std::string dir = SamplesDir();
+        const int rate = engine.SampleRate(), scene = project.currentPattern;
+        loader.Post([res, wavPath, dir, rate] { *res = CopySamplerFile(wavPath, dir, rate); }, [this, res, tgt, scene, dir, then, rate] {
+            if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
+            {
+            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            if (res->sound && dir == SamplesDir()) sampleCache_[dir + "/" + res->name] = res->sound;
+            Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
+            PushUndoForScene(scene);
+            if (tgt < 0) pt.samplerPatch.file = res->name;
+            else (tgt >= kNumSynthTracks ? pt.chordPatch : pt.synthPatches[static_cast<size_t>(std::clamp(tgt, 0, kNumSynthTracks - 1))]).sample.SetFile(res->name);
+            sampleNamesValid_ = false; samplesDirty_ = true;
+            engine.SamplerFadeOut(); engine.AuditionStop();   // v44.52.1: the old sample stops sounding
+            SyncSceneSamples(true);
+            SetStatus(std::string(tgt < 0 ? "SAMPLER: " : "SAMPLE: ") + res->name + " (" + std::to_string(static_cast<long long>(res->frames) * 1000 / std::max(1, rate)) + " MS, COPIED INTO samples/)");
+            }
+            if (then) then();
+        });
+        if (loader.Running()) { SetStatus("READING " + std::filesystem::path(wavPath).filename().string() + "..."); return true; }
+        return res->ok;   // no loader: both parts have run already
     }
     // ---- SAMPLE LIBRARY (v44.51) -----------------------------------------------------------------------------------------------
     // The user's own folder of samples (see core/SampleLibrary.h). Only listed and auditioned here; a chosen file is COPIED into the
@@ -3397,21 +3513,31 @@ struct AppState {
         return why.empty() ? "CANNOT READ THAT FILE: " + label : why + ": " + label;
     }
     static constexpr float kAuditionGain = 0.4f;   // v44.52.1: the library audition is quieter than before (0.85): a loud file no longer startles
+    // N1 (LIVE-2): a file not heard before is read on the loader thread and starts when it arrives (only the newest request plays).
+    std::string libAuditionWanted_;
     bool AuditionLibrary(const std::string& rel) {
         const std::string path = LibraryPath(rel);
-        SamplePtr smp;
         auto it = libAudition_.find(path);
-        if (it != libAudition_.end()) smp = it->second;
-        else {
+        if (it != libAudition_.end()) return PlayLibraryAudition(rel, path, it->second);
+        libAuditionWanted_ = path;
+        auto out = std::make_shared<SamplePtr>();
+        const int rate = engine.SampleRate();
+        auto playedFlag = std::make_shared<bool>(false);
+        loader.Post([out, path, rel, rate] {
             SampleBuffer buf;
-            if (LoadWav(path, buf, engine.SampleRate()) && !buf.empty() && buf.frames() >= 2) {
+            if (LoadWav(path, buf, rate) && !buf.empty() && buf.frames() >= 2) {
                 auto sd = std::make_shared<SampleData>();
-                sd->data = std::move(buf.data); sd->channels = std::clamp(buf.channels, 1, 2); sd->sampleRate = engine.SampleRate(); sd->name = rel;
-                smp = sd;
+                sd->data = std::move(buf.data); sd->channels = std::clamp(buf.channels, 1, 2); sd->sampleRate = rate; sd->name = rel;
+                *out = sd;
             }
+        }, [this, out, path, rel, playedFlag] {
             if (libAudition_.size() > 40) libAudition_.clear();
-            libAudition_[path] = smp;
-        }
+            libAudition_[path] = *out;
+            if (path == libAuditionWanted_) { libAuditionWanted_.clear(); *playedFlag = PlayLibraryAudition(rel, path, *out); }
+        });
+        return loader.Running() ? true : *playedFlag;   // no loader: both parts have run already
+    }
+    bool PlayLibraryAudition(const std::string& rel, const std::string& path, const SamplePtr& smp) {
         if (!smp) { SetStatus(CannotReadText(path, rel)); statusMessageTimer = 6.0f; return false; }
         libAuditionKeep_.push_back(smp);
         while (libAuditionKeep_.size() > 16) libAuditionKeep_.pop_front();
@@ -3438,27 +3564,33 @@ struct AppState {
     std::string TransitionsDir() const { return SamplesDir() + "/transitions"; }
     std::string transSyncedDir_ = "?";
     bool transDirty_ = true;
-    void ReloadUserTransitions() {
-        std::vector<UserTransition> list = LoadUserTransitionFolder(TransitionsDir(), engine.SampleRate());
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        engine.ReplaceUserTransitions(std::move(list));
-        transSyncedDir_ = TransitionsDir(); transDirty_ = false;
-    }
-    void SyncUserTransitions() { if (transDirty_ || TransitionsDir() != transSyncedDir_) ReloadUserTransitions(); }
-    // The library file `rel` becomes the transition before brick `brick` (>= 1).
-    bool AssignLibraryTransition(int brick, const std::string& rel) {
-        namespace fs = std::filesystem;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        if (brick < 1 || brick >= project.songChainLength) { SetStatus("A TRANSITION GOES BEFORE BRICK 2 OR LATER"); statusMessageTimer = 6.0f; return false; }
-        const std::string src = LibraryPath(rel);
-        SampleBuffer probe;
-        if (!LoadWav(src, probe, engine.SampleRate()) || probe.empty() || probe.frames() < 2) { SetStatus(CannotReadText(src, rel)); statusMessageTimer = 6.0f; return false; }
-        const double secs = static_cast<double>(probe.frames()) / std::max(1, engine.SampleRate());
-        if (secs > 30.0) { SetStatus("A TRANSITION CAN BE 30 SECONDS AT MOST"); statusMessageTimer = 6.0f; return false; }
-        std::error_code ec;
+    // N1 (LIVE-2): the folder is read on the loader thread; `then` runs (UI thread) once the engine has the new list.
+    bool transLoading_ = false;
+    void ReloadUserTransitions(std::function<void()> then = nullptr) {
         const std::string dir = TransitionsDir();
+        const int rate = engine.SampleRate();
+        auto list = std::make_shared<std::vector<UserTransition>>();
+        transSyncedDir_ = dir; transDirty_ = false; transLoading_ = true;
+        loader.Post([list, dir, rate] { *list = LoadUserTransitionFolder(dir, rate); }, [this, list, then] {
+            transLoading_ = false;
+            { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); engine.ReplaceUserTransitions(std::move(*list)); }
+            if (then) then();
+        });
+    }
+    void SyncUserTransitions() { if (!transLoading_ && (transDirty_ || TransitionsDir() != transSyncedDir_)) ReloadUserTransitions(); }
+    // The library file `rel` becomes the transition before brick `brick` (>= 1).
+    // N1 (LIVE-2): the file is read and copied on the loader thread; the brick gets it once the engine has the new transitions.
+    struct TransitionCopy { bool ok = false; std::string error; int slot = -1; };
+    static TransitionCopy CopyTransitionFile(const std::string& src, const std::string& rel, const std::string& dir, int rate) {   // any thread
+        namespace fs = std::filesystem;
+        TransitionCopy r;
+        SampleBuffer probe;
+        if (!LoadWav(src, probe, rate) || probe.empty() || probe.frames() < 2) { r.error = CannotReadText(src, rel); return r; }
+        const double secs = static_cast<double>(probe.frames()) / std::max(1, rate);
+        if (secs > 30.0) { r.error = "A TRANSITION CAN BE 30 SECONDS AT MOST"; return r; }
+        std::error_code ec;
         fs::create_directories(dir, ec);
-        if (ec) { SetStatus("CANNOT CREATE " + dir); return false; }
+        if (ec) { r.error = "CANNOT CREATE " + dir; return r; }
         std::string stem = SanitizeFileNamePart(fs::path(src).stem().string(), "transition");
         for (char& c : stem) if (c == ' ') c = '_';
         const auto srcSize = fs::file_size(src, ec);
@@ -3473,18 +3605,33 @@ struct AppState {
         }
         if (slot < 0) {
             for (int i = 0; i < RiserPlayer::kNumUser; ++i) if (!used[static_cast<size_t>(i)]) { slot = i; break; }
-            if (slot < 0) { SetStatus("40 OWN TRANSITIONS IN THIS PROJECT ALREADY"); statusMessageTimer = 6.0f; return false; }
+            if (slot < 0) { r.error = "40 OWN TRANSITIONS IN THIS PROJECT ALREADY"; return r; }
             char nn[8]; std::snprintf(nn, sizeof(nn), "t%02d_", slot + 1);
-            if (!ImportAudioAsWav(src, (fs::path(dir) / (std::string(nn) + stem + ".wav")).string())) { SetStatus("CANNOT COPY THE FILE INTO " + dir); return false; }   // v44.56: an AIFF becomes a .wav here (the transitions folder holds WAVs)
+            if (!ImportAudioAsWav(src, (fs::path(dir) / (std::string(nn) + stem + ".wav")).string())) { r.error = "CANNOT COPY THE FILE INTO " + dir; return r; }   // v44.56: an AIFF becomes a .wav here (the transitions folder holds WAVs)
         }
-        ReloadUserTransitions();
-        PushSoundUndo();
-        ChainStep& cs = project.songChain[static_cast<size_t>(brick)];
-        cs.riser = static_cast<int8_t>(RiserPlayer::kFirstUser + slot);
-        if (cs.riserBars < 1) cs.riserBars = 2;
-        sequencer.RefreshArrangement();
-        SetStatus("TRANSITION BEFORE BRICK " + std::to_string(brick + 1) + ": " + engine.Risers().NameAt(cs.riser) + " (COPIED INTO samples/transitions)");
-        return true;
+        r.ok = true; r.slot = slot;
+        return r;
+    }
+    bool AssignLibraryTransition(int brick, const std::string& rel) {
+        if (brick < 1 || brick >= project.songChainLength) { SetStatus("A TRANSITION GOES BEFORE BRICK 2 OR LATER"); statusMessageTimer = 6.0f; return false; }
+        auto res = std::make_shared<TransitionCopy>();
+        const std::string src = LibraryPath(rel), dir = TransitionsDir();
+        const int rate = engine.SampleRate();
+        loader.Post([res, src, rel, dir, rate] { *res = CopyTransitionFile(src, rel, dir, rate); }, [this, res, brick] {
+            if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
+            ReloadUserTransitions([this, res, brick] {
+                std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+                if (brick >= project.songChainLength) return;
+                PushSoundUndo();
+                ChainStep& cs = project.songChain[static_cast<size_t>(brick)];
+                cs.riser = static_cast<int8_t>(RiserPlayer::kFirstUser + res->slot);
+                if (cs.riserBars < 1) cs.riserBars = 2;
+                sequencer.RefreshArrangement();
+                SetStatus("TRANSITION BEFORE BRICK " + std::to_string(brick + 1) + ": " + engine.Risers().NameAt(cs.riser) + " (COPIED INTO samples/transitions)");
+            });
+        });
+        if (loader.Running()) { SetStatus("READING " + rel + "..."); return true; }
+        return res->ok;   // no loader: both parts have run already
     }
     // Chooses where the library browser sends the picked file: the edited drum track, the sampler, or a transition.
     int libSampleTarget = kTargetSampler;   // v44.53: for LibTarget::Sampler: the sampler track, or the SAMPLE engine of a synth slot / the chord (see GetSampleTarget)
@@ -3745,38 +3892,58 @@ struct AppState {
     // A .wav or .aif dropped on the window becomes the sample of the selected DRUM track (an AIFF is written into the kit as a .wav). The current kit is first copied
     // into a kit of its own (kits/mykit, mykit_2, ...), so the factory kits are never touched; the project then
     // points at that kit. Older takes of the slot (name_2.wav ...) are replaced by the dropped file.
-    bool AssignSampleToSlot(const std::string& wavPath) {
+    // N1 (LIVE-2): the file is read and the kit folder written on the loader thread; the scene / drum that was selected when it was
+    // asked for gets the new kit then.
+    struct SlotCopy { bool ok = false; std::string error, target; };
+    static SlotCopy CopySlotFile(const std::string& wavPath, const std::string& sceneKit, int slotIndex, int rate) {   // any thread
         namespace fs = std::filesystem;
-        const Track& tr = CurrentPattern().tracks[std::clamp(seqCursorTrack, 0, kNumTracks - 1)];
-        if (tr.type != TrackType::Drum) { SetStatus("SELECT A DRUM TRACK OR THE SAMPLER FIRST, THEN DROP THE FILE"); statusMessageTimer = 6.0f; return false; }
+        SlotCopy r;
         SampleBuffer probe;
-        if (!LoadWav(wavPath, probe, engine.SampleRate()) || probe.empty()) { const std::string why = UnreadableReason(wavPath); SetStatus(why.empty() ? "CANNOT READ THAT FILE (WAV OR AIFF)" : why); statusMessageTimer = 6.0f; return false; }
+        if (!LoadWav(wavPath, probe, rate) || probe.empty()) { const std::string why = UnreadableReason(wavPath); r.error = why.empty() ? "CANNOT READ THAT FILE (WAV OR AIFF)" : why; return r; }
         std::error_code ec;
-        const std::string sceneKit = TrackKitFolder(project.currentPattern, tr.slotIndex);   // v44.26: a drum with a kit of its own gets the sample in that kit
-        const bool ownKit = !tr.kitFolder.empty();
         std::string target = sceneKit;
         const bool alreadyMine = target.rfind("kits/mykit", 0) == 0;
         if (!alreadyMine) {
             int n = 1;
             do { target = "kits/mykit" + (n == 1 ? std::string() : "_" + std::to_string(n)); ++n; } while (fs::exists(target, ec) && n < 1000);
             fs::create_directories(target, ec);
-            if (ec) { SetStatus("CANNOT CREATE " + target); return false; }
+            if (ec) { r.error = "CANNOT CREATE " + target; return r; }
             for (const auto& f : fs::directory_iterator(sceneKit, ec))
                 if (f.is_regular_file() && f.path().extension() == ".wav") fs::copy_file(f.path(), fs::path(target) / f.path().filename(), fs::copy_options::overwrite_existing, ec);
         }
-        const std::string stem = DrumSlotFileStem(static_cast<DrumSlot>(tr.slotIndex));
+        const std::string stem = DrumSlotFileStem(static_cast<DrumSlot>(slotIndex));
         for (const auto& f : fs::directory_iterator(target, ec)) {
             const std::string name = f.path().stem().string();
             if (f.path().extension() == ".wav" && (name == stem || name.rfind(stem + "_", 0) == 0)) fs::remove(f.path(), ec);
         }
-        if (!ImportAudioAsWav(wavPath, (fs::path(target) / (stem + ".wav")).string())) { SetStatus("CANNOT COPY THE FILE INTO " + target); return false; }
-        PushUndo();
-        if (ownKit) CurrentPattern().tracks[static_cast<size_t>(std::clamp(seqCursorTrack, 0, kNumTracks - 1))].kitFolder = target; else CurrentPattern().kitFolder = target;   // v44.5.4: the dropped sample goes into a kit of this scene
-        InvalidateKit(target);
-        SyncSceneKits();
-        InvalidateFolderCaches();
-        SetStatus(std::string("SAMPLE SET: ") + fs::path(wavPath).filename().string() + " -> " + tr.name + " (kit " + target.substr(5) + ")");
-        return true;
+        if (!ImportAudioAsWav(wavPath, (fs::path(target) / (stem + ".wav")).string())) { r.error = "CANNOT COPY THE FILE INTO " + target; return r; }
+        r.ok = true; r.target = target;
+        return r;
+    }
+    bool AssignSampleToSlot(const std::string& wavPath) {
+        namespace fs = std::filesystem;
+        const int trackIdx = std::clamp(seqCursorTrack, 0, kNumTracks - 1), scene = project.currentPattern;
+        const Track& tr = CurrentPattern().tracks[static_cast<size_t>(trackIdx)];
+        if (tr.type != TrackType::Drum) { SetStatus("SELECT A DRUM TRACK OR THE SAMPLER FIRST, THEN DROP THE FILE"); statusMessageTimer = 6.0f; return false; }
+        const std::string sceneKit = TrackKitFolder(project.currentPattern, tr.slotIndex);   // v44.26: a drum with a kit of its own gets the sample in that kit
+        const bool ownKit = !tr.kitFolder.empty();
+        const std::string trackName = tr.name;
+        auto res = std::make_shared<SlotCopy>();
+        const int slotIndex = tr.slotIndex, rate = engine.SampleRate();
+        loader.Post([res, wavPath, sceneKit, slotIndex, rate] { *res = CopySlotFile(wavPath, sceneKit, slotIndex, rate); },
+                    [this, res, wavPath, scene, trackIdx, ownKit, trackName] {
+            if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
+            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
+            PushUndoForScene(scene);
+            if (ownKit) pt.tracks[static_cast<size_t>(trackIdx)].kitFolder = res->target; else pt.kitFolder = res->target;   // v44.5.4: the dropped sample goes into a kit of this scene
+            InvalidateKit(res->target);
+            SyncSceneKits();
+            InvalidateFolderCaches();
+            SetStatus(std::string("SAMPLE SET: ") + std::filesystem::path(wavPath).filename().string() + " -> " + trackName + " (kit " + res->target.substr(5) + ")");
+        });
+        if (loader.Running()) { SetStatus("READING " + fs::path(wavPath).filename().string() + "..."); return true; }
+        return res->ok;   // no loader: both parts have run already
     }
     // Opens a dated copy from backups/ as the CURRENT project file's content:
     // the open file's path is kept, so the next save writes the restored state

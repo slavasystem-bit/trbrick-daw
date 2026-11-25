@@ -93,7 +93,12 @@ void BottomPanel::DrawBrowsers(AppState& app) {
                 app.engine.AuditionStop();   // v44.52.1: the file that was being auditioned stops when it is chosen
                 const std::string path = app.LibraryPath(lib[static_cast<size_t>(it.id)].rel);
                 if (libTarget_ == AppState::LibTarget::Drum) app.AssignSampleToSlot(path);
-                else if (libTarget_ == AppState::LibTarget::Sampler) { if (app.AssignSampleToSampler(path, app.libSampleTarget) && lib[static_cast<size_t>(it.id)].category == "LOOP") app.SetSamplerLoopFromLibrary(lib[static_cast<size_t>(it.id)], app.libSampleTarget); }
+                else if (libTarget_ == AppState::LibTarget::Sampler) {   // N1: the file is read off the scene lock; a LOOP gets loop mode once it is in place
+                    const LibSample ls = lib[static_cast<size_t>(it.id)];
+                    const int tgt = app.libSampleTarget;
+                    AppState* ap = &app;
+                    app.AssignSampleToSampler(path, tgt, ls.category == "LOOP" ? std::function<void()>([ap, ls, tgt] { ap->SetSamplerLoopFromLibrary(ls, tgt); }) : std::function<void()>());
+                }
                 else if (libTarget_ == AppState::LibTarget::Transition) app.AssignLibraryTransition(libBrick_, lib[static_cast<size_t>(it.id)].rel);
             },
             [&](const ListBrowser::Item& it) {   // HEAR / Space
