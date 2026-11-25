@@ -1,9 +1,14 @@
 name: build
-# Every pull request and every change to main runs all of these. The TR-Brick button on
-# the Mac (tools/mac/launch.sh) refuses to start a pull request unless they are all green.
+# Every pull request and every change to main runs this. The TR-Brick button on the Mac
+# (tools/mac/launch.sh) refuses to start a pull request unless its checks are green, and
+# main is protected: a pull request can be merged only when these checks pass.
+# A pull request that changes only documents (*.md, docs/) still runs this workflow, but the
+# build jobs show as "skipped" (which counts as passed): no need to build for text.
+# A newer push to the same pull request or to main cancels the older run.
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
   workflow_dispatch:
 
@@ -12,8 +17,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: What changed (documents only = no build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Documents have no unresolved merge conflict markers
+        run: |
+          if git grep -nE '^(<<<<<<<|>>>>>>>) ' -- '*.md' 'docs/'; then
+            echo "a document still has merge conflict markers"; exit 1
+          fi
+      - name: Does this change touch anything besides documents?
+        id: diff
+        run: |
+          code=true
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            # a pull request is checked out as GitHub's test merge: parent 1 is main, so this is the PR's whole change
+            files="$(git diff --name-only HEAD^1 HEAD)"
+            echo "$files"
+            if [ -n "$files" ] && ! echo "$files" | grep -vqE '(\.md$|^docs/)'; then code=false; fi
+          fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
   linux:
     name: Linux build, selftest, fuzz
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -36,6 +70,8 @@ jobs:
 
   sanitizers:
     name: Memory and undefined-behaviour check (ASan + UBSan)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -56,6 +92,8 @@ jobs:
 
   threads:
     name: Thread race check (TSan)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -74,6 +112,8 @@ jobs:
 
   macos:
     name: macOS build and selftest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
