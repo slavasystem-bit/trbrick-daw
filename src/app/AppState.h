@@ -156,6 +156,8 @@ struct AppState {
     // A suffix queued by a generator ("- C DORIAN", "CHORDS IN F IONIAN!") that the next SetStatus appends once,
     // so every caller's own message gets the key/scale information without each one being edited.
     std::string statusSuffix;
+    // N1 (LIVE-9): a literal goes through here, so a switch applied on the audio thread returns before any std::string is built.
+    void SetStatus(const char* msg) { if (SwitchApplying()) return; SetStatus(std::string(msg)); }
     void SetStatus(const std::string& msg) { if (SwitchApplying()) return; statusMessage = msg + statusSuffix; statusSuffix.clear(); statusMessageTimer = statusMessage.size() > msg.size() ? 3.5f : 2.0f; }
 
     // N1: slow file work (samples, kits, folder scans) runs here, off the scene lock; main() starts it, the tests leave it off

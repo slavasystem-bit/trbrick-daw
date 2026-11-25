@@ -63,12 +63,35 @@
 #include <fstream>
 #include <thread>
 #include <atomic>
+#include <new>
+#include <cstdlib>
 #include <sys/stat.h>
 #include <iostream>
 #include <cmath>
 #include <vector>
 
 using namespace t8;
+
+// N1 (TEST-6): counts heap allocations and frees made by the thread that sets g_countAllocs (the "audio thread" of a test).
+static thread_local bool g_countAllocs = false;
+static std::atomic<long> g_audioAllocs{0};
+void* operator new(std::size_t n) {
+    if (g_countAllocs) g_audioAllocs.fetch_add(1, std::memory_order_relaxed);
+    if (void* p = std::malloc(n ? n : 1)) return p;
+    throw std::bad_alloc();
+}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"   // the replaced operators pair malloc/free on purpose
+#endif
+void* operator new[](std::size_t n) { return ::operator new(n); }
+void operator delete(void* p) noexcept { if (p && g_countAllocs) g_audioAllocs.fetch_add(1, std::memory_order_relaxed); std::free(p); }
+void operator delete[](void* p) noexcept { ::operator delete(p); }
+void operator delete(void* p, std::size_t) noexcept { ::operator delete(p); }
+void operator delete[](void* p, std::size_t) noexcept { ::operator delete(p); }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 static bool nearlyEqual(float a, float b, float eps) { return std::fabs(a - b) < eps; }
 
@@ -6640,6 +6663,7 @@ int main(int argc, char** argv) {
         a.CurrentPattern().samplerPatch.file = "in.wav"; a.SyncSceneSamples(true); a.loader.FinishAllForTest();
         // library audition
         SetSamplesRoot(dir + "/lib"); a.libValid_ = false;
+        a.LibraryList();   // as in the app: the library list is on screen (scanned) before a file in it can be heard
         const double hearMs = heldFor([&] { a.AuditionLibrary("loop.wav"); });
         check(hearMs < 5.0, "async: HEAR in the library holds the scene lock only briefly (" + std::to_string(hearMs) + " ms)");
         check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 0, "async: the file is not in memory yet");
@@ -6720,6 +6744,54 @@ int main(int argc, char** argv) {
         }
         a.loader.Stop();
         fs::remove_all(dir);
+    }
+    {   // N1 (TEST-6, LIVE-9): the audio thread does not allocate or free memory while it plays a busy set
+        AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);
+        a.project.kitFolder = kitFolder;
+        a.RefreshSound();
+        Pattern& p = a.CurrentPattern();
+        ApplyStarterGroove(p, a.StepTrack(p, kChordTrackIndex));
+        a.SyncMixer(p);
+        for (int t = 0; t < kNumDrumTracks; ++t) p.tracks[static_cast<size_t>(t)].drumTune = 0.37f * (t + 1) - 1.1f;   // tunes no table was made for yet
+        for (int st = 0; st < 16; st += 3) { p.tracks[0].steps[static_cast<size_t>(st)].active = true; p.tracks[0].steps[static_cast<size_t>(st)].ratchet = 4; }   // ratchets
+        for (int st = 2; st < 16; st += 4) { p.tracks[3].steps[static_cast<size_t>(st)].active = true; p.tracks[3].steps[static_cast<size_t>(st)].ratchet = 3; }
+        a.quantizeSwitches = true;
+        a.StartMidiCapture();                    // MIDI capture logs on the audio thread
+        a.sequencer.Play();
+        std::vector<float> blk(128 * 2);
+        auto render = [&](double secs) { const int n = static_cast<int>(secs * kSampleRate) / 128; for (int b = 0; b < n; ++b) a.sequencer.RenderAndAdvance(blk.data(), 128, kSampleRate); };
+        render(0.5);                             // the first blocks may settle lazily made state once
+        check(a.SwitchesCanQueue(), "test-6: NEXT BAR switches can queue");
+        a.LiveSwitch(AppState::QueuedSwitch::Drop);   // NEXT BAR: applied on the audio thread at the bar line
+        a.LiveSwitch(AppState::QueuedSwitch::Mute, 3);
+        check(a.SwQueuedCount() == 2, "test-6: two switches wait for the bar line (" + std::to_string(a.SwQueuedCount()) + ")");
+        g_audioAllocs = 0;
+        g_countAllocs = true;
+        render(6.0);                             // several bars: the queued switches land, ratchets fire, tuned drums play
+        g_countAllocs = false;
+        const long allocs = g_audioAllocs.load();
+        check(a.SwQueuedCount() == 0 && a.engine.GetMixer().tracks[1].mute, "test-6: the queued NEXT BAR switches were applied on the audio thread during the render (DROP muted the snare)");
+        check(!a.engine.Capture().Events().empty(), "test-6: MIDI capture logged events during the render");
+        check(allocs == 0, "test-6: the audio thread did not allocate or free memory while playing (" + std::to_string(allocs) + ")");
+        a.engine.Capture().Stop(); a.midiCaptureActive = false;
+        a.sequencer.Stop();
+    }
+    {   // N1 (LIVE-5): the audio callback waits for the scene lock only a bounded time
+        AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);
+        unsigned waited = 0;
+        check(a.sequencer.LockForAudio(5000, waited) && waited == 0, "lock-5: a free lock is taken at once");
+        a.sequencer.UnlockForAudio();
+        std::atomic<bool> held{false}, release{false};
+        std::thread ui([&] { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); held = true; while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
+        while (!held) std::this_thread::yield();
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool got = a.sequencer.LockForAudio(5000, waited);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        check(!got && waited >= 5000 && ms < 30.0, "lock-5: a busy lock is given up after the limit (" + std::to_string(ms) + " ms), the callback plays silence instead of waiting");
+        release = true; ui.join();
+        check(a.sequencer.LockForAudio(5000, waited), "lock-5: once the screen lets go, the next buffer plays normally");
+        a.sequencer.UnlockForAudio();
+        check(!a.sequencer.PatternMutex().HeldByThisThread(), "lock-5: the lock is free afterwards");
     }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;

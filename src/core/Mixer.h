@@ -117,6 +117,10 @@ public:
     std::atomic<int> audioBufferFrames{128};      // frames per callback, as the device delivers them
     std::atomic<unsigned> audioLongestUs{0};      // longest callback (what the dropout lasted)
     std::atomic<unsigned> audioLongestWaitUs{0};  // ... of which waiting for the scene lock (the screen held the sound)
+    std::atomic<unsigned> audioSkippedBlocks{0};  // N1 (LIVE-5): buffers played as silence because the scene lock stayed busy
+    // Audio thread only: consecutive late buffers make ONE dropout (its length is their sum), logged when a buffer is on time again.
+    unsigned runUs = 0, runWaitUs = 0;
+    float lastOutL = 0.0f, lastOutR = 0.0f;       // the last frame played, for the fade of a skipped buffer
     static constexpr int kDropoutLog = 8;
     struct Dropout { std::atomic<uint32_t> atMs{0}, lenUs{0}, waitUs{0}; };
     Dropout dropouts[kDropoutLog];                // the last few, newest at (audioXruns - 1) % kDropoutLog

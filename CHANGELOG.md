@@ -2,6 +2,16 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage N1 (part 4): the callback never blocks for long, the watchdog stops restarting for nothing
+
+Audit v44.58 LIVE-5 (short-term part), LIVE-6, LIVE-9, LIVE-11, TEST-6.
+
+- **LIVE-5, protective mode:** the audio callback takes the scene lock itself (`Sequencer::LockForAudio`), waiting at most two buffers (at least 4 ms; shorter holds are absorbed by the device buffering as before). If the lock is still busy it plays a 64-frame fade to silence and returns, so the device keeps getting buffers and the watchdog does not restart it; the next callback tries again. `Mixer::audioSkippedBlocks` counts those buffers. Consecutive late buffers are now logged as ONE dropout whose length is their sum (the XRUN readout keeps showing the real length of a stall).
+- **LIVE-6, watchdog:** a device that appears no longer restarts audio; a removed one restarts it only if our output stopped (not playing, or no callback since the event). A long frame counts as a sleep only when the callback did not run through it (fewer than a quarter of the expected buffers), so a slow screen frame no longer restarts the device and resets the effects. (Output device picker: needs a mockup, later.)
+- **LIVE-9, no allocation on the audio thread:** drum and riser interpolation kernels come from a bank built at startup (`SharedSincForRate`, cutoff rounded down to a 0.01 grid; 96 tables, ~0.8 MB) instead of `make_shared` per new tune value; MIDI capture reserves room at Start and drops (counts) events past it; ratchet events are reserved in `Sequencer::Init`; `AppState::SetStatus(const char*)` returns before building a `std::string` when a NEXT BAR switch is applied on the audio thread. Not done: `AudioEngine` can still drop the last reference of an audition sample on the audio thread when the UI no longer holds it (the UI keeps the last 16).
+- **LIVE-11:** FTZ + DAZ (x86 MXCSR) / FZ (arm64 FPCR) at the top of every audio callback.
+- **TEST-6:** the selftest counts heap allocations and frees on the rendering thread (global `operator new` / `delete` hook) while a busy set plays for 6 s: tuned drums, ratchets, MIDI capture and NEXT BAR DROP / mute applied at the bar line. Must be 0 (it reports 14 with the old kernel cache and MIDI capture). `LockForAudio` is tested for a free lock, a busy lock given up after the limit, and the next buffer after release.
+
 ## Stage C4b (part 1): one sample row everywhere
 
 ROADMAP "Samples in one place" (C4b), item 1 and the words; approved mockup `docs/mockups/v45_samples_unified.png`. No project data changes.

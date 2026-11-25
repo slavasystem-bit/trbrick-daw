@@ -213,11 +213,7 @@ double RiserPlayer::DurationSeconds(int index) const {
 
 std::shared_ptr<const SincTable> RiserPlayer::SincFor(double rate) {
     if (std::fabs(rate - 1.0) < 1e-6) return nullptr;
-    for (auto& c : sincCache_) if (c.table && std::fabs(c.rate - rate) < 1e-9) return c.table;
-    auto t = std::make_shared<const SincTable>(16, 128, std::min(1.0, 0.95 / rate));
-    sincCache_[sincNext_] = CachedSinc{rate, t};
-    sincNext_ = (sincNext_ + 1) % static_cast<int>(sincCache_.size());
-    return t;
+    return SharedSincForRate(rate);   // N1 (LIVE-9): built at startup, nothing is built or freed on the audio thread
 }
 
 void RiserPlayer::Trigger(int index, double rate) {
