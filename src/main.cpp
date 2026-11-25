@@ -278,7 +278,7 @@ int main(int argc, char** argv) {
     } else {
         if (have.freq >= 8000 && have.freq <= 192000) engineRate = have.freq;
         if (engineRate != kSampleRate) std::fprintf(stderr, "Audio device runs at %d Hz -- engine follows it.\n", engineRate);
-        if (app.audioOnFallback) app.SetStatus("AUDIO: CHOSEN OUTPUT NOT FOUND, PLAYING ON THE SYSTEM OUTPUT");
+        if (app.audioOnFallback) app.SetStatus("AUDIO: CHOSEN OUTPUT NOT AVAILABLE, PLAYING ON THE SYSTEM OUTPUT");
     }
 
     SyncLibraryKits(SamplesRoot(), "kits");   // v44.51: kit folders from <samples>/Kits/ appear in the kit list (copied, never changed)
@@ -327,12 +327,15 @@ int main(int argc, char** argv) {
     auto restartAudio = [&](const char* why) {
         std::fprintf(stderr, "Restarting audio (%s)\n", why);
         if (audioDev != 0) { SDL_CloseAudioDevice(audioDev); audioDev = 0; }
+        const bool wasFallback = app.audioOnFallback;
         SDL_AudioSpec h2{};
         audioDev = openAudio(engineRate, 0, h2);   // at the engine's own rate: SDL converts if the new device differs
         app.engine.ResetDsp();
         if (audioDev != 0) {
             SDL_PauseAudioDevice(audioDev, 0);
-            app.SetStatus(app.audioOnFallback ? "AUDIO: CHOSEN OUTPUT NOT FOUND, PLAYING ON THE SYSTEM OUTPUT" : "AUDIO RESTARTED");
+            if (app.audioOnFallback) app.SetStatus("AUDIO: CHOSEN OUTPUT NOT AVAILABLE, PLAYING ON THE SYSTEM OUTPUT");
+            else if (wasFallback && !app.audioOpenedName.empty()) app.SetStatus("AUDIO: BACK ON " + app.audioOpenedName);
+            else app.SetStatus("AUDIO RESTARTED");
         }
         else app.SetStatus("AUDIO: NO OUTPUT DEVICE FOUND");
     };

@@ -211,7 +211,7 @@ void MenuBar::DrawAudioDialog(AppState& app) {
     if (ImGui::BeginPopupModal("AudioDialog", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar)) {
         const char* kDefaultName = "System default (follows the Mac)";
         ImGui::TextColored(kAmber, "Audio");
-        ImGui::TextDisabled("Remembered between launches. Changing anything restarts the sound for a moment.");
+        ImGui::TextDisabled("Remembered between launches. Changing anything restarts the sound for a moment (a running recording gets a short gap).");
         ImGui::Spacing();
 
         ImGui::TextUnformatted("OUTPUT");
@@ -254,7 +254,7 @@ void MenuBar::DrawAudioDialog(AppState& app) {
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(vis::kRed), "Now: no output device found. The program tries again every few seconds.");
         } else {
             if (app.audioOnFallback)
-                ImGui::TextColored(kAmber, "\"%s\" is not plugged in: playing on the system output.", app.audioOutputChoice.c_str());
+                ImGui::TextColored(kAmber, "\"%s\" is not plugged in or could not be opened: playing on the system output.", app.audioOutputChoice.c_str());
             const int frames = mx.audioBufferFrames.load(std::memory_order_relaxed) > 0 ? mx.audioBufferFrames.load(std::memory_order_relaxed) : app.audioOpenedFrames;
             const unsigned drops = mx.audioXruns.load(std::memory_order_relaxed);
             char dropText[48];
