@@ -3,8 +3,9 @@
 #
 # Do this ONCE, the way you already open the program (double-click this file; if macOS
 # complains, allow it in System Settings > Privacy & Security, "Open Anyway").
-# After that a button "TR-Brick" sits on the Desktop. From then on an update is:
-#   download the new .zip  ->  double-click TR-Brick on the Desktop.
+# After that a button "TR-Brick" sits on the Desktop. From then on an update is just:
+#   double-click TR-Brick on the Desktop (it fetches the newest version from GitHub).
+# Without a zip at all: see docs/MAC_SETUP.md (brew install gh, gh auth login, one command).
 #
 # It makes: ~/TR-Brick/launch.sh   the permanent launcher
 #           ~/TR-Brick/app         the program, the build, and YOUR tracks (projects/, backups/)

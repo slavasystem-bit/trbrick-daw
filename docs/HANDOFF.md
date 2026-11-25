@@ -43,7 +43,7 @@ zip -qr trbrick-daw-source-vNN.zip trbrick-daw -x 'trbrick-daw/build*' 'trbrick-
   'trbrick-daw/projects/*.bak' '*/__pycache__/*'
 ```
 
-На Mac: «Install TR-Brick.command» бере найновіший zip із Downloads, збирає тільки змінене й запускає.
+На Mac: кнопка TR-Brick на Робочому столі (`~/TR-Brick/launch.sh`) бере найсвіжішу версію main з GitHub (або відкритий PR на вибір, для перевірки), збирає тільки змінене й запускає; без інтернету запускає встановлене. Налаштування один раз: `docs/MAC_SETUP.md`.
 
 ## 4. Головні поняття програми
 

@@ -2,6 +2,17 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Launcher: straight from GitHub
+
+No more zips: the TR-Brick button on the Desktop takes the program from the GitHub repository.
+
+- **What it does:** each start asks GitHub for the main version and downloads it into `~/TR-Brick/repo` (a clean copy); if it differs from what is installed, it is copied into `~/TR-Brick/app` exactly as before (your project file, `projects/`, `backups/` and own kits/presets are never overwritten), then only what changed is built and the program starts.
+- **Testing a pull request:** when pull requests are open, a short menu lists them; typing a number starts that version, Enter (or 15 seconds) starts main. The next start with Enter goes back to main.
+- **No internet / not signed in:** a clear message, then the installed version starts (safe on stage).
+- **Self-update:** the launcher replaces itself only from the main version and only with another GitHub launcher (marker `TRB_LAUNCHER_GITHUB=1`), so testing an older pull request cannot bring back the zip launcher.
+- **Sign-in:** through the GitHub CLI (`gh auth login`, once); git uses `gh auth git-credential`, so no passwords or tokens are stored by the script. One-time setup in Ukrainian: `docs/MAC_SETUP.md`.
+- Test switches: `TRB_GIT_URL`, `TRB_CHOICE`, `TRB_OFFLINE`, `TRB_DESKTOP` (plus the old ones). The zip path (`~/Downloads/trbrick-daw-source-*.zip`) is gone; `TRB_SOURCE_DIR` and `Install TR-Brick.command` still work.
+
 ## v44.58
 
 Playing live between scenes: LINK (scenes that share mute and solo), EDIT (open a scene without launching it) and the switches that follow a waiting launch.

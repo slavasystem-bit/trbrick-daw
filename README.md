@@ -56,6 +56,8 @@ v44.9: the TRACK tab, the main screen: the whole track as one strip of bricks (l
 
 v44.8: first sixty seconds: a starter groove in the first scene, a "start here" card instead of the knob wall (open it by clicking an instrument name), and THROW INTO THE CHAIN.
 
+Launcher (GitHub): the TR-Brick button on the Desktop fetches the newest main version from GitHub (or an open pull request, to test it), builds only what changed and starts the program; without internet it starts what is installed. One-time Mac setup: docs/MAC_SETUP.md.
+
 v44.7: launch in two clicks: run "Install TR-Brick.command" once; after that a TR-Brick button on the Desktop takes the newest zip from Downloads, builds only what changed and starts the program (your tracks stay in ~/TR-Brick/app/projects).
 
 v44.58: LINK (scenes that share mute and solo), EDIT / GO (open a scene without launching it), and the LIVE switches follow a waiting launch (NEXT: SCENE n).
