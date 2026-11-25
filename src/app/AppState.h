@@ -38,6 +38,7 @@
 #include <mutex>
 #include <vector>
 #include <sys/stat.h>
+#include <cctype>
 #include <array>
 #include <deque>
 #include <map>
@@ -3683,15 +3684,17 @@ struct AppState {
 
     // Replaces the open project with `incoming` (already read): stops what sounds, re-syncs the engine, clears the undo history.
     void AdoptProject(Project&& incoming) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());   // the audio thread reads the project: swap it under the lock
-        sequencer.Panic();   // nothing from the old project may keep sounding
-        project = std::move(incoming);
-        sequencer.SetSongModeActive(false);
-        sequencer.SetChordSceneNow(project.chordSceneEdit);
-        chdLiveSlot = -1;
-        engine.GetMixer().SyncFromPattern(CurrentPattern());
-        engine.GetMixer().SyncFxFromProject(project);
-        RefreshSound();
+        {   // the audio thread reads the project: swap it under the lock, held only for the swap (no files are read here)
+            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            sequencer.Panic();   // nothing from the old project may keep sounding
+            project = std::move(incoming);
+            sequencer.SetSongModeActive(false);
+            sequencer.SetChordSceneNow(project.chordSceneEdit);
+            chdLiveSlot = -1;
+            engine.GetMixer().SyncFromPattern(CurrentPattern());
+            engine.GetMixer().SyncFxFromProject(project);
+        }
+        RefreshSound();   // may decode samples from the disk: outside the lock, like every other caller (Н1 owns its own locking)
         ClearUndo();
     }
     // Opens an existing project file. Does NOT save the open one (the caller asked "Save / Don't Save / Cancel" first, see
@@ -3775,10 +3778,15 @@ struct AppState {
     // dated copy: the copy becomes the project file again.
     bool RestoreFailedFromBackup() {
         const std::string path = docNoticeFailedPath;
-        const std::vector<std::string> copies = ListProjectBackups(path);
-        if (path.empty() || copies.empty()) return false;
+        if (path.empty()) return false;
+        // Copies of THIS file (same folder) first, then copies from before v44.59 that only share the name; newest first in each.
+        std::vector<std::string> copies, legacy;
+        for (const std::string& c : ListProjectBackups(path)) (IsOwnBackupName(c) ? copies : legacy).push_back(c);
+        copies.insert(copies.end(), legacy.begin(), legacy.end());
         Project loaded;
-        if (!LoadProject(loaded, copies.front())) { SetStatus("RESTORE FAILED: " + copies.front()); statusMessageTimer = 8.0f; return false; }
+        std::string used;
+        for (const std::string& c : copies) if (LoadProject(loaded, c)) { used = c; break; }   // a damaged copy: try the next older one
+        if (used.empty()) { SetStatus(copies.empty() ? std::string("NO DATED COPY TO RESTORE") : "RESTORE FAILED: NO COPY COULD BE OPENED"); statusMessageTimer = 8.0f; return false; }
         const int newer = LastLoadNewerFormat();
         AdoptProject(std::move(loaded));
         projectPath = path;
@@ -3787,7 +3795,14 @@ struct AppState {
         docNoticeFailedPath.clear();
         if (newer || !SaveSnapshot(path)) { MarkUnsaved(); SetStatus(newer ? "RESTORED: CMD+S SAVES IT AS A COPY" : "RESTORED, BUT SAVING FAILED (DISK FULL?)"); statusMessageTimer = 8.0f; return true; }
         MarkSaved();
-        SetStatus("RESTORED THE VERSION OF " + BackupLabel(copies.front()));
+        SetStatus("RESTORED THE VERSION OF " + BackupLabel(used));
+        return true;
+    }
+    // "<stem>~<8 hex>-YYYYMMDD-HHMMSS.t8proj" (a v44.59 copy, tied to the project's folder) vs the older "<stem>-YYYYMMDD-HHMMSS".
+    static bool IsOwnBackupName(const std::string& p) {
+        const size_t n = p.size(), at = n - 7 - 15 - 1 - 8 - 1;
+        if (n < 7 + 15 + 1 + 8 + 1 + 1 || p[at] != '~' || p[n - 7 - 15 - 1] != '-') return false;
+        for (size_t i = at + 1; i < at + 9; ++i) if (!std::isxdigit(static_cast<unsigned char>(p[i]))) return false;
         return true;
     }
     // ---- Document (v44.18, U8b): the classic model of Logic / GarageBand ----------------------------------------------------
@@ -3813,6 +3828,7 @@ struct AppState {
     // DATA-2: what the user must be told about the last load (could not open / opened from the backup / newer version / repaired
     // values). Shown once as a dialog (DocumentDialogs); docNoticeFailedPath = the project that could not be opened at all.
     std::string docNoticeTitle, docNoticeText, docNoticeFailedPath;
+    bool docNoticeCanRestore = false;   // the failed project has dated copies (set once by NoteLoadFailed, not looked up every frame)
     size_t savedHash_ = 0;
     double editedClock_ = 0.0;
 
@@ -3839,6 +3855,7 @@ struct AppState {
         docNoticeFailedPath = path;
         docNoticeTitle = "\"" + name + "\" could not be opened";
         const std::vector<std::string> copies = ListProjectBackups(path);
+        docNoticeCanRestore = !copies.empty();
         docNoticeText = "The file is damaged. It is kept as \"" + name + ".t8proj.corrupt\" and nothing was written over it.";
         docNoticeText += copies.empty() ? std::string("\nThere is no dated copy of it to go back to.")
                                         : "\nThe newest dated copy is from " + BackupLabel(copies.front()) + ".";
