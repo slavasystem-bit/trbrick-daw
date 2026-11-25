@@ -86,6 +86,12 @@ void* operator new(std::size_t n) {
 #pragma GCC diagnostic ignored "-Wmismatched-new-delete"   // the replaced operators pair malloc/free on purpose
 #endif
 void* operator new[](std::size_t n) { return ::operator new(n); }
+// the nothrow forms too (std::stable_sort's temporary buffer uses them): otherwise the library's own nothrow new would pair
+// with the free() below, which ASan reports as alloc-dealloc-mismatch
+void* operator new(std::size_t n, const std::nothrow_t&) noexcept { if (g_countAllocs) g_audioAllocs.fetch_add(1, std::memory_order_relaxed); return std::malloc(n ? n : 1); }
+void* operator new[](std::size_t n, const std::nothrow_t& t) noexcept { return ::operator new(n, t); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { ::operator delete(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { ::operator delete(p); }
 void operator delete(void* p) noexcept { if (p && g_countAllocs) g_audioAllocs.fetch_add(1, std::memory_order_relaxed); std::free(p); }
 void operator delete[](void* p) noexcept { ::operator delete(p); }
 void operator delete(void* p, std::size_t) noexcept { ::operator delete(p); }
