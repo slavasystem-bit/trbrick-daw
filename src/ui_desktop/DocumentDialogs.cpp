@@ -56,7 +56,7 @@ void DrawDocumentDialogs(AppState& app) {
         ImGui::TextColored(kAmber, "%s", app.docNoticeTitle.c_str());
         ImGui::TextUnformatted(app.docNoticeText.c_str());
         ImGui::Spacing();
-        const bool canRestore = !app.docNoticeFailedPath.empty() && !ListProjectBackups(app.docNoticeFailedPath).empty();
+        const bool canRestore = !app.docNoticeFailedPath.empty() && app.docNoticeCanRestore;
         if (canRestore) {
             if (ImGui::Button("RESTORE NEWEST COPY", ImVec2(190, 0))) {
                 app.RestoreFailedFromBackup();

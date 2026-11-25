@@ -520,6 +520,9 @@ int main(int argc, char** argv) {
             check(BackupLabel(bdir + "/song~" + code + "-20260105-120000.t8proj") == "2026-01-05  12:00:00", "n2 data-4: the Versions list shows the date and time");
             put(bdir + "/song-20250101-101010.t8proj", "legacy");
             check(ListProjectBackups(pa).back().find("song-20250101-101010") != std::string::npos, "n2 data-4: copies from before v44.59 are still listed");
+            auto countFiles = [&] { size_t n = 0; for (const auto& e : fs::directory_iterator(bdir, ec)) { (void)e; ++n; } return n; };
+            const size_t files0 = countFiles();
+            check(LoadProject(l, ListProjectBackups(pa).front()) && countFiles() == files0, "n2 data-4: opening a copy from the backups folder makes no copy of the copy");
         }
 
         // DATA-5: the save checks every write; a failed one is never shown as saved
@@ -548,6 +551,11 @@ int main(int argc, char** argv) {
             put(path, "[project]\nformat=8\nname=bro");   // cut short: no [end]
             check(!app.LoadProjectFile(path) && app.docNoticeFailedPath == path && app.docNoticeTitle.find("could not be opened") != std::string::npos, "n2 data-2: a failed open is said in the window");
             check(fs::exists(path + ".corrupt") && app.IsUntitled(), "n2 data-2: the damaged file is kept and the open project is untouched");
+            check(app.docNoticeCanRestore, "n2 data-2: the window knows there is a copy to go back to");
+            {   // the newest copy is damaged too: the restore takes the next older one
+                const std::string stem = fs::path(ListProjectBackups(path).front()).stem().string();
+                put(ud::BackupsDir() + "/" + stem.substr(0, stem.size() - 15) + "29991231-235959.t8proj", "[project]\nformat=8\nname=bro");
+            }
             check(app.RestoreFailedFromBackup() && app.projectPath == path && app.project.patterns[2].tracks[0].steps[5].active && fs::exists(path) && !app.IsEditedNow(),
                   "n2 data-2: RESTORE NEWEST COPY brings the project back as the project file");
         }
