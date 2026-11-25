@@ -5,6 +5,10 @@
 // must not touch AppState) on one background thread; its `done` part then runs on the UI thread in Poll(), at the top of the next
 // frame, where it puts the result in place under a short lock.
 //
+// ONE worker thread on purpose: jobs finish in the order they were posted, and the `done` parts run in that order too. Callers
+// that can be overtaken by a newer choice (AppState) still check a request token and the document generation in `done`, so they
+// stay correct if this ever gets more workers or a "newest wins" key (e.g. for the Ц4б sample step).
+//
 // Not running (Start() never called, as in the tests) = Post() does both parts at once on the caller's thread, so code that uses
 // it behaves exactly as the old synchronous code did.
 #include <chrono>

@@ -90,14 +90,14 @@ void BottomPanel::DrawBrowsers(AppState& app) {
             [&](const ListBrowser::Item& it) {   // Enter / double-click: the file goes where the browser was opened for
                 const auto& lib = app.LibraryList();
                 if (it.id < 0 || it.id >= static_cast<int>(lib.size())) return;
-                app.engine.AuditionStop();   // v44.52.1: the file that was being auditioned stops when it is chosen
+                app.CancelLibraryAudition(); app.engine.AuditionStop();   // v44.52.1: the file that was being auditioned stops when it is chosen
                 const std::string path = app.LibraryPath(lib[static_cast<size_t>(it.id)].rel);
                 if (libTarget_ == AppState::LibTarget::Drum) app.AssignSampleToSlot(path);
                 else if (libTarget_ == AppState::LibTarget::Sampler) {   // N1: the file is read off the scene lock; a LOOP gets loop mode once it is in place
                     const LibSample ls = lib[static_cast<size_t>(it.id)];
                     const int tgt = app.libSampleTarget;
                     AppState* ap = &app;
-                    app.AssignSampleToSampler(path, tgt, ls.category == "LOOP" ? std::function<void()>([ap, ls, tgt] { ap->SetSamplerLoopFromLibrary(ls, tgt); }) : std::function<void()>());
+                    app.AssignSampleToSampler(path, tgt, ls.category == "LOOP" ? std::function<void(int)>([ap, ls, tgt](int scene) { ap->SetSamplerLoopFromLibraryInScene(ls, tgt, scene); }) : std::function<void(int)>());
                 }
                 else if (libTarget_ == AppState::LibTarget::Transition) app.AssignLibraryTransition(libBrick_, lib[static_cast<size_t>(it.id)].rel);
             },
