@@ -6297,6 +6297,29 @@ int main(int argc, char** argv) {
         check(a.sequencer.PlayPatternIndex() == 6 && a.engine.GetMixer().tracks[kick].mute, "arm: the kick is silent from the first beat of the new scene");
         a.sequencer.Stop();
     }
+    {   // N1: the dropout readout knows how long the screen held the scene lock and how long the audio thread waited for it
+        AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);
+        SceneMutex& sm = a.sequencer.PatternMutex();
+        std::vector<float> buf(256 * 2);
+        a.sequencer.RenderAndAdvance(buf.data(), 128, kSampleRate);   // marks this thread as the audio thread
+        sm.ResetMaxHold();
+        { std::lock_guard<SceneMutex> lk(sm); std::this_thread::sleep_for(std::chrono::milliseconds(3)); }
+        check(sm.MaxHoldUs() < 1000, "n1: the audio thread's own holds of the scene lock are not counted as the screen holding the sound");
+        std::atomic<bool> held{false};
+        std::thread ui([&] { std::lock_guard<SceneMutex> lk(sm); held = true; std::this_thread::sleep_for(std::chrono::milliseconds(30)); });
+        while (!held) std::this_thread::yield();
+        a.engine.GetMixer().audioLockWaitUs.store(0);
+        a.sequencer.RenderAndAdvance(buf.data(), 128, kSampleRate);
+        ui.join();
+        const unsigned waited = a.engine.GetMixer().audioLockWaitUs.load();
+        check(waited >= 15000, "n1: the audio thread measures how long it waited for the scene lock (" + std::to_string(waited) + " us)");
+        check(sm.MaxHoldUs() >= 25000, "n1: a hold of the scene lock by another thread is measured (" + std::to_string(sm.MaxHoldUs()) + " us)");
+        { std::lock_guard<SceneMutex> outer(sm); std::lock_guard<SceneMutex> inner(sm); }
+        check(sm.HeldByThisThread() == false, "n1: the scene lock is free again after nested holds");
+        a.engine.GetMixer().audioXruns.store(3); a.engine.GetMixer().audioLongestUs.store(9000); a.engine.GetMixer().dropouts[1].lenUs.store(5);
+        a.engine.GetMixer().ResetDropouts(); sm.ResetMaxHold();
+        check(a.engine.GetMixer().audioXruns.load() == 0 && a.engine.GetMixer().audioLongestUs.load() == 0 && a.engine.GetMixer().dropouts[1].lenUs.load() == 0 && sm.MaxHoldUs() == 0, "n1: a click on the readout clears the dropout log");
+    }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;
 }
