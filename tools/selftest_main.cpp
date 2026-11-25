@@ -2961,6 +2961,7 @@ int main(int argc, char** argv) {
                 check(BuildScaleNotesMask(0, kScaleIonian, OctaveMaskRange(1, 2)) == BuildScaleNotes(0, kScaleIonian, 1, 2), "octaves v44.3: a range mask equals the old low..high band");
                 AppState go; go.engine.Init(kSampleRate); go.sequencer.Init(&go.engine, &go.project);
                 bool all = true;
+                int total = 0;   // a random part can come out empty (it was a flaky failure): only the 36 parts together must have notes
                 for (int rep = 0; rep < 12; ++rep) {
                     go.project.rndOctaves = {static_cast<uint8_t>(m13), static_cast<uint8_t>(1u << 5), static_cast<uint8_t>((1u << 0) | (1u << 6))};
                     for (int part = 0; part < 3; ++part) {
@@ -2969,10 +2970,10 @@ int main(int argc, char** argv) {
                         const unsigned mk = go.project.rndOctaves[part];
                         int cnt = 0;
                         for (int i = 0; i < go.CurrentPattern().masterLength; ++i) if (tt.steps[i].active) { ++cnt; const int o = tt.steps[i].note / 12 - 1; if (!((mk >> o) & 1u)) all = false; }
-                        if (cnt == 0) all = false;
+                        total += cnt;
                     }
                 }
-                check(all, "octaves v44.3: every random note of BASS / SYN2 / SYN3 lies in the octaves chosen for that part");
+                check(all && total > 0, "octaves v44.3: every random note of BASS / SYN2 / SYN3 lies in the octaves chosen for that part");
                 Project po; po.rndOctaves = {0x15, 0x80 >> 1, 0x03};
                 check(SaveProject(po, "selftest_oct.t8proj"), "octaves v44.3: save");
                 Project pl; check(LoadProject(pl, "selftest_oct.t8proj") && pl.rndOctaves == po.rndOctaves, "octaves v44.3: the octave sets survive a save / load");
