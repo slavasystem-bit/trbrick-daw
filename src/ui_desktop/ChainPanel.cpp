@@ -231,18 +231,14 @@ void ChainPanel::Draw(AppState& app) {
         // v44.59: Shift+click = select a range, Cmd+click = select one more (the Mac rule); a plain click launches or opens (CLICK switch);
         // a double click always opens without launching. Linking is the LINK button / the right-click menu (one undo step each).
         const bool shiftDown = ImGui::GetIO().KeyShift, cmdDown = ImGui::GetIO().KeySuper || ImGui::GetIO().KeyCtrl;
-        if (ImGui::Button(buf, ImVec2(cellW, kPadH))) {
-            if (shiftDown || cmdDown) app.SelectScenePad(i, shiftDown, !shiftDown);
-            else {
-                app.SelectScenePad(i, false, false);
-                if (songOn) LaunchOrSwitchScene(app, i);
-                else if (app.clickOpens) app.SelectSceneForEdit(i);
-                else app.LaunchScenePad(i);
-            }
-        }
-        if (!shiftDown && !cmdDown && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
-            if (songOn) SwitchPattern(app, i); else app.OpenScenePad(i);
-        }
+        // ImGui's Button fires on every release, also on the one that ends a double click: ScenePadGesture drops that one (else
+        // LAUNCH = BEAT / BAR would queue again the launch the double click just cancelled).
+        const bool released = ImGui::Button(buf, ImVec2(cellW, kPadH));
+        const bool dbl = ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0);
+        const AppState::PadGesture g = AppState::ScenePadGesture(released, dbl, ImGui::GetIO().MouseClickedLastCount[0], shiftDown, cmdDown);
+        if (songOn && g == AppState::PadGesture::Click) { app.SelectScenePad(i, false, false); LaunchOrSwitchScene(app, i); }
+        else if (songOn && g == AppState::PadGesture::DoubleClick) SwitchPattern(app, i);
+        else app.ScenePadInput(i, g);
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
             ImGui::SetDragDropPayload("T8_SCENE", &i, sizeof(int));
             ImGui::Text("Scene %02d", i + 1);
