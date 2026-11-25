@@ -337,9 +337,11 @@ int main(int argc, char** argv) {
                 break;
             }
             a.TickTransport(); a.SyncBrickSound(); a.RefreshChordLive();
+            // With --threads the audio thread moves the project (a queued launch lands): the invariants are read under the lock, like
+            // the real UI reads it (reading them after unlock was a data race TSan found once the OPEN / GO ops queued launches).
+            if (threads) failures += Check(a, kOpNames[op], seed, n);
             uiLock.unlock();
-            if (!threads) render(2 + R(6));
-            failures += Check(a, kOpNames[op], seed, n);
+            if (!threads) { render(2 + R(6)); failures += Check(a, kOpNames[op], seed, n); }
             if (a.sequencer.SceneLockViolations() > 0) { std::cout << "SCENE LOCK MISSING seed " << seed << " op " << kOpNames[op] << "\n"; ++lockMisses; a.sequencer.ResetSceneLockViolations(); }
         }
         stop.store(true);
