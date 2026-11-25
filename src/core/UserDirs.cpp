@@ -164,6 +164,20 @@ std::string RecordingPath(const std::string& suffix, const std::string& ext) {
     return StampedPath(RecordingsDir(), S().projectName, suffix, ext);
 }
 
+std::string RecordingFolder(const std::string& suffix) {
+    const std::string dir = RecordingsDir();
+    MkdirP(dir);
+    const std::string name = SanitizeName(S().projectName.empty() ? std::string("TR-Brick") : S().projectName, "TR-Brick");
+    const std::string stem = dir + "/" + name + " " + TimeStamp(0) + suffix;
+    std::string path = stem;
+    for (int n = 2; n < 1000; ++n) {
+        if (::mkdir(path.c_str(), 0755) == 0) return path;
+        if (errno != EEXIST) return std::string();
+        path = stem + " " + std::to_string(n);
+    }
+    return std::string();
+}
+
 std::string DisplayPath(const std::string& path) {
     const std::string root = Root() + "/";
     if (!S().legacy && path.compare(0, root.size(), root) == 0) return path.substr(root.size());

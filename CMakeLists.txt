@@ -67,6 +67,7 @@ add_library(t8core STATIC
     src/core/Persistence.cpp
     src/core/UserDirs.cpp
     src/core/Recorder.cpp
+    src/core/WavStream.cpp
     src/core/MultitrackRecorder.cpp
     src/core/ZipWriter.cpp
     src/core/Risers.cpp
