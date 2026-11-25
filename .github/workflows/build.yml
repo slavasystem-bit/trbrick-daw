@@ -1,10 +1,18 @@
 name: build
-# Every pull request and every change to main runs all of these. The TR-Brick button on
+# Every pull request and every change to main runs the Linux jobs below. The TR-Brick button on
 # the Mac (tools/mac/launch.sh) refuses to start a pull request unless they are all green.
+# Saving GitHub Actions minutes (private repo, macOS minutes bill 10x):
+#   - the macOS job runs only on main (after a merge) and when started by hand (Run workflow);
+#     on pull requests it shows as "skipped", which the Mac button counts as passed;
+#   - changes that touch only documents (*.md, docs/) do not build at all; docs.yml gives
+#     those pull requests a quick check so they are not left with no checks;
+#   - a newer push to the same pull request or to main cancels the older run.
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
 
 concurrency:
@@ -74,6 +82,8 @@ jobs:
 
   macos:
     name: macOS build and selftest
+    # pull requests skip it to save minutes (see the top of this file); main and manual runs keep it
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 40
     steps:

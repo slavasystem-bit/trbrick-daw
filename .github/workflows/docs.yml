@@ -1,0 +1,24 @@
+name: docs
+# Pull requests that change documents (*.md, docs/) get this quick check. For a docs-only pull
+# request build.yml does not run at all (to save minutes), so without this the Mac button would
+# see "checks not started" forever. Pull requests that also change code get both workflows.
+on:
+  pull_request:
+    paths: ['**.md', 'docs/**']
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: Documents check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No unresolved merge conflict markers in documents
+        run: |
+          if git grep -nE '^(<<<<<<<|>>>>>>>) ' -- '*.md' 'docs/'; then
+            echo "a document still has merge conflict markers"; exit 1
+          fi
