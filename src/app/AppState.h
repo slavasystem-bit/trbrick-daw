@@ -234,7 +234,10 @@ struct AppState {
     // before a sound / FX / chain edit; PushSoundUndo coalesces a continuous
     // knob drag (changes less than 0.8 s apart) into ONE undo step.
     struct UndoEntry {
-        enum class Kind { Pattern, Sound } kind = Kind::Pattern;
+        enum class Kind { Pattern, Sound, Link } kind = Kind::Pattern;
+        // Kind::Link (v44.59, DATA-6): the LINK groups of the LIVE scenes and the mute / solo of every LIVE scene (linking overwrites them)
+        std::array<uint8_t, kNumLiveScenes> links{};
+        std::array<uint16_t, kNumLiveScenes> muteBits{}, soloBits{};
         int patternIndex = 0;                 // Kind::Pattern: which scene
         Pattern pattern;                      // Kind::Pattern
         std::array<SynthPatch, kNumSynthTracks> synthPatches{};   // Kind::Sound ... (the patches of scene `patternIndex`)
@@ -335,8 +338,29 @@ struct AppState {
     void DropLastUndo() { if (!undoStack.empty()) undoStack.pop_back(); lastSoundUndoPush_ = -100.0; }
     void ClearUndo() { undoStack.clear(); redoStack.clear(); lastSoundUndoPush_ = -100.0; }
 
+    // v44.59 (DATA-6): one undo step for a LINK change: the groups and the mute / solo of every LIVE scene. Applies whatever scene is open.
+    UndoEntry CaptureLinks() const {
+        UndoEntry e;
+        e.kind = UndoEntry::Kind::Link;
+        e.patternIndex = project.currentPattern;
+        e.links = project.sceneLink;
+        for (int s = 0; s < kNumLiveScenes; ++s)
+            for (int t = 0; t < kNumTracks; ++t) {
+                const Track& tr = project.patterns[static_cast<size_t>(s)].tracks[static_cast<size_t>(t)];
+                if (tr.mute) e.muteBits[static_cast<size_t>(s)] |= static_cast<uint16_t>(1u << t);
+                if (tr.solo) e.soloBits[static_cast<size_t>(s)] |= static_cast<uint16_t>(1u << t);
+            }
+        return e;
+    }
+    void PushLinkUndo() {
+        if (SwitchApplying()) return;
+        redoStack.clear();
+        undoStack.push_back(CaptureLinks());
+        TrimUndo();
+    }
     // A snapshot of the CURRENT state in the same shape (kind, scene, chord scene) as `like`.
     UndoEntry CaptureLike(const UndoEntry& like) {
+        if (like.kind == UndoEntry::Kind::Link) return CaptureLinks();
         UndoEntry c;
         c.kind = like.kind;
         c.patternIndex = like.patternIndex;
@@ -367,6 +391,22 @@ struct AppState {
     // Writes the snapshot back. A Pattern entry must belong to the scene being edited (the caller checks).
     std::string ApplyEntry(const UndoEntry& e) {
         const int cur = project.currentPattern;
+        if (e.kind == UndoEntry::Kind::Link) {
+            project.sceneLink = e.links;
+            for (int s = 0; s < kNumLiveScenes; ++s)
+                for (int t = 0; t < kNumTracks; ++t) {
+                    Track& tr = project.patterns[static_cast<size_t>(s)].tracks[static_cast<size_t>(t)];
+                    tr.mute = (e.muteBits[static_cast<size_t>(s)] >> t) & 1u;
+                    tr.solo = (e.soloBits[static_cast<size_t>(s)] >> t) & 1u;
+                }
+            const int pl = sequencer.PlayPatternIndex();
+            if (pl >= 0 && pl < kNumLiveScenes)
+                for (int t = 0; t < kNumTracks; ++t) {
+                    engine.GetMixer().tracks[static_cast<size_t>(t)].mute = project.patterns[static_cast<size_t>(pl)].tracks[static_cast<size_t>(t)].mute;
+                    engine.GetMixer().tracks[static_cast<size_t>(t)].solo = project.patterns[static_cast<size_t>(pl)].tracks[static_cast<size_t>(t)].solo;
+                }
+            return "LINK";
+        }
         if (e.kind == UndoEntry::Kind::Pattern) {
             bool keepMute[kNumTracks], keepSolo[kNumTracks];
             for (int t = 0; t < kNumTracks; ++t) { keepMute[t] = CurrentPattern().tracks[t].mute; keepSolo[t] = CurrentPattern().tracks[t].solo; }
@@ -413,7 +453,7 @@ struct AppState {
     int FindApplicable(const std::vector<UndoEntry>& stack) const {
         for (int i = static_cast<int>(stack.size()) - 1; i >= 0; --i) {
             const UndoEntry& e = stack[static_cast<size_t>(i)];
-            if (e.kind == UndoEntry::Kind::Pattern && e.patternIndex != project.currentPattern) continue;   // another scene's history
+            if (e.kind == UndoEntry::Kind::Pattern && e.patternIndex != project.currentPattern) continue;   // another scene's history (a Link step applies anywhere)
             return i;
         }
         return -1;
@@ -2684,17 +2724,74 @@ struct AppState {
         project.sceneLink[static_cast<size_t>(scene)] = 0;
         NormalizeLinks();
     }
-    // Shift-click on a pad (or a click while LINK is lit): join / leave the group of the scene that is edited. On the edited scene itself: leave.
+    // v44.59 (DATA-6): every LINK change is one undo step that also brings back the mute / solo it overwrote.
+    // The right-click menu of a pad: join / leave the group of the open scene. On the open scene itself: leave.
     void ToggleSceneLink(int scene) {
         const int ref = project.currentPattern;
         if (scene < 0 || scene >= kNumLiveScenes || ref >= kNumLiveScenes) return;
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        PushLinkUndo();
         if (scene == ref || ScenesLinked(scene, ref)) {
             UnlinkScene(scene);
-            SetStatus("SCENE " + std::to_string(scene + 1) + " IS NOT LINKED ANY MORE");
+            SetStatus("SCENE " + std::to_string(scene + 1) + " IS NOT LINKED ANY MORE - CMD+Z UNDOES");
         } else {
             LinkScenes(scene, ref);
-            SetStatus("SCENES " + std::to_string(ref + 1) + " + " + std::to_string(scene + 1) + " LINKED: SAME MUTE AND SOLO");
+            SetStatus("SCENES " + std::to_string(ref + 1) + " + " + std::to_string(scene + 1) + " LINKED: SAME MUTE AND SOLO - CMD+Z UNDOES");
         }
+    }
+    // Leave the group, as one undo step (the LINK button's UNLINK, the menu's "Leave its link group").
+    void UnlinkSceneUndoable(int scene) {
+        if (SceneGroupOf(scene) == 0) return;
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        PushLinkUndo();
+        UnlinkScene(scene);
+        SetStatus("SCENE " + std::to_string(scene + 1) + " IS NOT LINKED ANY MORE - CMD+Z UNDOES");
+    }
+    // The pads selected with Shift+click (range) / Cmd+click (one by one); bit i = LIVE scene i. The LINK button acts on them.
+    uint16_t sceneSel = 0;
+    int sceneSelAnchor = -1;
+    int SceneSelCount() const { int n = 0; for (int i = 0; i < kNumLiveScenes; ++i) if ((sceneSel >> i) & 1u) ++n; return n; }
+    // "01-03" for a run, "01+05+07" otherwise
+    std::string SceneSelLabel() const {
+        int first = -1, last = -1; bool run = true;
+        for (int i = 0; i < kNumLiveScenes; ++i) if ((sceneSel >> i) & 1u) { if (first < 0) first = i; else if (i != last + 1) run = false; last = i; }
+        if (first < 0) return "";
+        char b[96];
+        if (run) { std::snprintf(b, sizeof(b), "%02d-%02d", first + 1, last + 1); return b; }
+        std::string r;
+        for (int i = 0; i < kNumLiveScenes; ++i) if ((sceneSel >> i) & 1u) { std::snprintf(b, sizeof(b), "%s%02d", r.empty() ? "" : "+", i + 1); r += b; }
+        return r;
+    }
+    // Shift+click: the range from the anchor (else the open scene) to `i`; Cmd+click: add / remove one; a plain click: nothing selected.
+    void SelectScenePad(int i, bool range, bool toggle) {
+        if (i < 0 || i >= kNumLiveScenes) return;
+        if (range) {
+            int a = sceneSelAnchor >= 0 ? sceneSelAnchor : std::clamp(project.currentPattern, 0, kNumLiveScenes - 1);
+            if (a >= kNumLiveScenes) a = i;
+            sceneSel = 0;
+            for (int k = std::min(a, i); k <= std::max(a, i); ++k) sceneSel |= static_cast<uint16_t>(1u << k);
+            sceneSelAnchor = a;
+        } else if (toggle) {
+            if (sceneSel == 0 && project.currentPattern < kNumLiveScenes && project.currentPattern != i) sceneSel |= static_cast<uint16_t>(1u << project.currentPattern);
+            sceneSel ^= static_cast<uint16_t>(1u << i);
+            sceneSelAnchor = i;
+        } else { sceneSel = 0; sceneSelAnchor = i; }
+    }
+    // The LINK button with two or more pads selected: they become one group (with the group of the open scene when it is among them,
+    // else of the first). The mute / solo come from the open scene when it is selected (the one you hear), else from the first selected.
+    // One undo step. Returns how many scenes are in the group.
+    int LinkSelectedScenes() {
+        if (SceneSelCount() < 2) return 0;
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        int ref = -1;
+        if (project.currentPattern < kNumLiveScenes && ((sceneSel >> project.currentPattern) & 1u)) ref = project.currentPattern;
+        else for (int i = 0; i < kNumLiveScenes; ++i) if ((sceneSel >> i) & 1u) { ref = i; break; }
+        PushLinkUndo();
+        for (int i = 0; i < kNumLiveScenes; ++i) if (i != ref && ((sceneSel >> i) & 1u)) LinkScenes(i, ref);
+        const std::string what = SceneSelLabel();
+        sceneSel = 0;
+        SetStatus("LINKED " + what + " (MUTE / SOLO FROM " + (ref < 9 ? "0" : "") + std::to_string(ref + 1) + ") - CMD+Z UNDOES");
+        return LinkedCountOf(ref);
     }
     // "01+02+03": the group a scene is in, for the display ("" when it stands alone)
     std::string LinkLabel(int scene) const {
@@ -2703,11 +2800,10 @@ struct AppState {
         for (int i = 0; i < kNumLiveScenes; ++i) if (project.sceneLink[static_cast<size_t>(i)] == g) { char b[8]; std::snprintf(b, sizeof(b), "%s%02d", r.empty() ? "" : "+", i + 1); r += b; }
         return r;
     }
-    bool linkMode = false;   // the LINK button: while lit, a plain click on a pad links / unlinks it (instead of launching it)
-
-    // EDIT: on LIVE, a click on a pad only opens the scene in the editor; the player keeps playing the scene it plays. GO launches the edited
-    // scene (quantized by LAUNCH, like any launch); a double click on a pad does the same. Stopped, or in song mode, there is nothing to hold apart.
-    bool editOnly = false;
+    // CLICK: LAUNCH | OPEN (v44.59, replaces the EDIT and LINK modes of v44.58). OPEN: on LIVE, a click on a pad only opens the scene in the
+    // editor; the player keeps playing the scene it plays. GO launches the open scene (quantized by LAUNCH, like any launch). A double click on
+    // a pad always opens (OpenScenePad). Stopped, or in song mode, there is nothing to hold apart. Remembered in ui_settings.cfg (clickopen=).
+    bool clickOpens = false;
     bool SceneIsHeldApart() const { return sequencer.IsPlaying() && !sequencer.IsSongModeActive() && sequencer.PlayPatternIndex() != project.currentPattern && project.currentPattern < kNumLiveScenes; }
     void SelectSceneForEdit(int scene) {
         if (scene < 0 || scene >= kNumLiveScenes) return;
@@ -2719,6 +2815,50 @@ struct AppState {
         if (EditIsPlaying()) { engine.GetMixer().SyncFromPattern(CurrentPattern()); sequencer.ApplySceneSound(project.currentPattern); }
     }
     void GoToEditedScene() { sequencer.LaunchScene(project.currentPattern); }
+    // A double click on a pad: open it without launching. With LAUNCH on BEAT / BAR the first click only queued the launch: it is cancelled.
+    // (With LAUNCH = NOW the first click has already started the scene; CLICK: OPEN is the way to prepare a scene silently.)
+    void OpenScenePad(int scene) {
+        if (scene < 0 || scene >= kNumLiveScenes) return;
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        if (sequencer.PendingScene() == scene) sequencer.ClearPendingScene();
+        SelectSceneForEdit(scene);
+    }
+    // What one frame of mouse input on a SCENES pad means (ChainPanel passes ImGui's facts; the selftest replays real click sequences).
+    // released = the pad's Button returned true (it fires on EVERY release, also the one that ends a double click);
+    // doubleClicked = the second press of a double click landed on the pad; clickCount = io.MouseClickedLastCount[0] (2 on that second
+    // release). A double click is: release 1 -> Click, press 2 -> DoubleClick, release 2 -> None (the release that ends a double click
+    // must not launch again, or LAUNCH = BEAT / BAR would queue the scene the double click just cancelled).
+    enum class PadGesture { None, Click, DoubleClick, SelectRange, SelectAdd };
+    static PadGesture ScenePadGesture(bool released, bool doubleClicked, int clickCount, bool shift, bool cmd) {
+        if (shift || cmd) return (released && clickCount < 2) ? (shift ? PadGesture::SelectRange : PadGesture::SelectAdd) : PadGesture::None;
+        if (doubleClicked) return PadGesture::DoubleClick;
+        if (released && clickCount < 2) return PadGesture::Click;
+        return PadGesture::None;
+    }
+    // A gesture on pad `scene` outside song mode (song mode: ChainPanel keeps its own LaunchOrSwitchScene / SwitchPattern).
+    void ScenePadInput(int scene, PadGesture g) {
+        switch (g) {
+            case PadGesture::SelectRange: SelectScenePad(scene, true, false); break;
+            case PadGesture::SelectAdd:   SelectScenePad(scene, false, true); break;
+            case PadGesture::Click:
+                SelectScenePad(scene, false, false);
+                if (clickOpens) SelectSceneForEdit(scene); else LaunchScenePad(scene);
+                break;
+            case PadGesture::DoubleClick: OpenScenePad(scene); break;
+            case PadGesture::None: break;
+        }
+    }
+    // A launch click while a scene is held apart: the editor first goes back to the scene that plays (the player is not moved), then the
+    // clicked scene is launched as usual.
+    void LaunchScenePad(int scene) {
+        if (scene < 0 || scene >= kNumLiveScenes) return;
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        if (SceneIsHeldApart()) {
+            project.currentPattern = sequencer.PlayPatternIndex();
+            sequencer.ReleasePin();
+        }
+        sequencer.LaunchScene(scene);
+    }
 
     // The scene a click on the LIVE switches means. While a launch waits for its boundary it is the scene that is coming, so a kick muted now
     // is muted from the first beat of that scene (and the playing scene is not touched); otherwise the edited scene. -1: the edited scene.

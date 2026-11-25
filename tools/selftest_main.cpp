@@ -6342,6 +6342,80 @@ int main(int argc, char** argv) {
         check(a.sequencer.PlayPatternIndex() == 4 && !a.sequencer.IsPinned() && a.engine.GetMixer().tracks[snare].mute && !a.SceneIsHeldApart(), "edit: it starts on the bar line with the changes, and the editor and the player are one again");
         a.SelectSceneForEdit(4);
         check(!a.sequencer.IsPinned(), "edit: opening the playing scene again leaves nothing held apart");
+        // --- v44.59 (DATA-6): LINK on the selected pads, one undo step that brings the overwritten mute / solo back
+        {
+            const int pl = a.sequencer.PlayPatternIndex();
+            a.project.currentPattern = pl;
+            a.project.patterns[6].tracks[kick].mute = true; a.project.patterns[7].tracks[snare].mute = true;
+            a.project.currentPattern = 6;
+            a.SelectScenePad(6, false, false); a.SelectScenePad(7, true, false);
+            check(a.SceneSelCount() == 2 && a.SceneSelLabel() == "07-08", "link v44.59: Shift+click selects a range of pads");
+            check(a.LinkSelectedScenes() == 2 && a.ScenesLinked(6, 7) && a.project.patterns[7].tracks[kick].mute && !a.project.patterns[7].tracks[snare].mute && a.SceneSelCount() == 0,
+                  "link v44.59: LINK joins the selected scenes; the mute / solo come from the open scene");
+            a.project.currentPattern = 2;   // a link step undoes whatever scene is open
+            check(a.Undo() && !a.ScenesLinked(6, 7) && a.project.patterns[7].tracks[snare].mute && !a.project.patterns[7].tracks[kick].mute && a.project.patterns[6].tracks[kick].mute,
+                  "link v44.59: Cmd+Z undoes the link and brings back the mutes it overwrote");
+            check(a.Redo() && a.ScenesLinked(6, 7) && a.project.patterns[7].tracks[kick].mute, "link v44.59: redo links them again");
+            a.project.currentPattern = 7;
+            a.UnlinkSceneUndoable(7);
+            check(!a.ScenesLinked(6, 7) && a.Undo() && a.ScenesLinked(6, 7), "link v44.59: UNLINK is one undo step too");
+            a.ToggleSceneLink(7);
+            check(!a.ScenesLinked(6, 7) && a.Undo() && a.ScenesLinked(6, 7), "link v44.59: the right-click menu's link / unlink is undoable");
+            a.UnlinkScene(6); a.UnlinkScene(7);
+            a.project.patterns[6].tracks[kick].mute = false; a.project.patterns[7].tracks[kick].mute = false; a.project.patterns[7].tracks[snare].mute = false;
+            a.project.currentPattern = 6;
+            a.SelectScenePad(6, false, false); a.SelectScenePad(10, false, true);
+            check(a.SceneSelCount() == 2 && a.SceneSelLabel() == "07+11", "link v44.59: Cmd+click adds one pad");
+            a.SelectScenePad(3, false, false);
+            check(a.SceneSelCount() == 0, "link v44.59: a plain click clears the selection");
+            a.project.currentPattern = pl;
+            a.engine.GetMixer().SyncFromPattern(a.project.patterns[static_cast<size_t>(pl)]);   // the test moved the open scene by hand while playing
+        }
+        // --- v44.59: a double click opens without launching; a launch click while a scene is held apart
+        {
+            a.sequencer.SetLaunchQuantize(2);
+            const int pl = a.sequencer.PlayPatternIndex();
+            const int other = pl == 5 ? 6 : 5, third = pl == 8 ? 9 : 8;
+            a.project.currentPattern = pl;
+            a.LaunchScenePad(other);
+            check(a.sequencer.PendingScene() == other, "pads v44.59: a click (CLICK: LAUNCH, LAUNCH = BAR) queues the scene");
+            a.OpenScenePad(other);
+            check(a.sequencer.PendingScene() < 0 && a.project.currentPattern == other && a.sequencer.PlayPatternIndex() == pl && a.SceneIsHeldApart(),
+                  "pads v44.59: the double click cancels the queued launch and only opens the scene");
+            a.LaunchScenePad(third);
+            check(a.project.currentPattern == pl && !a.sequencer.IsPinned() && a.sequencer.PendingScene() == third,
+                  "pads v44.59: a launch click while a scene is open apart: the editor goes back to the playing scene, the clicked one is queued");
+            a.sequencer.ClearPendingScene();
+            // The real mouse path, frame by frame as ImGui reports it (its Button fires on BOTH releases of a double click; the
+            // second release comes with MouseClickedLastCount = 2). Replayed through ScenePadGesture + ScenePadInput like ChainPanel.
+            using G = AppState::PadGesture;
+            auto frame = [&](int pad, bool released, bool dbl, int count, bool shift = false, bool cmd = false) {
+                a.ScenePadInput(pad, AppState::ScenePadGesture(released, dbl, count, shift, cmd));
+            };
+            a.project.currentPattern = pl; a.sequencer.ReleasePin(); a.clickOpens = false;
+            frame(other, false, false, 1);   // press 1
+            frame(other, true, false, 1);    // release 1: launch queued
+            check(a.sequencer.PendingScene() == other, "pads v44.59 (mouse): release 1 of a double click queues the launch (LAUNCH = BAR)");
+            frame(other, false, true, 2);    // press 2: double click
+            frame(other, true, false, 2);    // release 2: must do nothing
+            frame(other, false, false, 2);   // the frames after
+            check(a.sequencer.PendingScene() < 0 && a.project.currentPattern == other && a.sequencer.PlayPatternIndex() == pl && a.SceneIsHeldApart(),
+                  "pads v44.59 (mouse): after the whole double click nothing is queued and the scene is only open");
+            check(AppState::ScenePadGesture(true, false, 2, false, false) == G::None && AppState::ScenePadGesture(true, false, 3, false, false) == G::None,
+                  "pads v44.59 (mouse): the release ending a double / triple click is not a click");
+            frame(third, true, false, 1);
+            check(a.project.currentPattern == pl && a.sequencer.PendingScene() == third, "pads v44.59 (mouse): a later single click launches as before");
+            a.sequencer.ClearPendingScene();
+            a.SelectScenePad(3, false, false);
+            frame(3, true, false, 1, false, true); frame(3, false, true, 2, false, true); frame(3, true, false, 2, false, true);
+            check(((a.sceneSel >> 3) & 1u) && a.sequencer.PendingScene() < 0, "pads v44.59 (mouse): a Cmd+double click selects once, launches nothing");
+            a.SelectScenePad(3, false, false);
+            a.clickOpens = true;
+            frame(third, true, false, 1); frame(third, false, true, 2); frame(third, true, false, 2);
+            check(a.project.currentPattern == third && a.sequencer.PendingScene() < 0, "pads v44.59 (mouse): CLICK: OPEN, a double click only opens");
+            a.clickOpens = false;
+            a.project.currentPattern = pl; a.sequencer.ReleasePin();
+        }
         // --- ARM: while a launch waits, the switches are for the scene that is coming
         a.project.currentPattern = 4; a.sequencer.ReleasePin(); a.SetMuteScene(snare, false);
         a.sequencer.LaunchScene(6);

@@ -176,6 +176,7 @@ int main(int argc, char** argv) {
             if (line.rfind("nextbar=", 0) == 0) app.quantizeSwitches = std::atoi(line.c_str() + 8) != 0;   // v44.54
             if (line.rfind("pitchrange=", 0) == 0) app.pitchRange16 = std::atoi(line.c_str() + 11) >= 16;   // v44.57 (the fader itself is not saved)
             if (line.rfind("lastproject=", 0) == 0) lastProject = line.substr(12);
+            if (line.rfind("clickopen=", 0) == 0) app.clickOpens = std::atoi(line.c_str() + 10) != 0;   // v44.59: CLICK: LAUNCH | OPEN of the SCENES row
         }
     }
     // v44.8: the very first launch of this version starts with the instrument block folded and the starter groove in scene 1
@@ -194,9 +195,10 @@ int main(int argc, char** argv) {
     int savedZoomIdx = app.uiZoomIdx;
     bool savedDetail = app.detailOpen;
     bool savedNextBar = app.quantizeSwitches;
+    bool savedClickOpens = app.clickOpens;
     auto writeUiSettings = [&]() {
         std::ofstream cf("ui_settings.cfg", std::ios::trunc);
-        cf << "zoom=" << app.uiZoomIdx << "\ndetail=" << (app.detailOpen ? 1 : 0) << "\nnextbar=" << (app.quantizeSwitches ? 1 : 0) << "\npitchrange=" << (app.pitchRange16 ? 16 : 8) << "\nlastproject=" << app.projectPath << "\n";
+        cf << "zoom=" << app.uiZoomIdx << "\ndetail=" << (app.detailOpen ? 1 : 0) << "\nnextbar=" << (app.quantizeSwitches ? 1 : 0) << "\npitchrange=" << (app.pitchRange16 ? 16 : 8) << "\nclickopen=" << (app.clickOpens ? 1 : 0) << "\nlastproject=" << app.projectPath << "\n";
     };
     if (firstRunSettings) writeUiSettings();
     float uiZoom = 1.0f;   // layout zoom of the previous frame (mouse positions are divided by it)
@@ -811,8 +813,9 @@ int main(int argc, char** argv) {
             const std::string title = name + (titleEdited ? " \xE2\x80\x94 Edited" : "") + " \xE2\x80\x94 TR-Brick";
             SDL_SetWindowTitle(window, title.c_str());
         }
-        if (app.uiZoomIdx != savedZoomIdx || app.detailOpen != savedDetail || app.quantizeSwitches != savedNextBar || app.projectPath != savedProject) {
+        if (app.uiZoomIdx != savedZoomIdx || app.detailOpen != savedDetail || app.quantizeSwitches != savedNextBar || app.clickOpens != savedClickOpens || app.projectPath != savedProject) {
             savedNextBar = app.quantizeSwitches;
+            savedClickOpens = app.clickOpens;
             savedZoomIdx = app.uiZoomIdx;
             savedDetail = app.detailOpen;
             savedProject = app.projectPath;
