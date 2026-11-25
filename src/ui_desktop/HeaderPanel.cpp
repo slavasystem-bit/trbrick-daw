@@ -7,6 +7,7 @@
 #include "imgui.h"
 #include "InfoLine.h"
 #include "core/Scales.h"
+#include <SDL.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -50,7 +51,7 @@ void HeaderPanel::DrawMenus(AppState& app) {
 
 // v44.57: PITCH, a turntable pitch fader for the whole output. Lives at the right end of the tab row (the header row is full at 1440 px).
 // `rightX`: screen x the strip ends at. Drawn before the tab bar, so the caller puts the cursor back afterwards.
-void HeaderPanel::DrawPitch(AppState& app, float rightX) {
+float HeaderPanel::DrawPitch(AppState& app, float rightX) {
     double bpm;
     {
         std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
@@ -113,6 +114,42 @@ void HeaderPanel::DrawPitch(AppState& app, float rightX) {
         }
     }
     ImGui::PopID();
+    return rightX - stripW;
+}
+
+// N1: audio load and dropouts, right-aligned to `rightX` in the tab row (left of PITCH). It used to sit at the end of the
+// header row, where there is no room at 1440 px, so it was usually hidden. Reads atomics only (no scene lock).
+void HeaderPanel::DrawDropouts(AppState& app, float rightX) {
+    Mixer& mx = app.engine.GetMixer();
+    SceneMutex& sm = app.sequencer.PatternMutex();
+    const float load = mx.audioLoad.load(), peak = mx.audioLoadPeak.load();
+    const unsigned xr = mx.audioXruns.load();
+    const unsigned longestMs = (mx.audioLongestUs.load() + 500) / 1000;
+    char b[64];
+    if (xr) std::snprintf(b, sizeof(b), "DSP %.0f%%   XRUN %u (%u ms)", load * 100.0f, xr, longestMs);
+    else std::snprintf(b, sizeof(b), "DSP %.0f%%   XRUN 0", load * 100.0f);
+    ImGui::SetCursorScreenPos(ImVec2(rightX - ImGui::CalcTextSize(b).x, ImGui::GetCursorScreenPos().y));
+    ImGui::AlignTextToFramePadding();
+    const ImVec4 col = xr ? ImVec4(0.91f, 0.30f, 0.30f, 1.0f) : (load > 0.6f ? ImVec4(0.95f, 0.64f, 0.24f, 1.0f) : ImVec4(0.5f, 0.52f, 0.6f, 1.0f));
+    ImGui::TextColored(col, "%s", b);
+    if (ImGui::IsItemHovered()) {
+        // the last few dropouts, newest first: "12s ago 250.0 ms (screen 248.0)"
+        std::string recent;
+        const Uint32 now = SDL_GetTicks();
+        for (unsigned k = 0; k < std::min<unsigned>(xr, 5); ++k) {
+            const Mixer::Dropout& d = mx.dropouts[(xr - 1 - k) % Mixer::kDropoutLog];
+            char e[64];
+            const unsigned ago = (now - d.atMs.load()) / 1000;
+            std::snprintf(e, sizeof(e), "%s%us ago %.1f ms (screen %.1f)", k ? ", " : "", ago, d.lenUs.load() / 1000.0, d.waitUs.load() / 1000.0);
+            recent += e;
+        }
+        const double bufMs = 1000.0 * 128.0 / std::max(1, app.engine.SampleRate());
+        Hint("Audio thread load %.0f%% (recent peak %.0f%%). XRUN = audible dropouts: a buffer (%.1f ms) was not ready in time.\n"
+             "Longest %.1f ms, of which the screen held the sound %.1f ms. The screen held the sound at most %.1f ms.%s%s\nClick to reset.",
+             load * 100.0f, peak * 100.0f, bufMs, mx.audioLongestUs.load() / 1000.0, mx.audioLongestWaitUs.load() / 1000.0,
+             sm.MaxHoldUs() / 1000.0, recent.empty() ? "" : "\nLast: ", recent.c_str());
+    }
+    if (ImGui::IsItemClicked()) { mx.ResetDropouts(); sm.ResetMaxHold(); }
 }
 
 void HeaderPanel::Draw(AppState& app) {
@@ -332,24 +369,6 @@ void HeaderPanel::Draw(AppState& app) {
             if (ImGui::IsItemHovered())
                 Hint("Loudness of the master output (ITU BS.1770 / EBU R128).\nS = short-term (3 s), INT = integrated since the last reset, TP = true peak (dBTP).\nComp GR %.1f dB, limiter GR %.1f dB. Streaming is about -14 LUFS; club masters are often -9..-7.\nClick to reset INT and TP.", gr, lgr);
             if (ImGui::IsItemClicked()) lm.RequestReset();
-        }
-    }
-
-    // ---- audio load / dropouts (E21): small readout next to the meters -------
-    {
-        Mixer& mx = app.engine.GetMixer();
-        float load = mx.audioLoad.load(), peak = mx.audioLoadPeak.load();
-        unsigned xr = mx.audioXruns.load();
-        char b[40];
-        std::snprintf(b, sizeof(b), xr ? "DSP %.0f%%  XRUN %u" : "DSP %.0f%%", load * 100.0f, xr);
-        const float room = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x - ImGui::GetItemRectMax().x;
-        if (room > ImGui::CalcTextSize(b).x + 48.0f) {
-            ImGui::SameLine(0, 12.0f);
-            ImGui::AlignTextToFramePadding();
-            ImVec4 col = xr ? ImVec4(0.91f, 0.30f, 0.30f, 1.0f) : (load > 0.6f ? ImVec4(0.95f, 0.64f, 0.24f, 1.0f) : ImVec4(0.5f, 0.52f, 0.6f, 1.0f));
-            ImGui::TextColored(col, "%s", b);
-            if (ImGui::IsItemHovered()) Hint("Audio thread load: share of each buffer's time used (recent peak %.0f%%).\nXRUN = buffers that ran out of time (audible dropouts). Click to reset.", peak * 100.0f);
-            if (ImGui::IsItemClicked()) mx.audioXruns.store(0);
         }
     }
 

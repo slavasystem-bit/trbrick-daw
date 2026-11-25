@@ -111,6 +111,18 @@ public:
     std::atomic<float> audioLoad{0.0f};
     std::atomic<float> audioLoadPeak{0.0f};
     std::atomic<unsigned> audioXruns{0};
+    // N1: what the dropout readout shows. audioLockWaitUs = time the audio thread waited for the scene lock in the
+    // current callback (added by the sequencer, taken by the callback). The rest is kept since the last reset (click).
+    std::atomic<unsigned> audioLockWaitUs{0};
+    std::atomic<unsigned> audioLongestUs{0};      // longest callback (what the dropout lasted)
+    std::atomic<unsigned> audioLongestWaitUs{0};  // ... of which waiting for the scene lock (the screen held the sound)
+    static constexpr int kDropoutLog = 8;
+    struct Dropout { std::atomic<uint32_t> atMs{0}, lenUs{0}, waitUs{0}; };
+    Dropout dropouts[kDropoutLog];                // the last few, newest at (audioXruns - 1) % kDropoutLog
+    void ResetDropouts() {
+        audioXruns.store(0); audioLongestUs.store(0); audioLongestWaitUs.store(0);
+        for (auto& d : dropouts) { d.atMs.store(0); d.lenUs.store(0); d.waitUs.store(0); }
+    }
     std::atomic<unsigned> audioBlocks{0};   // v44.3: counted by the audio callback; the watchdog in main() sees a stalled device when it stops moving
 
     // Allocates each track's TrackInsertFx DSP state (EQ filter + chorus
