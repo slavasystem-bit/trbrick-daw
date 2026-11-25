@@ -3,6 +3,7 @@
 #include "Visual.h"
 #include "MixerSync.h"
 #include "LiveWidgets.h"
+#include "SampleRow.h"
 #include "ValueField.h"
 #include "BrickGlyphs.h"
 #include "InstrumentSwitches.h"
@@ -1523,19 +1524,44 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
                                      : (canOut ? "The first brick has nothing before it, so only the transition out of it (into brick 2) is possible."
                                                : "The last brick has nothing after it, so only the transition into it is possible."));
             ImGui::SameLine(0, 8);
+            // C4b: the same row as every other sample: [<] [name v] [>] [HEAR]
             std::string cur = tc.riser < 0 ? std::string("NONE") : (rp.NameAt(tc.riser).empty() ? std::string("?") : rp.NameAt(tc.riser));
-            ImGui::SetNextItemWidth(150);
-            if (ChoiceBegin("##trans", cur.c_str())) {
-                if (ImGui::Selectable("NONE", tc.riser < 0)) { app.PushSoundUndo(); tc.riser = -1; refresh(); }
-                for (int r = 0; r < rp.Count(); ++r) {
-                    if (rp.NameAt(r).empty()) continue;
-                    if (ImGui::Selectable(rp.NameAt(r).c_str(), tc.riser == r)) { app.PushSoundUndo(); tc.riser = static_cast<int8_t>(r); refresh(); }
-                }
-                ImGui::Separator();
-                if (ImGui::Selectable("MY SAMPLES...")) app.OpenLibrary(AppState::LibTarget::Transition, target);   // v44.51
-                ChoiceEnd();
+            std::vector<int> valid;   // the transitions that exist (a missing stock file or an empty user slot is skipped)
+            for (int r = 0; r < rp.Count(); ++r) if (!rp.NameAt(r).empty()) valid.push_back(r);
+            char rowHint[160];
+            std::snprintf(rowHint, sizeof rowHint, "A riser or impact on the border between brick %d and brick %d; its peak lands on the first beat of brick %d. Click = the list.", target, target + 1, target + 1);
+            SampleRowSpec ts;
+            ts.id = "##transRow"; ts.width = 262.0f; ts.label = cur; ts.dot = colors::kTrans;
+            ts.canStep = valid.size() >= 2 || (valid.size() == 1 && tc.riser != valid[0]);
+            ts.canHear = tc.riser >= 0 && !rp.NameAt(tc.riser).empty();
+            ts.nameHint = rowHint;
+            ts.stepHint = "< > = the neighbour transition, at once and silently";
+            ts.hearHint = "Play this transition once, at its LEVEL";
+            ts.noHearHint = "No transition is chosen here.";
+            const SampleRowHit th = SampleRow(ts);
+            if (th.step != 0 && !valid.empty()) {
+                const int nv = static_cast<int>(valid.size());
+                int at = -1;
+                for (int k = 0; k < nv; ++k) if (valid[static_cast<size_t>(k)] == tc.riser) at = k;
+                const int base = at >= 0 ? at : (th.step > 0 ? -1 : 0);   // NONE: > takes the first, < the last
+                app.PushSoundUndo(); tc.riser = static_cast<int8_t>(valid[static_cast<size_t>(((base + th.step) % nv + nv) % nv)]); refresh();
+                app.SetStatus("TRANSITION BEFORE BRICK " + std::to_string(target + 1) + ": " + rp.NameAt(tc.riser));
             }
-            if (ImGui::IsItemHovered()) Hint("A riser or impact on the border between brick %d and brick %d; its peak lands on the first beat of brick %d.\nThe transition lane under the bricks shows it and its left edge can be dragged.", target, target + 1, target + 1);
+            if (th.hear && ts.canHear) app.engine.Risers().TriggerAligned(tc.riser, 0.0, 0.0, 1.0, LevelDbToGain(tc.levels.transitionDb));   // under the scene lock, like the sequencer
+            if (th.open) ImGui::OpenPopup("##transList");
+            if (ImGui::BeginPopup("##transList")) {
+                if (ImGui::Selectable("MY LIBRARY...")) app.OpenLibrary(AppState::LibTarget::Transition, target);   // v44.51
+                if (ImGui::IsItemHovered()) Hint("Your own samples (Library > Show Samples Folder). The file you choose is copied into this project.");
+                ImGui::Separator();
+                if (ImGui::Selectable("NONE", tc.riser < 0)) { app.PushSoundUndo(); tc.riser = -1; refresh(); }
+                ImGui::TextDisabled("BUILT-IN AND THIS PROJECT");
+                for (int r : valid) {
+                    ImGui::PushID(r);
+                    if (ImGui::Selectable(rp.NameAt(r).c_str(), tc.riser == r)) { app.PushSoundUndo(); tc.riser = static_cast<int8_t>(r); refresh(); }
+                    ImGui::PopID();
+                }
+                ImGui::EndPopup();
+            }
             if (tc.riser >= 0) {
                 ImGui::SameLine(0, 6);
                 static const char* const kTBars[4] = {"1", "2", "4", "8"};
@@ -1550,7 +1576,7 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
             capUnder("LEVEL");
             if (ImGui::IsItemHovered()) Hint("How loud this transition is.");
             ImGui::SameLine(0, 10);
-            {   // the lead-in: a ramp that ends where the next brick begins
+            if (ImGui::GetContentRegionAvail().x >= 96.0f) {   // the lead-in: a ramp that ends where the next brick begins (C4b: only when it fits; the lane under the bricks shows it too)
                 const ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + 96.0f, a.y + fh);
                 ImGui::Dummy(ImVec2(96.0f, fh));
                 dl->AddRectFilled(a, b, vis::kInset, 4.0f); dl->AddRect(a, b, vis::kLine, 4.0f);
