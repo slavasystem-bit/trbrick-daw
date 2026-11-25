@@ -424,8 +424,12 @@ void ChainPanel::Draw(AppState& app) {
     }
 
     {   // v44.59: the controls of the SCENES row (no separate PADS row): CLICK: LAUNCH | OPEN, GO, and the LINK action
+        // Every item of the row is placed on the same top line (ry) and has the same height (bh); the texts are centred on it.
+        // (ImGui's SameLine puts the next item on the top of the FIRST item of the line, here the CLICK label: the buttons after
+        // LAUNCH used to land 2 px lower than LAUNCH, so the row looked uneven on the Mac.)
         const float ry = rowY + 36.0f, bh = 20.0f;
-        ImGui::SetCursorPos(ImVec2(x0 + kLabelW, ry + 2.0f));
+        const float textY = ry + std::floor((bh - ImGui::GetTextLineHeight()) * 0.5f);
+        ImGui::SetCursorPos(ImVec2(x0 + kLabelW, textY));
         ImGui::TextDisabled("CLICK");
         ImGui::SameLine(0, 6);
         ImGui::SetCursorPosY(ry);
@@ -438,6 +442,7 @@ void ChainPanel::Draw(AppState& app) {
         }
         if (ImGui::IsItemHovered()) Hint("CLICK: LAUNCH - a click on a pad launches the scene (quantized by LAUNCH in the header). A double click opens it without launching.");
         ImGui::SameLine(0, 0);
+        ImGui::SetCursorPosY(ry);
         if (ToggleButton("OPEN", app.clickOpens, ImVec2(52, bh), ec) && !app.clickOpens) {
             app.clickOpens = true;
             app.SetStatus("CLICK: OPEN - A CLICK ON A PAD ONLY OPENS THE SCENE; GO LAUNCHES IT");
@@ -445,6 +450,7 @@ void ChainPanel::Draw(AppState& app) {
         if (ImGui::IsItemHovered()) Hint("CLICK: OPEN - while the music plays, a click on a pad only opens that scene in the editor: correct it, nothing is heard. GO launches it. The scene that plays keeps playing.");
         ImGui::PopStyleVar();
         ImGui::SameLine(0, 8);
+        ImGui::SetCursorPosY(ry);
         const bool apart = app.SceneIsHeldApart();
         char goLbl[24];
         std::snprintf(goLbl, sizeof(goLbl), apart ? "GO %02d###go" : "GO###go", proj.currentPattern + 1);
@@ -454,6 +460,7 @@ void ChainPanel::Draw(AppState& app) {
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint(apart ? "GO: launch the open scene (quantized by LAUNCH in the header)." : "GO: lights up when the open scene is not the one that plays.");
         ImGui::SameLine(0, 4);
+        ImGui::SetCursorPosY(ry);
         // LINK acts on the selected pads; with none selected and the open scene linked it takes the open scene out of its group.
         const int nSel = app.SceneSelCount();
         const bool openLinked = proj.currentPattern < kNumLiveScenes && app.SceneGroupOf(proj.currentPattern) != 0;
@@ -471,7 +478,7 @@ void ChainPanel::Draw(AppState& app) {
             Hint("LINK: linked scenes share mute and solo, so you can play across them without anything changing.\nSelect the scenes with Shift+click (a range) or Cmd+click (one by one), then LINK. With a linked scene open and nothing selected: UNLINK takes it out of its group.\nThe mute / solo come from the open scene. Cmd+Z undoes a link, mutes included.");
         ImGui::PopStyleVar();
         ImGui::SameLine(0, 10);
-        ImGui::AlignTextToFramePadding();
+        ImGui::SetCursorPosY(textY);
         char info[160] = "";
         ImVec4 infoCol(0.55f, 0.85f, 0.65f, 1.0f);
         if (nSel >= 2) { std::snprintf(info, sizeof(info), "%d SCENES SELECTED - LINK makes them share mute / solo", nSel); infoCol = ImVec4(0.62f, 0.74f, 1.0f, 1.0f); }

@@ -13,6 +13,10 @@ ROADMAP "Samples in one place" (C4b), item 1 and the words; approved mockup `doc
 - **The library browser's title says where the file goes:** `SAMPLE FOR: KICK`, `SAMPLE FOR: SAMPLER`, `SAMPLE FOR: BASS`, `SAMPLE FOR: TRANSITION BEFORE BRICK 3` (was "MY SAMPLES: DRUM / SAMPLER / TRANSITION", and "THE SAMPLER" for a bass on SAMPLE).
 - Not in this part (later C4b PRs): the one SAMPLES browser with sources / list view / folders, the kit browser's click = select, genres and tags, THIS PROJECT = in use only, waveform gestures, drum samples copied into the project (a file picked for a drum still replaces it in the kit as before), FILL: SAMPLE.
 
+## v44.59.1: SCENES row controls line up
+
+- The CLICK label and the LAUNCH | OPEN, GO and LINK buttons under the SCENES pads now sit on one line with one height (`ChainPanel`): ImGui's `SameLine` put every button after LAUNCH on the top of the CLICK label, 2 px lower (reported on the Mac). Texts are centred on the buttons.
+
 ## Stage N1 (part 3): samples, kits and folder scans off the scene lock
 
 Audit v44.58 LIVE-2 and LIVE-10.
