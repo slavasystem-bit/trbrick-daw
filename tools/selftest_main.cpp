@@ -590,6 +590,66 @@ int main(int argc, char** argv) {
         fs::remove_all("selftest_n2", ec);
     }
 
+    // ---- v44.59 (stage Н2, LIVE-8): a damaged WAV / AIFF never reads past its buffers, never allocates gigabytes ----------------
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::create_directories("selftest_tmp_wav8", ec);
+        std::vector<float> tone(4410);
+        for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.5f * std::sin(static_cast<float>(i) * 0.06f);
+        const std::string good = "selftest_tmp_wav8/good.wav";
+        check(WriteWavPCM16(good, tone, 1, 44100) && !fs::exists(good + ".tmp"), "live-8: a WAV is written through a temporary file (none left behind)");
+        check(!WriteWavPCM16("selftest_tmp_wav8/no_such_folder/x.wav", tone, 1, 44100), "live-8: a WAV that cannot be written is reported");
+        std::string bytes;
+        { std::ifstream in(good, std::ios::binary); bytes.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); }
+        auto put32 = [](std::string& b, size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) b[at + static_cast<size_t>(i)] = static_cast<char>((v >> (8 * i)) & 0xFF); };
+        auto write = [](const std::string& path, const std::string& b) { std::ofstream o(path, std::ios::binary | std::ios::trunc); o << b; };
+        SampleBuffer sb;
+        {   // the data chunk claims 4 GB: only what the file holds is read, quickly
+            std::string b = bytes; put32(b, 40, 0xFFFFFFF0u);
+            write("selftest_tmp_wav8/huge.wav", b);
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool ok = LoadWav("selftest_tmp_wav8/huge.wav", sb, 44100);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            check(ok && sb.data.size() == tone.size() && ms < 200.0, "live-8: a header that claims 4 GB loads what is really there, at once");
+        }
+        {   // a fmt chunk shorter than its 16 fields
+            std::string b = bytes.substr(0, 12) + std::string("fmt \x04\0\0\0\x01\0\x01\0", 12) + bytes.substr(36);
+            write("selftest_tmp_wav8/shortfmt.wav", b);
+            check(!LoadWav("selftest_tmp_wav8/shortfmt.wav", sb, 44100), "live-8: a short fmt chunk is refused (it was read past its end)");
+        }
+        {   // a sample rate of 1 Hz would make the resampler produce 44100 times the data
+            std::string b = bytes; put32(b, 24, 1u);
+            write("selftest_tmp_wav8/rate1.wav", b);
+            check(!LoadWav("selftest_tmp_wav8/rate1.wav", sb, 44100), "live-8: an absurd sample rate is refused");
+        }
+        {   // an AIFF whose sound chunk claims 4 GB
+            std::vector<float> st(200, 0.25f);
+            std::string a = "FORM____AIFFCOMM";
+            auto be32s = [](uint32_t v) { std::string s(4, '\0'); for (int i = 0; i < 4; ++i) s[static_cast<size_t>(i)] = static_cast<char>((v >> (24 - 8 * i)) & 0xFF); return s; };
+            a += be32s(18) + std::string("\0\x01", 2) + be32s(200) + std::string("\0\x10", 2) + std::string("\x40\x0E\xAC\x44\0\0\0\0\0\0", 10);
+            a += "SSND" + be32s(0xFFFFFFF0u) + be32s(0) + be32s(0) + std::string(400, '\x10');
+            write("selftest_tmp_wav8/huge.aif", a);
+            check(LoadWav("selftest_tmp_wav8/huge.aif", sb, 44100) && sb.data.size() == 200, "live-8: an AIFF that claims 4 GB loads what is really there");
+        }
+        {   // 400 random damages of the header and the first samples: never a crash or a hang, a load gives whole frames
+            uint32_t rng = 12345u;
+            auto next = [&]() { rng = rng * 1664525u + 1013904223u; return rng; };
+            bool sane = true;
+            for (int n = 0; n < 400; ++n) {
+                std::string b = bytes;
+                const int hits = 1 + static_cast<int>(next() % 4);
+                for (int h = 0; h < hits; ++h) b[next() % 64] = static_cast<char>(next() & 0xFF);
+                if (next() % 3 == 0) b.resize(next() % b.size());
+                write("selftest_tmp_wav8/fz.wav", b);
+                SampleBuffer z;
+                if (LoadWav("selftest_tmp_wav8/fz.wav", z, 44100) && (z.channels < 1 || z.channels > 2 || z.data.size() % static_cast<size_t>(z.channels) != 0 || z.data.size() > 50u * 1000 * 1000)) sane = false;
+            }
+            check(sane, "live-8: 400 randomly damaged WAV files: no crash, no hang, only whole frames");
+        }
+        fs::remove_all("selftest_tmp_wav8", ec);
+    }
+
     // ---- Undo is tied to scenes and also covers sound / chain ---------------
     {
         AppState app;
