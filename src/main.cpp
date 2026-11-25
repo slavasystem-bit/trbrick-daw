@@ -293,6 +293,7 @@ int main(int argc, char** argv) {
     }
     if (resumedUntitled) app.MarkUnsaved(); else app.MarkSaved();   // U8b: what the document is compared with from now on
     app.sequencer.SetSongFollowsEdit(false); // desktop LIVE: the chain moves playback only, the editor stays where the user put it
+    app.loader.Start();   // N1: from here on samples, kits and folder scans are read off the scene lock (the first sound above is already loaded)
 
     // The audio device was opened above (paused); only now start the callback.
     if (audioDev != 0) SDL_PauseAudioDevice(audioDev, 0);
@@ -384,6 +385,7 @@ int main(int argc, char** argv) {
                 if (!path.empty()) userdirs::SetLastOutput(path);
             }
         }
+        app.loader.Poll();      // N1: files read on the loader thread are put in place here (outside every panel's scene lock)
         app.PollSamplePick();   // v44.50: a file chosen in the native window (takes the scene lock itself, after the file is read)
         if (app.statusMessageTimer > 0.0f) app.statusMessageTimer -= static_cast<float>(dt);
         {
@@ -829,7 +831,7 @@ int main(int argc, char** argv) {
             writeUiSettings();
         }
         folderRescanTimer += dt;
-        if (folderRescanTimer > 3.0) { folderRescanTimer = 0.0; app.InvalidateFolderCaches(); }
+        if (folderRescanTimer > 3.0) { folderRescanTimer = 0.0; app.RescanFoldersInBackground(); }   // N1 (LIVE-10): read off the scene lock
         app.TickDocument(dt);   // U8b: "Edited" = the open project differs from the saved one
         autosaveTimer += dt;
         if (autosaveTimer > 10.0) {
@@ -842,6 +844,7 @@ int main(int argc, char** argv) {
     if (audioDev != 0) SDL_CloseAudioDevice(audioDev);
     app.recorder.Shutdown();               // N1: a take still running at quit is closed properly (the file is already on disk)
     app.engine.Multitrack().Shutdown();
+    app.loader.Stop();
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
