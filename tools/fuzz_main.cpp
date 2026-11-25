@@ -24,7 +24,8 @@ static const char* kOpNames[] = {"ToggleStep","RandomizeDrums","RandomizeMelodic
     "BrickBars","UpdateFromLive","DupBrickAsScene","TakeSound","MakeOwn","FollowTrack","ApplySoundAll","BrickMute","BrickSolo","PlayFromBrick","Transport","Loop",
     "LoopAll","ToStart","Undo","Redo","CopyPastePattern","CopyPasteTrack","CopyInstrument","MatchLevelPanEq","ClearInstrument","ClearPattern","Genre","Drop","Mutes",
     "AdjustToScale","SnapToScale","KeyScale","LaunchScene","SynthPreset","LiveChord","ChordSettings","EditScene","BrickLevels","ParamRow","MatchLevel","SelectBrick",
-    "Starter","SaveLoad","Style","Sampler","SynthSample","NextBar","EuclidKeep"};
+    "Starter","SaveLoad","Style","Sampler","SynthSample","NextBar","EuclidKeep",
+    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged"};
 constexpr int kNumOps = sizeof(kOpNames) / sizeof(kOpNames[0]);
 
 static int Check(AppState& a, const char* op, unsigned seed, int n) {
@@ -68,6 +69,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--verbose")) verbose = true;
     }
     std::filesystem::create_directories("selftest_tmp_fuzz/src");
+    t8::userdirs::SetRootsForTest("selftest_tmp_fuzz/Documents", "selftest_tmp_fuzz/Service");   // backups of the loads never reach the real Documents
     {   // v44.50: two small WAVs for the sampler ops (a mono tone and a stereo noise burst)
         std::vector<float> tone(18000), noise(2 * 66000);
         for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.6f * std::sin(0.03f * static_cast<float>(i)) * (1.0f - static_cast<float>(i) / tone.size());
@@ -90,7 +92,8 @@ int main(int argc, char** argv) {
             std::vector<float> ob(256 * 2);
             for (int b = 0; b < blocks; ++b) {
                 std::fill(ob.begin(), ob.end(), 0.0f);
-                a.sequencer.RenderAndAdvance(ob.data(), 256, kSampleRate);
+                // v44.59 (TEST-3): through the PITCH stage, as the audio callback does
+                a.varispeed.Process(ob.data(), 256, a.PitchTargetSpeed(), kSampleRate, [&](float* dst, int frames) { a.sequencer.RenderAndAdvance(dst, frames, kSampleRate); });
                 for (float v : ob) if (!(v == v) || v > 8.0f || v < -8.0f) { nan.fetch_add(1); break; }
             }
         };
@@ -228,15 +231,117 @@ int main(int argc, char** argv) {
                 default: a.SetPatternLength(R(2) ? 16 : 24); break;
                 }
                 break; }
+            // ---- v44.59 (TEST-3): LINK, OPEN / GO, the armed scene, PITCH, risers / breaks / repeater, master FX, a damaged file ----
+            case 65: {   // LINK on selected pads, UNLINK, the menu toggle, and their undo / redo
+                const int s1 = R(kNumLiveScenes), s2 = R(kNumLiveScenes);
+                auto linkSel = [&]() {   // after LINK every selected scene has the mute / solo of the reference and is in its group
+                    const uint16_t sel = a.sceneSel;
+                    if (a.SceneSelCount() < 2) { a.LinkSelectedScenes(); return; }
+                    int ref = -1;
+                    if (p.currentPattern < kNumLiveScenes && ((sel >> p.currentPattern) & 1u)) ref = p.currentPattern;
+                    else for (int i = 0; i < kNumLiveScenes; ++i) if ((sel >> i) & 1u) { ref = i; break; }
+                    a.LinkSelectedScenes();
+                    for (int i = 0; i < kNumLiveScenes; ++i) {
+                        if (!((sel >> i) & 1u)) continue;
+                        bool same = a.ScenesLinked(i, ref);
+                        for (int t = 0; t < kNumTracks && same; ++t)
+                            same = p.patterns[static_cast<size_t>(i)].tracks[static_cast<size_t>(t)].mute == p.patterns[static_cast<size_t>(ref)].tracks[static_cast<size_t>(t)].mute &&
+                                   p.patterns[static_cast<size_t>(i)].tracks[static_cast<size_t>(t)].solo == p.patterns[static_cast<size_t>(ref)].tracks[static_cast<size_t>(t)].solo;
+                        if (!same) { std::cout << "INVARIANT seed " << seed << " op#" << n << " Link: scene " << i + 1 << " is not like scene " << ref + 1 << " after LINK\n"; ++failures; break; }
+                    }
+                };
+                switch (R(6)) {
+                case 0: case 1: a.SelectScenePad(s1, false, false); a.SelectScenePad(s2, true, false); linkSel(); break;
+                case 2: a.SelectScenePad(s1, false, R(2) != 0); a.SelectScenePad(s2, false, true); linkSel(); break;
+                case 3: a.UnlinkSceneUndoable(s1); break;
+                case 4: if (p.currentPattern < kNumLiveScenes) a.ToggleSceneLink(s1); break;
+                default: {   // undo of a LINK step brings back exactly the groups and flags from before it
+                    if (!a.undoStack.empty() && a.undoStack.back().kind == AppState::UndoEntry::Kind::Link) {
+                        const auto want = a.undoStack.back().links;
+                        a.Undo();
+                        if (p.sceneLink != want) { std::cout << "INVARIANT seed " << seed << " op#" << n << " Link: undo did not restore the groups\n"; ++failures; }
+                    } else if (R(2)) a.Redo();
+                    break; }
+                }
+                break; }
+            case 66: {   // OPEN / GO: open a scene without launching, GO, a launch click while held apart, the CLICK switch
+                if (R(6) == 0) a.clickOpens = !a.clickOpens;
+                const int sc = R(kNumLiveScenes);
+                const int playing = a.sequencer.PlayPatternIndex();
+                const bool wasPlaying = a.sequencer.IsPlaying() && !a.sequencer.IsSongModeActive();
+                switch (R(5)) {
+                case 0: case 1:
+                    a.OpenScenePad(sc);
+                    if (wasPlaying && a.sequencer.PlayPatternIndex() != playing) { std::cout << "INVARIANT seed " << seed << " op#" << n << " OpenGo: opening a scene moved the player\n"; ++failures; }
+                    if (a.sequencer.PendingScene() == sc) { std::cout << "INVARIANT seed " << seed << " op#" << n << " OpenGo: the opened scene is still queued\n"; ++failures; }
+                    break;
+                case 2: a.GoToEditedScene(); break;
+                case 3: a.LaunchScenePad(sc); if (a.SceneIsHeldApart()) { std::cout << "INVARIANT seed " << seed << " op#" << n << " OpenGo: a launch click left the editor apart\n"; ++failures; } break;
+                default: a.SelectSceneForEdit(sc); break;
+                }
+                break; }
+            case 67: {   // the armed scene: with a launch waiting, the switches write the coming scene and never the playing one
+                if (!a.sequencer.IsPlaying()) a.sequencer.Play();
+                a.sequencer.SetLaunchQuantize(1 + R(2));
+                const int target = R(kNumLiveScenes);
+                a.sequencer.LaunchScene(target);
+                const int armed = a.ArmedScene(), playing = a.sequencer.PlayPatternIndex();
+                if (armed >= 0 && armed != playing && !a.ScenesLinked(armed, playing)) {
+                    const bool before = p.patterns[static_cast<size_t>(playing)].tracks[static_cast<size_t>(tr)].mute;
+                    { AppState::ArmScope arm(a, armed); a.LiveSwitch(AppState::QueuedSwitch::Mute, static_cast<uint16_t>(tr)); }
+                    if (p.patterns[static_cast<size_t>(playing)].tracks[static_cast<size_t>(tr)].mute != before) { std::cout << "INVARIANT seed " << seed << " op#" << n << " ArmScope: the playing scene changed\n"; ++failures; }
+                    if (a.sequencer.PlayPatternIndex() != playing) { std::cout << "INVARIANT seed " << seed << " op#" << n << " ArmScope: the player moved\n"; ++failures; }
+                }
+                break; }
+            case 68:   // PITCH: the fader, steps, a push, the range
+                switch (R(4)) {
+                case 0: a.PitchSet(static_cast<float>(R(3201) - 1600) / 100.0f); break;
+                case 1: a.PitchStep(R(2) ? 0.1f : -1.0f); break;
+                case 2: a.pitchBend.store(R(3) - 1); break;
+                default: a.PitchSetRange16(R(2) != 0); break;
+                }
+                break;
+            case 69:   // performance gestures: a riser, a live break, the repeater
+                switch (R(3)) {
+                case 0: a.TriggerRiser(); break;
+                case 1: a.ArmLiveBreak(); break;
+                default: a.ToggleRepeater(); break;
+                }
+                break;
+            case 70: {   // master FX: chain, EQ, comp, limiter values anywhere in their ranges
+                MasterChainSettings& m = a.project.fx.master;
+                m.chainOn = R(2); m.limiterOn = R(2); m.compOn = R(2);
+                m.hpfHz = 20.0f + R(381); m.lowDb = R(19) - 9.0f; m.midDb = R(19) - 9.0f; m.highDb = R(19) - 9.0f; m.width = R(21) / 10.0f; m.saturation = R(11) / 10.0f;
+                m.ceilingDb = -R(7) * 1.0f; m.compThreshDb = -R(41) * 1.0f; m.compRatio = 1.0f + R(10); m.compMix = R(11) / 10.0f;
+                a.engine.GetMixer().SyncFxFromProject(a.project);
+                break; }
+            case 71: {   // open a damaged copy of the project: the load repairs it (or refuses it), the app adopts it and keeps playing
+                const std::string f1 = "selftest_tmp_fuzz/dmg.t8proj";
+                if (!SaveProject(p, f1, false)) break;
+                std::string txt = Slurp(f1);
+                static const char* kBad[] = {"500", "-7", "nan", "inf", "99999", "-1e30", "40", ""};
+                for (int k = 0, c = 1 + R(6); k < c && !txt.empty(); ++k) {
+                    size_t at = txt.find('=', static_cast<size_t>(R(static_cast<int>(txt.size()))));
+                    if (at == std::string::npos) continue;
+                    const size_t eol = txt.find('\n', at);
+                    txt.replace(at + 1, (eol == std::string::npos ? txt.size() : eol) - at - 1, kBad[R(8)]);
+                }
+                { std::ofstream o(f1, std::ios::trunc); o << txt; }
+                std::remove((f1 + ".bak").c_str());
+                a.LoadProjectFile(f1);   // takes the lock itself; a refused file leaves the open project as it was
+                a.projectPath = "selftest_tmp_fuzz/fuzz.t8proj";
+                break; }
             case 60:   // v44.49: a style with a random set of parts, on whatever grid, length and key the scene has
                 a.styleBeat = R(4) != 0; a.styleSound = R(2) != 0; a.styleNotes = R(4) != 0; a.styleTempo = R(4) == 0;
                 a.ApplyStyle(R(static_cast<int>(AllStyles().size())));
                 break;
             }
             a.TickTransport(); a.SyncBrickSound(); a.RefreshChordLive();
+            // With --threads the audio thread moves the project (a queued launch lands): the invariants are read under the lock, like
+            // the real UI reads it (reading them after unlock was a data race TSan found once the OPEN / GO ops queued launches).
+            if (threads) failures += Check(a, kOpNames[op], seed, n);
             uiLock.unlock();
-            if (!threads) render(2 + R(6));
-            failures += Check(a, kOpNames[op], seed, n);
+            if (!threads) { render(2 + R(6)); failures += Check(a, kOpNames[op], seed, n); }
             if (a.sequencer.SceneLockViolations() > 0) { std::cout << "SCENE LOCK MISSING seed " << seed << " op " << kOpNames[op] << "\n"; ++lockMisses; a.sequencer.ResetSceneLockViolations(); }
         }
         stop.store(true);
