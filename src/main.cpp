@@ -11,6 +11,7 @@
 #include "core/Persistence.h"
 #include "core/SampleLibrary.h"
 #include "app/AppState.h"
+#include "app/AudioSettings.h"
 #include "ui_desktop/DesktopTheme.h"
 #include "ui_desktop/HeaderPanel.h"
 #include "ui_desktop/MenuBar.h"
@@ -177,6 +178,8 @@ int main(int argc, char** argv) {
             if (line.rfind("pitchrange=", 0) == 0) app.pitchRange16 = std::atoi(line.c_str() + 11) >= 16;   // v44.57 (the fader itself is not saved)
             if (line.rfind("lastproject=", 0) == 0) lastProject = line.substr(12);
             if (line.rfind("clickopen=", 0) == 0) app.clickOpens = std::atoi(line.c_str() + 10) != 0;   // v44.59: CLICK: LAUNCH | OPEN of the SCENES row
+            if (line.rfind("audiobuf=", 0) == 0) app.audioBufferChoice = audiosettings::ValidBuffer(std::atoi(line.c_str() + 9));   // N1: Settings > Audio
+            if (line.rfind("audioout=", 0) == 0) app.audioOutputChoice = line.substr(9);
         }
     }
     // v44.8: the very first launch of this version starts with the instrument block folded and the starter groove in scene 1
@@ -196,9 +199,11 @@ int main(int argc, char** argv) {
     bool savedDetail = app.detailOpen;
     bool savedNextBar = app.quantizeSwitches;
     bool savedClickOpens = app.clickOpens;
+    int savedAudioBuf = app.audioBufferChoice;
+    std::string savedAudioOut = app.audioOutputChoice;
     auto writeUiSettings = [&]() {
         std::ofstream cf("ui_settings.cfg", std::ios::trunc);
-        cf << "zoom=" << app.uiZoomIdx << "\ndetail=" << (app.detailOpen ? 1 : 0) << "\nnextbar=" << (app.quantizeSwitches ? 1 : 0) << "\npitchrange=" << (app.pitchRange16 ? 16 : 8) << "\nclickopen=" << (app.clickOpens ? 1 : 0) << "\nlastproject=" << app.projectPath << "\n";
+        cf << "zoom=" << app.uiZoomIdx << "\ndetail=" << (app.detailOpen ? 1 : 0) << "\nnextbar=" << (app.quantizeSwitches ? 1 : 0) << "\npitchrange=" << (app.pitchRange16 ? 16 : 8) << "\nclickopen=" << (app.clickOpens ? 1 : 0) << "\naudiobuf=" << app.audioBufferChoice << "\naudioout=" << app.audioOutputChoice << "\nlastproject=" << app.projectPath << "\n";
     };
     if (firstRunSettings) writeUiSettings();
     float uiZoom = 1.0f;   // layout zoom of the previous frame (mouse positions are divided by it)
@@ -240,14 +245,31 @@ int main(int argc, char** argv) {
     // Open the audio device FIRST, letting it pick its own sample rate (44.1 / 48 kHz ...),
     // and run the whole engine at that rate -- no resampling by SDL, no pitch / tempo drift.
     // The device starts paused; it is un-paused after the engine is set up (below).
-    SDL_AudioSpec want{}, have{};
-    want.freq = kSampleRate;
-    want.format = AUDIO_F32SYS;
-    want.channels = 2;
-    want.samples = 128; // ~2.9ms at 44.1kHz: Mac-class CPU, tight live feel
-    want.callback = AudioCallback;
-    want.userdata = &app;
-    SDL_AudioDeviceID audioDev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+    // N1 (LIVE-5 / LIVE-6): the output and the buffer size come from Settings > Audio (default: the system output, 128 frames =
+    // ~2.9 ms at 44.1 kHz, a tight live feel). A chosen output that is not plugged in falls back to the system default.
+    auto refreshAudioOutputs = [&]() {
+        app.audioOutputs.clear();
+        const int n = SDL_GetNumAudioDevices(0);
+        for (int i = 0; i < n; ++i) if (const char* nm = SDL_GetAudioDeviceName(i, 0)) app.audioOutputs.emplace_back(nm);
+    };
+    auto openAudio = [&](int freq, int allowedChanges, SDL_AudioSpec& have) -> SDL_AudioDeviceID {
+        refreshAudioOutputs();
+        SDL_AudioSpec want{};
+        want.freq = freq; want.format = AUDIO_F32SYS; want.channels = 2;
+        want.samples = static_cast<Uint16>(audiosettings::ValidBuffer(app.audioBufferChoice));
+        want.callback = AudioCallback; want.userdata = &app;
+        const std::string name = audiosettings::OutputToOpen(app.audioOutputChoice, app.audioOutputs);
+        SDL_AudioDeviceID dev = 0;
+        if (!name.empty()) dev = SDL_OpenAudioDevice(name.c_str(), 0, &want, &have, allowedChanges);
+        app.audioOpenedName = dev != 0 ? name : std::string();
+        if (dev == 0) dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, allowedChanges);
+        app.audioOnFallback = !app.audioOutputChoice.empty() && app.audioOpenedName.empty();
+        app.audioOpenedRate = dev != 0 ? have.freq : 0;
+        app.audioOpenedFrames = dev != 0 ? have.samples : 0;
+        return dev;
+    };
+    SDL_AudioSpec have{};
+    SDL_AudioDeviceID audioDev = openAudio(kSampleRate, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE, have);
     int engineRate = kSampleRate;
     if (audioDev == 0) {
         std::fprintf(stderr, "SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
@@ -256,6 +278,7 @@ int main(int argc, char** argv) {
     } else {
         if (have.freq >= 8000 && have.freq <= 192000) engineRate = have.freq;
         if (engineRate != kSampleRate) std::fprintf(stderr, "Audio device runs at %d Hz -- engine follows it.\n", engineRate);
+        if (app.audioOnFallback) app.SetStatus("AUDIO: CHOSEN OUTPUT NOT FOUND, PLAYING ON THE SYSTEM OUTPUT");
     }
 
     SyncLibraryKits(SamplesRoot(), "kits");   // v44.51: kit folders from <samples>/Kits/ appear in the kit list (copied, never changed)
@@ -304,12 +327,13 @@ int main(int argc, char** argv) {
     auto restartAudio = [&](const char* why) {
         std::fprintf(stderr, "Restarting audio (%s)\n", why);
         if (audioDev != 0) { SDL_CloseAudioDevice(audioDev); audioDev = 0; }
-        SDL_AudioSpec w2{}, h2{};
-        w2.freq = engineRate; w2.format = AUDIO_F32SYS; w2.channels = 2; w2.samples = 128;
-        w2.callback = AudioCallback; w2.userdata = &app;
-        audioDev = SDL_OpenAudioDevice(nullptr, 0, &w2, &h2, 0);
+        SDL_AudioSpec h2{};
+        audioDev = openAudio(engineRate, 0, h2);   // at the engine's own rate: SDL converts if the new device differs
         app.engine.ResetDsp();
-        if (audioDev != 0) { SDL_PauseAudioDevice(audioDev, 0); app.SetStatus("AUDIO RESTARTED"); }
+        if (audioDev != 0) {
+            SDL_PauseAudioDevice(audioDev, 0);
+            app.SetStatus(app.audioOnFallback ? "AUDIO: CHOSEN OUTPUT NOT FOUND, PLAYING ON THE SYSTEM OUTPUT" : "AUDIO RESTARTED");
+        }
         else app.SetStatus("AUDIO: NO OUTPUT DEVICE FOUND");
     };
     unsigned lastBlocks = app.engine.GetMixer().audioBlocks.load();
@@ -354,7 +378,13 @@ int main(int argc, char** argv) {
             if (e.type == SDL_QUIT) app.RequestDoc(AppState::DocAction::Quit);   // U8b: asks Save / Don't Save / Cancel when something is unsaved
             // N1 (LIVE-6): a device that appears (AirPods, an HDMI screen, a USB box) no longer restarts the sound. A removed one is
             // checked after a moment, and the sound is restarted only if OUR output stopped (see the watchdog below).
-            if (e.type == SDL_AUDIODEVICEREMOVED && e.adevice.iscapture == 0) { deviceChangeTimer = 0.6; blocksAtDeviceChange = app.engine.GetMixer().audioBlocks.load(); }
+            if (e.type == SDL_AUDIODEVICEREMOVED && e.adevice.iscapture == 0) { deviceChangeTimer = 0.6; blocksAtDeviceChange = app.engine.GetMixer().audioBlocks.load(); app.audioOutputsWanted = true; }
+            // N1: the output chosen in Settings > Audio is plugged in again while the sound plays on the system output: go back to it.
+            if (e.type == SDL_AUDIODEVICEADDED && e.adevice.iscapture == 0) {
+                app.audioOutputsWanted = true;
+                const char* nm = SDL_GetAudioDeviceName(static_cast<int>(e.adevice.which), 0);
+                if (app.audioOnFallback && nm && app.audioOutputChoice == nm) app.audioRestartRequested = true;
+            }
 
             if (e.type == SDL_DROPFILE && e.drop.file) {   // a WAV dropped on the window -> the selected drum track
                 const std::string dropped = e.drop.file;
@@ -834,7 +864,11 @@ int main(int argc, char** argv) {
             const std::string title = name + (titleEdited ? " \xE2\x80\x94 Edited" : "") + " \xE2\x80\x94 TR-Brick";
             SDL_SetWindowTitle(window, title.c_str());
         }
-        if (app.uiZoomIdx != savedZoomIdx || app.detailOpen != savedDetail || app.quantizeSwitches != savedNextBar || app.clickOpens != savedClickOpens || app.projectPath != savedProject) {
+        if (app.audioOutputsWanted) { app.audioOutputsWanted = false; refreshAudioOutputs(); }
+        if (app.uiZoomIdx != savedZoomIdx || app.detailOpen != savedDetail || app.quantizeSwitches != savedNextBar || app.clickOpens != savedClickOpens || app.projectPath != savedProject
+            || app.audioBufferChoice != savedAudioBuf || app.audioOutputChoice != savedAudioOut) {
+            savedAudioBuf = app.audioBufferChoice;
+            savedAudioOut = app.audioOutputChoice;
             savedNextBar = app.quantizeSwitches;
             savedClickOpens = app.clickOpens;
             savedZoomIdx = app.uiZoomIdx;

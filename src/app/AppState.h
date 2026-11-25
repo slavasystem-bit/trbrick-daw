@@ -68,6 +68,15 @@ struct AppState {
     // leaves the loop, which runs the same save-on-quit path as closing the window.
     bool quitRequested = false;
     bool audioRestartRequested = false;   // v44.3: Settings > Restart Audio (also done automatically after sleep / device changes)
+    // N1 (LIVE-5 / LIVE-6): Settings > Audio. The choice is saved in ui_settings.cfg; main.cpp opens the device with it and fills
+    // the "opened" fields. An empty output name = the system default.
+    int audioBufferChoice = 128;              // 128 / 256 / 512 frames asked of the device
+    std::string audioOutputChoice;            // the chosen output by name ("" = system default)
+    std::vector<std::string> audioOutputs;    // outputs plugged in now (refreshed when the dialog opens and when devices change)
+    bool audioOutputsWanted = false;          // the dialog asks main.cpp to read the list again
+    std::string audioOpenedName;              // what is actually playing ("" = system default)
+    int audioOpenedRate = 0, audioOpenedFrames = 0;
+    bool audioOnFallback = false;             // the chosen output is not plugged in: the sound went to the system default
 
     // Sequencer cursor
     int seqCursorTrack = 0;

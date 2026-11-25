@@ -20,8 +20,9 @@ public:
 private:
     void DrawVersionsDialog(AppState& app);
     void DrawBeatsDialog(AppState& app);
+    void DrawAudioDialog(AppState& app);
 
-    bool openVersions_ = false, openBeats_ = false;
+    bool openVersions_ = false, openBeats_ = false, openAudio_ = false;
     std::vector<std::string> backups_;
     std::string restoreArmed_;
     char newBeat_[48] = "";

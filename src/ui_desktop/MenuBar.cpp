@@ -5,6 +5,8 @@
 #include "LiveWidgets.h"
 #include "imgui.h"
 #include "core/UserDirs.h"
+#include "app/AudioSettings.h"
+#include "Visual.h"
 #include <algorithm>
 #include <cstdio>
 #include <mutex>
@@ -175,6 +177,7 @@ void MenuBar::Draw(AppState& app) {
         if (ImGui::BeginMenu("Settings")) {
             if (Item("Restart Audio", nullptr, "Reopen the sound card and clear the effects. Use it if the sequence runs but nothing is heard (after the laptop slept or the headphones / speakers changed). Happens automatically in most cases."))
                 app.audioRestartRequested = true;
+            if (Item("Audio...", nullptr, "Which output the sound goes to (speakers, headphones, a sound card) and the buffer size. Remembered between launches.")) openAudio_ = true;
             if (Item("Show Data Folder in Finder", nullptr, "Projects, Recordings and the Library live here.")) userdirs::Reveal(userdirs::Root());
             ImGui::EndMenu();
         }
@@ -191,8 +194,83 @@ void MenuBar::Draw(AppState& app) {
     // The dialogs open from here, outside the menus, so their popup ids are the shell's own.
     if (openVersions_) { ImGui::OpenPopup("VersionsDialog"); openVersions_ = false; backups_ = ListProjectBackups(app.projectPath); restoreArmed_.clear(); }
     if (openBeats_) { ImGui::OpenPopup("BeatsDialog"); openBeats_ = false; deleteArmed_.clear(); }
+    if (openAudio_) { ImGui::OpenPopup("AudioDialog"); openAudio_ = false; app.audioOutputsWanted = true; }
     DrawVersionsDialog(app);
     DrawBeatsDialog(app);
+    DrawAudioDialog(app);
+}
+
+// N1 (LIVE-5 / LIVE-6): Settings > Audio. A change is saved at once and restarts the sound for a moment (the same path as
+// Settings > Restart Audio); main.cpp opens the device and reports what it really got.
+void MenuBar::DrawAudioDialog(AppState& app) {
+    ImGui::PushFont(nullptr, 14.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.38f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("AudioDialog", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar)) {
+        const char* kDefaultName = "System default (follows the Mac)";
+        ImGui::TextColored(kAmber, "Audio");
+        ImGui::TextDisabled("Remembered between launches. Changing anything restarts the sound for a moment.");
+        ImGui::Spacing();
+
+        ImGui::TextUnformatted("OUTPUT");
+        ImGui::SetNextItemWidth(360);
+        const std::string& chosen = app.audioOutputChoice;
+        const bool chosenPlugged = std::find(app.audioOutputs.begin(), app.audioOutputs.end(), chosen) != app.audioOutputs.end();
+        const std::string preview = chosen.empty() ? std::string(kDefaultName) : chosenPlugged ? chosen : chosen + "  (not plugged in)";
+        if (ChoiceBegin("##audioout", preview.c_str())) {
+            std::string pick = chosen;
+            if (ImGui::Selectable(kDefaultName, chosen.empty())) pick.clear();
+            if (!chosen.empty() && !chosenPlugged) ImGui::Selectable((chosen + "  (not plugged in)").c_str(), true);
+            for (const std::string& n : app.audioOutputs) if (ImGui::Selectable(n.c_str(), n == chosen)) pick = n;
+            ChoiceEnd();
+            if (pick != chosen) { app.audioOutputChoice = pick; app.audioRestartRequested = true; }
+        }
+        ImGui::TextDisabled("If the chosen output is unplugged, the sound goes to the system default and comes back when it returns.");
+        ImGui::Spacing();
+
+        ImGui::TextUnformatted("BUFFER");
+        const int rate = app.audioOpenedRate > 0 ? app.audioOpenedRate : app.engine.SampleRate();
+        char labs[3][40];
+        const char* labPtr[3];
+        int bufIdx = 0;
+        for (int i = 0; i < 3; ++i) {
+            const int b = audiosettings::kBufferChoices[i];
+            std::snprintf(labs[i], sizeof(labs[i]), "%d  (%.1f ms)", b, audiosettings::BufferMs(b, rate));
+            labPtr[i] = labs[i];
+            if (app.audioBufferChoice == b) bufIdx = i;
+        }
+        if (Segmented("##audiobuf", &bufIdx, labPtr, 3, 118.0f)) {
+            app.audioBufferChoice = audiosettings::kBufferChoices[bufIdx];
+            app.audioRestartRequested = true;
+        }
+        ImGui::TextDisabled("Smaller = pads answer faster.  Bigger = safer from crackles on a busy computer.");
+        ImGui::TextDisabled("If DSP/XRUN shows dropouts, take 256 or 512.");
+        ImGui::Spacing();
+
+        Mixer& mx = app.engine.GetMixer();
+        if (app.audioOpenedRate <= 0) {
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(vis::kRed), "Now: no output device found. The program tries again every few seconds.");
+        } else {
+            if (app.audioOnFallback)
+                ImGui::TextColored(kAmber, "\"%s\" is not plugged in: playing on the system output.", app.audioOutputChoice.c_str());
+            const int frames = mx.audioBufferFrames.load(std::memory_order_relaxed) > 0 ? mx.audioBufferFrames.load(std::memory_order_relaxed) : app.audioOpenedFrames;
+            const unsigned drops = mx.audioXruns.load(std::memory_order_relaxed);
+            char dropText[48];
+            if (drops == 0) std::snprintf(dropText, sizeof(dropText), "No dropouts this session.");
+            else std::snprintf(dropText, sizeof(dropText), "%u dropout%s this session.", drops, drops == 1 ? "" : "s");
+            const ImU32 col = drops == 0 ? vis::kTeal : vis::kAccent;
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col), "Now: %s, %d Hz, %d frames = %.1f ms. %s",
+                               app.audioOpenedName.empty() ? "system output" : app.audioOpenedName.c_str(),
+                               app.audioOpenedRate, frames, audiosettings::BufferMs(frames, app.audioOpenedRate), dropText);
+        }
+        ImGui::Spacing();
+        if (ImGui::Button("CLOSE", ImVec2(120, 0)) || t8::desktop::interaction::KeyCancel()) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar(2);
+    ImGui::PopFont();
 }
 
 void MenuBar::DrawVersionsDialog(AppState& app) {
