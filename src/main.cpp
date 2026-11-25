@@ -203,7 +203,21 @@ int main(int argc, char** argv) {
     app.projectPath = projectPath;
     if (projectExplicit && FileExists(projectPath)) {
         if (!LoadProject(app.project, projectPath)) {
-            std::fprintf(stderr, "Failed to load %s, starting a blank project\n", projectPath.c_str());
+            // DATA-2: say it on screen (the dialog offers the newest dated copy) and go on with a new Untitled project, so that Cmd+S
+            // can never write an empty project where the damaged file was (it is kept as <name>.t8proj.corrupt).
+            std::fprintf(stderr, "Failed to load %s, starting a new Untitled project\n", projectPath.c_str());
+            app.NoteLoadFailed(projectPath);
+            app.project = Project{};
+            app.project.name = "Untitled";
+            app.project.kitFolder = kitFolder;
+            projectPath = userdirs::UntitledPath();
+            std::remove(projectPath.c_str());
+            app.projectPath = projectPath;
+            projectExplicit = false;
+        } else {
+            app.docNewerFormat = LastLoadNewerFormat();   // DATA-1: Cmd+S saves a copy instead of writing over a newer file
+            app.NoteLoadResult(projectPath);
+            if (!LastLoadNote().empty()) { app.SetStatus(LastLoadNote()); app.statusMessageTimer = 8.0f; }
         }
         if (kitFolderExplicit) app.project.kitFolder = kitFolder;
     } else {
@@ -266,7 +280,13 @@ int main(int argc, char** argv) {
     if (firstRunSettings && !(projectExplicit && FileExists(projectPath)) && app.CurrentPatternIsEmpty()) {
         ApplyStarterGroove(app.CurrentPattern(), app.StepTrack(app.CurrentPattern(), kChordTrackIndex));   // v44.8 first launch: something to hear at once
         app.SyncMixer(app.CurrentPattern());
-        app.project.songChain[0] = ChainStep{0, 4};   // v44.9: the seed is already the first brick of the track (4 bars)
+        // v44.9: the seed is already the first brick of the track (4 bars). DATA-7: the brick is a COPY of scene 1 in a brick slot of
+        // its own (as every thrown brick is since v44.22); before, it pointed at scene 1 itself, so editing the track changed the jam.
+        uint16_t mm = 0; StepParams spr;
+        const int slot = app.CopySceneToBrickSlot(0, true, &mm, &spr);
+        app.project.songChain[0] = ChainStep{slot >= 0 ? slot : 0, 4};
+        app.project.songChain[0].muteMask = mm;
+        app.project.songChain[0].params = spr;
         app.project.songChainLength = 1;
     }
     if (resumedUntitled) app.MarkUnsaved(); else app.MarkSaved();   // U8b: what the document is compared with from now on

@@ -37,6 +37,8 @@
 #include <cstdio>
 #include <mutex>
 #include <vector>
+#include <sys/stat.h>
+#include <cctype>
 #include <array>
 #include <deque>
 #include <map>
@@ -3567,14 +3569,17 @@ struct AppState {
 
     // Replaces the open project with `incoming` (already read): stops what sounds, re-syncs the engine, clears the undo history.
     void AdoptProject(Project&& incoming) {
-        sequencer.Panic();   // nothing from the old project may keep sounding
-        project = std::move(incoming);
-        sequencer.SetSongModeActive(false);
-        sequencer.SetChordSceneNow(project.chordSceneEdit);
-        chdLiveSlot = -1;
-        engine.GetMixer().SyncFromPattern(CurrentPattern());
-        engine.GetMixer().SyncFxFromProject(project);
-        RefreshSound();
+        {   // the audio thread reads the project: swap it under the lock, held only for the swap (no files are read here)
+            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            sequencer.Panic();   // nothing from the old project may keep sounding
+            project = std::move(incoming);
+            sequencer.SetSongModeActive(false);
+            sequencer.SetChordSceneNow(project.chordSceneEdit);
+            chdLiveSlot = -1;
+            engine.GetMixer().SyncFromPattern(CurrentPattern());
+            engine.GetMixer().SyncFxFromProject(project);
+        }
+        RefreshSound();   // may decode samples from the disk: outside the lock, like every other caller (Н1 owns its own locking)
         ClearUndo();
     }
     // Opens an existing project file. Does NOT save the open one (the caller asked "Save / Don't Save / Cancel" first, see
@@ -3584,14 +3589,17 @@ struct AppState {
         Project incoming;
         if (!LoadProject(incoming, path)) {
             SetStatus("LOAD FAILED: " + path);
+            NoteLoadFailed(path);
             return false;
         }
         AdoptProject(std::move(incoming));
         projectPath = path;
+        docNewerFormat = LastLoadNewerFormat();
         MarkSaved();
         int loaded = LoadedKitSlots();
         SetStatus(LastLoadNote().empty() ? "LOADED " + path + " (" + std::to_string(loaded) + "/6 drum samples)"
                                          : LastLoadNote());
+        NoteLoadResult(path);
         return true;
     }
     // A .wav or .aif dropped on the window becomes the sample of the selected DRUM track (an AIFF is written into the kit as a .wav). The current kit is first copied
@@ -3633,14 +3641,53 @@ struct AppState {
     // Opens a dated copy from backups/ as the CURRENT project file's content:
     // the open file's path is kept, so the next save writes the restored state
     // there (the file it replaces is itself backed up on that save).
+    // DATA-5: every write is checked; a failed one is said and the document stays "Edited" (never shown as saved when it is not).
     bool RestoreBackupFile(const std::string& backupPath) {
         Project loaded;
-        if (!LoadProject(loaded, backupPath)) { SetStatus("RESTORE FAILED: " + backupPath); return false; }
-        if (!userdirs::IsUntitledPath(projectPath)) SaveProject(project, projectPath);   // keep what is open now (dated backup + .bak)
+        if (!LoadProject(loaded, backupPath)) { SetStatus("RESTORE FAILED: " + backupPath); statusMessageTimer = 8.0f; return false; }
+        const int newer = LastLoadNewerFormat();
+        const bool untitled = userdirs::IsUntitledPath(projectPath);
+        // keep what is open now (dated backup + .bak); never over a file from a newer version
+        if (!untitled && !docNewerFormat && FileExistsNow(projectPath) && !SaveSnapshot(projectPath)) {
+            SetStatus("RESTORE STOPPED: COULD NOT SAVE THE OPEN PROJECT FIRST (DISK FULL?)"); statusMessageTimer = 8.0f; return false;
+        }
         AdoptProject(std::move(loaded));
-        SaveProject(project, projectPath);
+        docNewerFormat = newer;
+        if (newer) { MarkUnsaved(); SetStatus("RESTORED A VERSION FROM A NEWER TR-BRICK: CMD+S SAVES IT AS A COPY"); statusMessageTimer = 8.0f; return true; }
+        if (!SaveSnapshot(projectPath)) { MarkUnsaved(); SetStatus("RESTORED, BUT SAVING FAILED (DISK FULL?): THE PROJECT IS NOT SAVED"); statusMessageTimer = 8.0f; return true; }
         MarkSaved();
-        SetStatus("RESTORED BACKUP " + backupPath);
+        SetStatus("RESTORED THE VERSION OF " + BackupLabel(backupPath));
+        return true;
+    }
+    // DATA-2: a project that could not be opened (the damaged file is kept as <path>.corrupt) can be brought back from its newest
+    // dated copy: the copy becomes the project file again.
+    bool RestoreFailedFromBackup() {
+        const std::string path = docNoticeFailedPath;
+        if (path.empty()) return false;
+        // Copies of THIS file (same folder) first, then copies from before v44.59 that only share the name; newest first in each.
+        std::vector<std::string> copies, legacy;
+        for (const std::string& c : ListProjectBackups(path)) (IsOwnBackupName(c) ? copies : legacy).push_back(c);
+        copies.insert(copies.end(), legacy.begin(), legacy.end());
+        Project loaded;
+        std::string used;
+        for (const std::string& c : copies) if (LoadProject(loaded, c)) { used = c; break; }   // a damaged copy: try the next older one
+        if (used.empty()) { SetStatus(copies.empty() ? std::string("NO DATED COPY TO RESTORE") : "RESTORE FAILED: NO COPY COULD BE OPENED"); statusMessageTimer = 8.0f; return false; }
+        const int newer = LastLoadNewerFormat();
+        AdoptProject(std::move(loaded));
+        projectPath = path;
+        projectFilesCacheValid = false;
+        docNewerFormat = newer;
+        docNoticeFailedPath.clear();
+        if (newer || !SaveSnapshot(path)) { MarkUnsaved(); SetStatus(newer ? "RESTORED: CMD+S SAVES IT AS A COPY" : "RESTORED, BUT SAVING FAILED (DISK FULL?)"); statusMessageTimer = 8.0f; return true; }
+        MarkSaved();
+        SetStatus("RESTORED THE VERSION OF " + BackupLabel(used));
+        return true;
+    }
+    // "<stem>~<8 hex>-YYYYMMDD-HHMMSS.t8proj" (a v44.59 copy, tied to the project's folder) vs the older "<stem>-YYYYMMDD-HHMMSS".
+    static bool IsOwnBackupName(const std::string& p) {
+        const size_t n = p.size(), at = n - 7 - 15 - 1 - 8 - 1;
+        if (n < 7 + 15 + 1 + 8 + 1 + 1 || p[at] != '~' || p[n - 7 - 15 - 1] != '-') return false;
+        for (size_t i = at + 1; i < at + 9; ++i) if (!std::isxdigit(static_cast<unsigned char>(p[i]))) return false;
         return true;
     }
     // ---- Document (v44.18, U8b): the classic model of Logic / GarageBand ----------------------------------------------------
@@ -3660,32 +3707,75 @@ struct AppState {
     bool docNameResume = false;         // after the name dialog saved: go on with docPending
     bool docOpenDialog = false;         // the Open list
     std::string docRecoverPath;         // a recovery copy was found at start: the dialog asks what to do with it
+    // DATA-1: the open file was written by a NEWER version (its format number; 0 = no). It may hold data this version does not know,
+    // so Cmd+S never writes over it: it asks for a name and saves a copy. The file itself stays as it is.
+    int docNewerFormat = 0;
+    // DATA-2: what the user must be told about the last load (could not open / opened from the backup / newer version / repaired
+    // values). Shown once as a dialog (DocumentDialogs); docNoticeFailedPath = the project that could not be opened at all.
+    std::string docNoticeTitle, docNoticeText, docNoticeFailedPath;
+    bool docNoticeCanRestore = false;   // the failed project has dated copies (set once by NoteLoadFailed, not looked up every frame)
     size_t savedHash_ = 0;
     double editedClock_ = 0.0;
 
+    static bool FileExistsNow(const std::string& p) { struct stat st{}; return ::stat(p.c_str(), &st) == 0; }
+    // The notice after a load that worked: only when there is something to tell.
+    void NoteLoadResult(const std::string& path) {
+        const std::string name = userdirs::ProjectDisplayName(path);
+        docNoticeFailedPath.clear();
+        if (LastLoadNote().rfind("RECOVERED FROM BACKUP", 0) == 0) {
+            docNoticeTitle = "\"" + name + "\" was damaged and was opened from its last good save";
+            docNoticeText = "The damaged file is kept next to it as \"" + name + ".t8proj.corrupt\". Check the project before you play it.";
+        } else if (LastLoadNewerFormat()) {
+            docNoticeTitle = "\"" + name + "\" was saved by a newer TR-Brick";
+            docNoticeText = "It may hold things this version does not know. To keep them, Cmd+S does not write over the file:\nit asks for a name and saves a copy. Open the file in the newer version to keep working on it there.";
+        } else if (LastLoadFixedValues()) {
+            docNoticeTitle = "\"" + name + "\" had damaged values";
+            docNoticeText = std::to_string(LastLoadFixedValues()) + " values were outside their range and were put back to safe values. Check the project before you play it.";
+        } else { docNoticeTitle.clear(); docNoticeText.clear(); return; }
+        if (LastLoadFixedValues() && LastLoadNote().rfind("RECOVERED FROM BACKUP", 0) == 0) docNoticeText += "\n" + std::to_string(LastLoadFixedValues()) + " damaged values were also put back to safe values.";
+    }
+    // The notice after a load that failed: the file is kept as <path>.corrupt; the dialog offers the newest dated copy.
+    void NoteLoadFailed(const std::string& path) {
+        const std::string name = userdirs::ProjectDisplayName(path);
+        docNoticeFailedPath = path;
+        docNoticeTitle = "\"" + name + "\" could not be opened";
+        const std::vector<std::string> copies = ListProjectBackups(path);
+        docNoticeCanRestore = !copies.empty();
+        docNoticeText = "The file is damaged. It is kept as \"" + name + ".t8proj.corrupt\" and nothing was written over it.";
+        docNoticeText += copies.empty() ? std::string("\nThere is no dated copy of it to go back to.")
+                                        : "\nThe newest dated copy is from " + BackupLabel(copies.front()) + ".";
+    }
+    // Saves a copy of the open project taken under a short lock; the file is written outside the lock (LIVE-4: a save never holds
+    // the sound waiting on the disk).
+    bool SaveSnapshot(const std::string& path, bool keepHistory = true) {
+        Project snap;
+        { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); snap = project; }
+        return SaveProject(snap, path, keepHistory);
+    }
+
     bool IsUntitled() const { return userdirs::IsUntitledPath(projectPath); }
     // What the open project looks like as text, without the scene being looked at (that is not an edit).
+    // LIVE-4: the project is copied under a short lock (a memory copy) and turned into text outside it; before, the whole text was
+    // built while the sound waited, twice a second.
     size_t DocHash() {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        const int cp = project.currentPattern, cs = project.chordSceneEdit;
-        project.currentPattern = 0; project.chordSceneEdit = 0;
-        const size_t h = std::hash<std::string>{}(ProjectToString(project));
-        project.currentPattern = cp; project.chordSceneEdit = cs;
-        return h;
+        Project snap;
+        { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); snap = project; }
+        snap.currentPattern = 0; snap.chordSceneEdit = 0;
+        return std::hash<std::string>{}(ProjectToString(snap));
     }
     void MarkSaved() { savedHash_ = DocHash(); edited = false; }
     void MarkUnsaved() { savedHash_ = DocHash() ^ 0x9e3779b97f4a7c15ULL; edited = true; }   // a document that must be saved as it is (recovered, loaded Untitled)
     bool IsEditedNow() { edited = DocHash() != savedHash_; return edited; }
     void TickDocument(double dt) {
         editedClock_ += dt;
-        if (editedClock_ < 0.5) return;
+        // LIVE-4: while the project is already Edited the check only looks for an undo back to the saved state, every 2 s is enough
+        if (editedClock_ < (edited ? 2.0 : 0.5)) return;
         editedClock_ = 0.0;
         edited = DocHash() != savedHash_;
     }
     // The copy that protects unsaved work: the Untitled file itself, or Recovery/<name>.t8proj for a named project.
     void WriteRecovery() {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        SaveProject(project, IsUntitled() ? projectPath : userdirs::RecoveryPathFor(projectPath), false);
+        SaveSnapshot(IsUntitled() ? projectPath : userdirs::RecoveryPathFor(projectPath), false);   // LIVE-4: written outside the lock
     }
     void DropRecovery() {
         if (IsUntitled()) { std::remove(projectPath.c_str()); return; }
@@ -3694,8 +3784,12 @@ struct AppState {
     // Cmd+S. An Untitled project needs a name first: returns false and opens the name dialog.
     bool SaveDocument() {
         if (IsUntitled()) { docNameMode = NameMode::SaveAs; docNameOpen = true; return false; }
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        if (!SaveProject(project, projectPath)) { SetStatus("SAVE FAILED: " + projectPath); return false; }
+        if (docNewerFormat) {   // DATA-1: never over a file from a newer version: save a copy under a new name
+            docNameMode = NameMode::SaveAs; docNameOpen = true;
+            SetStatus("THIS FILE IS FROM A NEWER TR-BRICK: SAVE A COPY UNDER A NEW NAME, THE FILE STAYS AS IT IS"); statusMessageTimer = 8.0f;
+            return false;
+        }
+        if (!SaveSnapshot(projectPath)) { SetStatus("SAVE FAILED: " + projectPath); statusMessageTimer = 8.0f; return false; }
         std::remove(userdirs::RecoveryPathFor(projectPath).c_str());
         MarkSaved();
         SetStatus("SAVED " + userdirs::ProjectDisplayName(projectPath));
@@ -3711,13 +3805,13 @@ struct AppState {
         clean = clean.substr(a, clean.find_last_not_of(' ') - a + 1);
         std::string path = UniqueProjectPathForName(clean);
         std::string oldName = project.name;
-        project.name = clean;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        if (!SaveProject(project, path)) {
-            project.name = oldName;
-            SetStatus("SAVE AS FAILED: " + path);
+        { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); project.name = clean; }
+        if (!SaveSnapshot(path)) {
+            { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); project.name = oldName; }
+            SetStatus("SAVE AS FAILED: " + path); statusMessageTimer = 8.0f;
             return false;
         }
+        docNewerFormat = 0;   // the copy is this version's own file
         DropRecovery();   // the old document's copy (the Untitled file, or Recovery/<old>.t8proj)
         CopySamplesTo(path);   // v44.50: the samples of the sampler go with the project
         projectPath = path;
@@ -3740,7 +3834,7 @@ struct AppState {
         projectPath = path;
         project.name = userdirs::ProjectDisplayName(path);
         projectFilesCacheValid = false;
-        if (!wasEdited) { SaveProject(project, path); MarkSaved(); }
+        if (!wasEdited) { if (!docNewerFormat) SaveSnapshot(path); MarkSaved(); }   // a newer-version file is only renamed, never rewritten
         SetStatus("RENAMED TO " + project.name);
         return true;
     }
@@ -3760,6 +3854,7 @@ struct AppState {
         projectPath = userdirs::UntitledPath();
         std::remove(projectPath.c_str());
         projectFilesCacheValid = false;
+        docNewerFormat = 0;
         MarkSaved();
         SetStatus("NEW PROJECT");
     }

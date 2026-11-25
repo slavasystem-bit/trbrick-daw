@@ -49,6 +49,30 @@ void DrawDocumentDialogs(AppState& app) {
         ImGui::EndPopup();
     }
 
+    // ---- what the last load must tell (DATA-2): damaged / from the backup / newer version / repaired values ---------------
+    if (!app.docNoticeTitle.empty() && app.docRecoverPath.empty() && !ImGui::IsPopupOpen("LoadNotice") && !ImGui::IsPopupOpen("Recovered")) ImGui::OpenPopup("LoadNotice");
+    CenterNext();
+    if (ImGui::BeginPopupModal("LoadNotice", nullptr, kModal)) {
+        ImGui::TextColored(kAmber, "%s", app.docNoticeTitle.c_str());
+        ImGui::TextUnformatted(app.docNoticeText.c_str());
+        ImGui::Spacing();
+        const bool canRestore = !app.docNoticeFailedPath.empty() && app.docNoticeCanRestore;
+        if (canRestore) {
+            if (ImGui::Button("RESTORE NEWEST COPY", ImVec2(190, 0))) {
+                app.RestoreFailedFromBackup();
+                app.docNoticeTitle.clear(); app.docNoticeText.clear(); app.docNoticeFailedPath.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+        }
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        if (ImGui::Button("OK", ImVec2(110, 0)) || t8::desktop::interaction::KeyConfirm() || t8::desktop::interaction::KeyCancel()) {
+            app.docNoticeTitle.clear(); app.docNoticeText.clear(); app.docNoticeFailedPath.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     // ---- Save / Don't Save / Cancel ---------------------------------------------------------------------------------------
     if (app.docAskUnsaved && !ImGui::IsPopupOpen("Unsaved")) ImGui::OpenPopup("Unsaved");
     CenterNext();
@@ -75,7 +99,7 @@ void DrawDocumentDialogs(AppState& app) {
     static char nameBuf[96] = "";
     if (app.docNameOpen && !ImGui::IsPopupOpen("Name")) {
         std::string initial = DocName(app);
-        if (app.docNameMode == AppState::NameMode::Duplicate) initial += " copy";
+        if (app.docNameMode == AppState::NameMode::Duplicate || app.docNewerFormat) initial += " copy";
         if (app.IsUntitled() && app.docNameMode != AppState::NameMode::Duplicate) initial.clear();
         std::snprintf(nameBuf, sizeof nameBuf, "%s", initial.c_str());
         ImGui::OpenPopup("Name");
@@ -84,8 +108,11 @@ void DrawDocumentDialogs(AppState& app) {
     if (ImGui::BeginPopupModal("Name", nullptr, kModal)) {
         const char* title = app.docNameMode == AppState::NameMode::Rename ? "Rename the project"
                           : app.docNameMode == AppState::NameMode::Duplicate ? "Duplicate the project as"
-                          : app.IsUntitled() ? "Name the project" : "Save the project as";
+                          : app.IsUntitled() ? "Name the project"
+                          : app.docNewerFormat ? "Save a copy (the file is from a newer TR-Brick)" : "Save the project as";
         ImGui::TextColored(kAmber, "%s", title);
+        if (app.docNewerFormat && app.docNameMode == AppState::NameMode::SaveAs)
+            ImGui::TextDisabled("Saving over it would drop what only the newer version knows. The file stays as it is.");
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         ImGui::SetNextItemWidth(340);
         const bool enter = ImGui::InputTextWithHint("##docname", "project name", nameBuf, sizeof nameBuf, ImGuiInputTextFlags_EnterReturnsTrue);

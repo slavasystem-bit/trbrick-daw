@@ -15,10 +15,6 @@ namespace t8::desktop {
 namespace {
 const ImVec4 kAmber(0.95f, 0.64f, 0.24f, 1.0f);
 
-std::string BaseName(const std::string& p) {
-    size_t s = p.find_last_of("/\\");
-    return s == std::string::npos ? p : p.substr(s + 1);
-}
 
 // MenuItem with a shortcut text ("Cmd+S"), a hint for the info line and an enabled flag. Returns true when chosen.
 bool Item(const char* label, const char* key, const char* hint, bool enabled = true, bool checked = false) {
@@ -212,15 +208,14 @@ void MenuBar::DrawVersionsDialog(AppState& app) {
         if (backups_.empty()) ImGui::TextDisabled("(no versions yet - they are made automatically)");
         for (const std::string& b : backups_) {
             const bool armed = restoreArmed_ == b;
-            if (ImGui::Selectable(BaseName(b).c_str(), armed)) restoreArmed_ = armed ? std::string() : b;
+            if (ImGui::Selectable((BackupLabel(b) + "##" + b).c_str(), armed)) restoreArmed_ = armed ? std::string() : b;
         }
         ImGui::EndChild();
         if (!restoreArmed_.empty()) {
-            ImGui::TextColored(kAmber, "Replace the open project with %s?", BaseName(restoreArmed_).c_str());
+            ImGui::TextColored(kAmber, "Replace the open project with the version of %s?", BackupLabel(restoreArmed_).c_str());
             ImGui::TextDisabled("The project file becomes this version. Changes you have not saved are lost.");
             if (ImGui::Button("RESTORE", ImVec2(120, 0))) {
-                std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
-                app.RestoreBackupFile(restoreArmed_);
+                app.RestoreBackupFile(restoreArmed_);   // takes the scene lock only for the short swaps (LIVE-4)
                 restoreArmed_.clear();
                 backups_ = ListProjectBackups(app.projectPath);
             }

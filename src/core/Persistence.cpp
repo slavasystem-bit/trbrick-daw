@@ -120,6 +120,7 @@
 // This is intentionally not JSON/XML to avoid pulling in a parser
 // dependency -- it's simple enough to hand-write robustly.
 #include "Persistence.h"
+#include "FileSafety.h"
 #include "SoundParts.h"
 #include "SamplerText.h"
 #include "UserDirs.h"
@@ -140,6 +141,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <exception>
+#include <cmath>
 #include <vector>
 #include <string>
 
@@ -572,8 +574,7 @@ bool SaveProject(const Project& project, const std::string& path, bool keepHisto
     }
     // Force the bytes to the device before the swap so the rename can never
     // publish a file whose contents are still only in the OS cache.
-    int fd = ::open(tmpPath.c_str(), O_RDONLY);
-    if (fd >= 0) { ::fsync(fd); ::close(fd); }
+    FlushFileToDisk(tmpPath);
     struct stat st;
     if (keepHistory && ::stat(path.c_str(), &st) == 0) {
         // First save of this file in this process: keep a dated copy of what
@@ -585,21 +586,135 @@ bool SaveProject(const Project& project, const std::string& path, bool keepHisto
             backedUpThisSession.push_back(path);
             BackupProjectFile(path);
         }
-        std::rename(path.c_str(), (path + ".bak").c_str());
+        // The previous save becomes <path>.bak as a second name of the same file (hard link), so <path> itself is never
+        // missing, not even for a moment: the rename below swaps the new contents in atomically.
+        const std::string bak = path + ".bak";
+        std::remove(bak.c_str());
+        if (::link(path.c_str(), bak.c_str()) != 0) {   // a disk without hard links: copy instead
+            std::string prev;
+            std::ifstream in(path, std::ios::binary);
+            if (in) { std::ostringstream os; os << in.rdbuf(); prev = os.str(); WriteFileAtomic(bak, prev); }
+        }
     }
     if (std::rename(tmpPath.c_str(), path.c_str()) != 0) {
         std::cerr << "[persist] rename failed: " << tmpPath << " -> " << path << "\n";
-        // put the previous version back so there is still a project at <path>
-        std::rename((path + ".bak").c_str(), path.c_str());
+        std::remove(tmpPath.c_str());   // <path> still holds the previous version
         return false;
     }
+    FlushDirOf(path);
     return true;
 }
 
 namespace {
+// ---- Load-time sanity pass (DATA-3) ---------------------------------------------------------------------------------------
+// The reader trusts many numbers it parses (lengths, slot indices, levels). A damaged or hand-edited file must never make the
+// engine read past an array or feed NaN into the audio, so after parsing every value that indexes something or reaches the
+// DSP is forced into its legal range. Each value that had to change is counted; LoadProject reports the count to the user.
+// Values a normal save writes are always inside these ranges, so a healthy file is left exactly as it was.
+struct Sanitizer {
+    int fixed = 0;
+    void F(float& v, float lo, float hi, float def) {
+        if (!std::isfinite(v)) { v = def; ++fixed; return; }
+        if (v < lo) { v = lo; ++fixed; } else if (v > hi) { v = hi; ++fixed; }
+    }
+    void I(int& v, int lo, int hi) {
+        if (v < lo) { v = lo; ++fixed; } else if (v > hi) { v = hi; ++fixed; }
+    }
+    void Note(int8_t& n) { if (n < 0) { n = 0; ++fixed; } }   // int8_t never exceeds 127
+    void Patch(SynthPatch& p) {
+        const SynthPatch d;
+        F(p.cutoffHz, 20.0f, 20000.0f, d.cutoffHz);
+        F(p.resonance, 0.0f, 0.99f, d.resonance);
+        F(p.envAmount, -1.0f, 1.0f, d.envAmount);
+        F(p.attack, 0.0f, 10.0f, d.attack);
+        F(p.decay, 0.0f, 10.0f, d.decay);
+        F(p.sustain, 0.0f, 1.0f, d.sustain);
+        F(p.release, 0.0f, 10.0f, d.release);
+        F(p.filterDecay, 0.0f, 10.0f, d.filterDecay);
+        F(p.glideTime, 0.0f, 2.0f, d.glideTime);
+        F(p.volume, 0.0f, 2.0f, d.volume);
+        F(p.lfoRateHz, 0.01f, 20.0f, d.lfoRateHz);
+        F(p.lfoDepth, 0.0f, 1.0f, d.lfoDepth);
+        I(p.fmAlgorithm, 0, kNumFmAlgorithms - 1);
+        for (auto& op : p.fmOps) { F(op.ratio, 0.25f, 16.0f, 1.0f); F(op.level, 0.0f, 1.0f, 0.5f); }
+        I(p.wavetableBank, 0, kNumWavetableBanks - 1);
+        I(p.unisonVoices, 1, kMaxUnisonVoices);
+    }
+    void TrackAt(Track& t, TrackType type, int slot) {
+        if (t.type != type) { t.type = type; ++fixed; }
+        if (t.slotIndex != slot) { t.slotIndex = slot; ++fixed; }
+        I(t.length, 1, kMaxSteps);
+        for (Step& s : t.steps) {
+            Note(s.note);
+            for (auto& n : s.chordNotes) Note(n);
+            if (s.lengthSteps < 1) { s.lengthSteps = 1; ++fixed; }
+        }
+        if (t.euclidSteps < 1 || t.euclidSteps > kMaxSteps) { t.euclidSteps = static_cast<uint8_t>(std::clamp<int>(t.euclidSteps, 1, kMaxSteps)); ++fixed; }
+        if (t.euclidHits > t.euclidSteps) { t.euclidHits = t.euclidSteps; ++fixed; }
+        if (!std::isfinite(t.swing)) { t.swing = -1.0f; ++fixed; }
+        F(t.volume, 0.0f, 1.0f, 0.8f);
+        F(t.pan, -1.0f, 1.0f, 0.0f);
+        F(t.drumTune, -24.0f, 24.0f, 0.0f);
+        F(t.drumDecay, 0.25f, 2.0f, 1.0f);
+        F(t.delaySend, 0.0f, 1.0f, 0.0f);
+        F(t.reverbSend, 0.0f, 1.0f, 0.0f);
+        F(t.insertDrive, 0.0f, 1.0f, 0.0f);
+        F(t.insertEqTilt, -1.0f, 1.0f, 0.0f);
+        F(t.insertChorus, 0.0f, 1.0f, 0.0f);
+        F(t.autopanRate, 0.05f, 8.0f, 1.0f);
+        F(t.autopanDepth, 0.0f, 1.0f, 0.0f);
+    }
+    void PatternAt(Pattern& p) {
+        I(p.masterLength, 1, kMaxSteps);
+        F(p.bpm, 20.0f, 300.0f, 120.0f);
+        F(p.swing, 0.0f, 0.75f, 0.0f);
+        for (auto& sp : p.synthPatches) Patch(sp);
+        Patch(p.chordPatch);
+        for (int i = 0; i < kNumTracks; ++i) {
+            Track& t = p.tracks[static_cast<size_t>(i)];
+            if (i < kNumDrumTracks) TrackAt(t, TrackType::Drum, i);
+            else if (i < kChordTrackIndex) TrackAt(t, TrackType::Synth, i - kNumDrumTracks);
+            else if (i == kChordTrackIndex) TrackAt(t, TrackType::Chord, 0);
+            else TrackAt(t, TrackType::Sampler, i - kSamplerTrackIndex);
+        }
+    }
+    void ProjectAll(Project& pj) {
+        for (int s = 0; s < kNumSlotsTotal; ++s) PatternAt(pj.patterns[static_cast<size_t>(s)]);
+        for (auto& sp : pj.baseSynthPatches) Patch(sp);
+        Patch(pj.baseChordPatch);
+        for (auto& cs : pj.chordScenes) TrackAt(cs.track, TrackType::Chord, 0);
+        I(pj.currentPattern, 0, kNumPatterns - 1);
+        I(pj.liveScene, 0, kNumLiveScenes - 1);
+        I(pj.chordSceneEdit, 0, kNumChordScenes - 1);
+        I(pj.randomizerKeyRoot, 0, kNumKeys - 1);
+        I(pj.randomizerScale, 0, kNumScales - 1);
+        I(pj.songChainLength, 0, kMaxChainSteps);
+        F(pj.masterVolume, 0.0f, 1.2f, 0.4f);
+        FxSettings& fx = pj.fx;
+        const FxSettings d;
+        F(fx.delayTimeSec, 0.02f, 2.0f, d.delayTimeSec);
+        I(fx.delayDivisionIndex, 0, kNumDelayDivisions - 1);
+        F(fx.delayFeedback, 0.0f, 0.95f, d.delayFeedback);
+        F(fx.delayLevel, 0.0f, 1.0f, d.delayLevel);
+        F(fx.reverbSize, 0.0f, 0.97f, d.reverbSize);
+        F(fx.reverbLevel, 0.0f, 1.0f, d.reverbLevel);
+        F(fx.distortionDrive, 0.0f, 1.0f, d.distortionDrive);
+        F(fx.sidechainAmount, 0.0f, 1.0f, d.sidechainAmount);
+        F(fx.sidechainRelease, 0.02f, 1.0f, d.sidechainRelease);
+        I(fx.master.chainPreset, -1, kNumMasterPresets - 1);
+        I(fx.master.compPreset, -1, kNumCompPresets - 1);
+    }
+};
+
+// Filled by LoadProjectOnce for LoadProject: values the sanity pass had to change, and the format of a file from a newer version.
+int g_onceFixed = 0;
+int g_onceNewerFormat = 0;
+
 // One attempt at reading `path`. Returns false (with `problem` set) for an
 // unreadable, malformed or incomplete file -- never throws.
 bool LoadProjectOnce(Project& project, const std::string& path, std::string& problem) {
+    g_onceFixed = 0;
+    g_onceNewerFormat = 0;
     std::ifstream f(path);
     if (!f) {
         problem = "cannot open";
@@ -1069,19 +1184,42 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
     // v44.22 (S1a): a file from before the bricks had their own notes: every brick pointed at a LIVE scene. Each distinct scene used by
     // the chain gets one hidden brick slot (a copy), so the bricks keep playing exactly what they played; bricks that shared a
     // scene still share (REPEAT SAME). The live scenes stay as they were.
-    if (fileFormat < 5) {
+    // A brick of the track must have a scene slot of its own (v44.22). Files from before that (format < 5) and files whose first
+    // brick was the v44.9 starter brick (DATA-7: it pointed at LIVE scene 1 itself, so editing the track changed the jam scene)
+    // have chain steps that point at a LIVE scene: each such scene is copied into a free brick slot and the steps point at the
+    // copy. The copy holds the same notes and sound, so the file plays exactly as before; the LIVE scene is no longer shared.
+    {
+        std::array<bool, kNumPatterns> used{};
+        for (int i = 0; i < project.songChainLength; ++i) {
+            const int pi = project.songChain[static_cast<size_t>(i)].patternIndex;
+            if (pi >= kNumLiveScenes && pi < kNumPatterns) used[static_cast<size_t>(pi)] = true;
+        }
         std::array<int, kNumLiveScenes> slotOf{};
         slotOf.fill(-1);
-        int nextSlot = kNumLiveScenes;
-        for (int i = 0; i < project.songChainLength && nextSlot < kNumPatterns; ++i) {
-            int& pi = project.songChain[static_cast<size_t>(i)].patternIndex;
+        for (int i = 0; i < project.songChainLength; ++i) {
+            ChainStep& cs = project.songChain[static_cast<size_t>(i)];
+            const int pi = cs.patternIndex;
             if (pi < 0 || pi >= kNumLiveScenes) continue;
             if (slotOf[static_cast<size_t>(pi)] < 0) {
-                slotOf[static_cast<size_t>(pi)] = nextSlot++;
-                project.patterns[static_cast<size_t>(slotOf[static_cast<size_t>(pi)])] = project.patterns[static_cast<size_t>(pi)];
+                int free = -1;
+                for (int sl = kNumLiveScenes; sl < kNumPatterns; ++sl) if (!used[static_cast<size_t>(sl)]) { free = sl; break; }
+                if (free < 0) continue;   // cannot happen: there is a brick slot for every chain step
+                used[static_cast<size_t>(free)] = true;
+                slotOf[static_cast<size_t>(pi)] = free;
+                Pattern& brick = project.patterns[static_cast<size_t>(free)];
+                brick = project.patterns[static_cast<size_t>(pi)];
+                if (fileFormat >= 6) {   // the brick's sound follows the track where it sounds the same (as a thrown brick does)
+                    Pattern& ts = project.patterns[static_cast<size_t>(kTrackSoundSlot)];
+                    brick.ownSound = 0;
+                    if (project.trackSoundMask == 0) { CopyAllParts(ts, brick); project.trackSoundMask = 255; }
+                    else for (int part = 0; part < kNumParts; ++part) if (SoundPartText(brick, part) != SoundPartText(ts, part)) brick.ownSound |= static_cast<uint16_t>(1u << part);
+                }
             }
-            pi = slotOf[static_cast<size_t>(pi)];
+            const Pattern& brick = project.patterns[static_cast<size_t>(slotOf[static_cast<size_t>(pi)])];
+            if (fileFormat >= 5 && !cs.params.Any() && brick.params.Any()) cs.params = brick.params;   // the scene's rows go with it, as when thrown
+            cs.patternIndex = slotOf[static_cast<size_t>(pi)];
         }
+        if (fileFormat >= 5) for (int sl : slotOf) if (sl >= 0) project.patterns[static_cast<size_t>(sl)].params = StepParams{};
     }
     // v44.24: a file from before bricks could have their own sound: the first brick's sound becomes the sound of the track (the
     // v44.23 track sound held only the voices, not the channels), and every other brick that sounds different in a part keeps that
@@ -1116,7 +1254,12 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
     }
     project.currentPattern = std::clamp(project.currentPattern, 0, kNumLiveScenes - 1);
     project.liveScene = project.currentPattern;
-    if (fileFormat > kProjectFormatVersion) {
+    Sanitizer san;
+    san.ProjectAll(project);
+    g_onceFixed = san.fixed;
+    if (san.fixed > 0) std::cerr << "[persist] " << path << ": " << san.fixed << " damaged values put back into range\n";
+    g_onceNewerFormat = fileFormat > kProjectFormatVersion ? fileFormat : 0;
+    if (g_onceNewerFormat) {
         std::cerr << "[persist] " << path << " was written by a newer version (format " << fileFormat
                   << "); loading what is understood\n";
     }
@@ -1124,13 +1267,28 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
 }
 } // namespace
 
-namespace { std::string g_lastLoadNote; }
+namespace {
+std::string g_lastLoadNote;
+int g_lastNewerFormat = 0, g_lastFixed = 0;
+// What the user must hear about a file that did load (newer version, repaired values); empty when nothing.
+std::string LoadWarnings() {
+    std::string note;
+    if (g_lastNewerFormat) note = "THIS FILE IS FROM A NEWER TR-BRICK: CMD+S SAVES A COPY, THE FILE STAYS AS IT IS";
+    if (g_lastFixed) note += (note.empty() ? "" : " | ") + std::string("REPAIRED ") + std::to_string(g_lastFixed) + " DAMAGED VALUES IN THE FILE";
+    return note;
+}
+} // namespace
 const std::string& LastLoadNote() { return g_lastLoadNote; }
+int LastLoadNewerFormat() { return g_lastNewerFormat; }
+int LastLoadFixedValues() { return g_lastFixed; }
 
 bool LoadProject(Project& project, const std::string& path) {
     g_lastLoadNote.clear();
+    g_lastNewerFormat = g_lastFixed = 0;
     std::string problem;
     if (LoadProjectOnce(project, path, problem)) {
+        g_lastNewerFormat = g_onceNewerFormat; g_lastFixed = g_onceFixed;
+        g_lastLoadNote = LoadWarnings();
         BackupProjectFile(path);   // keep a dated copy of whatever we just opened
         return true;
     }
@@ -1139,13 +1297,16 @@ bool LoadProject(Project& project, const std::string& path) {
     std::string bak = path + ".bak";
     std::string problem2;
     if (LoadProjectOnce(project, bak, problem2)) {
+        g_lastNewerFormat = g_onceNewerFormat; g_lastFixed = g_onceFixed;
         g_lastLoadNote = "RECOVERED FROM BACKUP (" + problem + ")";
+        if (!LoadWarnings().empty()) g_lastLoadNote += " | " + LoadWarnings();
         // Keep the damaged file for inspection and put the good copy in its place.
         std::rename(path.c_str(), (path + ".corrupt").c_str());
         {
+            std::string good;
             std::ifstream in(bak, std::ios::binary);
-            std::ofstream out(path, std::ios::binary | std::ios::trunc);
-            if (in && out) out << in.rdbuf();
+            if (in) { std::ostringstream os; os << in.rdbuf(); good = os.str(); }
+            if (!in || !WriteFileAtomic(path, good)) std::cerr << "[persist] could not put " << bak << " back in place of " << path << "\n";
         }
         std::cerr << "[persist] recovered from " << bak << "\n";
         return true;
@@ -1158,9 +1319,13 @@ bool LoadProject(Project& project, const std::string& path) {
     return false;
 }
 
-// Dated safety copies: <backups>/<name>-YYYYMMDD-HHMMSS.t8proj, newest `keep` kept per project. Taken on every successful load,
-// so one bad session can always be rolled back to how the file looked when it was opened. Since v44.14 the folder is the
-// program's own service folder (userdirs::BackupsDir()); in legacy mode it is "backups" next to the project file.
+// Dated safety copies: <backups>/<name>~<folder>-YYYYMMDD-HHMMSS.t8proj. <folder> is a short code of the folder the project
+// lives in, so two projects with the same name in different folders never push out each other's copies (DATA-4). Taken on
+// every successful load and before the first save of a session, but only when the file differs from the newest copy (opening
+// the same project ten times no longer leaves ten identical copies). Kept: the newest `keep`, plus the newest copy of each of
+// the 14 days before them, so yesterday's version survives a busy day. Since v44.14 the folder is the program's own service
+// folder (userdirs::BackupsDir()); in legacy mode it is "backups" next to the project file. Copies from before v44.59 have no
+// <folder> part; they are still listed (never pruned) for the project with that name.
 namespace {
 std::string BackupDirFor(const std::string& projectPath) {
     const std::string svc = userdirs::BackupsDir();
@@ -1175,72 +1340,145 @@ std::string StemOf(const std::string& projectPath) {
     size_t dot = base.rfind('.');
     return dot == std::string::npos ? base : base.substr(0, dot);
 }
-// "<stem>-YYYYMMDD-HHMMSS.t8proj" exactly (so "a" does not claim the backups of "a-b")
-bool IsBackupOf(const std::string& file, const std::string& stem) {
-    const size_t want = stem.size() + 1 + 15 + 7;
-    if (file.size() != want || file.compare(0, stem.size() + 1, stem + "-") != 0) return false;
-    if (file.compare(file.size() - 7, 7, ".t8proj") != 0) return false;
-    const std::string ts = file.substr(stem.size() + 1, 15);
+// 8 hex digits naming the folder of `projectPath` (FNV-1a of its absolute path).
+// The absolute path of a folder (as given when it cannot be resolved).
+std::string RealPathOf(std::string dir) {
+    if (dir.empty()) dir = "/";
+    if (char* real = ::realpath(dir.c_str(), nullptr)) { dir = real; std::free(real); }
+    return dir;
+}
+std::string FolderOf(const std::string& path) {
+    size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
+}
+std::string FolderCodeOf(const std::string& projectPath) {
+    const std::string dir = RealPathOf(FolderOf(projectPath));
+    uint32_t h = 2166136261u;
+    for (unsigned char c : dir) { h ^= c; h *= 16777619u; }
+    char buf[9];
+    std::snprintf(buf, sizeof(buf), "%08x", h);
+    return buf;
+}
+bool IsStamp(const std::string& ts) {   // "YYYYMMDD-HHMMSS"
+    if (ts.size() != 15) return false;
     for (size_t i = 0; i < ts.size(); ++i) {
         if (i == 8) { if (ts[i] != '-') return false; }
         else if (ts[i] < '0' || ts[i] > '9') return false;
     }
     return true;
 }
+// "<stem>~<code>-YYYYMMDD-HHMMSS.t8proj" exactly (so "a" does not claim the backups of "a-b")
+bool IsBackupOf(const std::string& file, const std::string& stem, const std::string& code) {
+    const std::string head = stem + "~" + code + "-";
+    if (file.size() != head.size() + 15 + 7 || file.compare(0, head.size(), head) != 0) return false;
+    if (file.compare(file.size() - 7, 7, ".t8proj") != 0) return false;
+    return IsStamp(file.substr(head.size(), 15));
+}
+// A copy from before v44.59: "<stem>-YYYYMMDD-HHMMSS.t8proj".
+bool IsLegacyBackupOf(const std::string& file, const std::string& stem) {
+    if (file.size() != stem.size() + 1 + 15 + 7 || file.compare(0, stem.size() + 1, stem + "-") != 0) return false;
+    if (file.compare(file.size() - 7, 7, ".t8proj") != 0) return false;
+    return IsStamp(file.substr(stem.size() + 1, 15));
+}
+std::string StampOf(const std::string& file) { return file.size() >= 22 ? file.substr(file.size() - 22, 15) : std::string(); }
+bool ReadWhole(const std::string& path, std::string& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::ostringstream os;
+    os << in.rdbuf();
+    out = os.str();
+    return !in.bad();
+}
 } // namespace
 
-bool BackupProjectFile(const std::string& path, int keep) {
-    struct stat st;
-    if (::stat(path.c_str(), &st) != 0) return false;
-    const std::string stem = StemOf(path);
-    const std::string bdir = BackupDirFor(path);
-    ::mkdir(bdir.c_str(), 0755);
-    char stamp[32];
-    std::time_t now = std::time(nullptr);
-    std::tm tmv{};
-    localtime_r(&now, &tmv);
-    std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
-    std::string dest = bdir + "/" + stem + "-" + stamp + ".t8proj";
+// Writes `bytes` to <dest>.tmp, flushes it to the disk and renames it over `dest`: a reader sees the old file or the new one,
+// never half of one.
+bool WriteFileAtomic(const std::string& dest, const std::string& bytes) {
+    const std::string tmp = dest + ".tmp";
     {
-        std::ifstream in(path, std::ios::binary);
-        std::ofstream out(dest, std::ios::binary | std::ios::trunc);
-        if (!in || !out) return false;
-        out << in.rdbuf();
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) return false;
+        out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        out.flush();
+        if (!out) { out.close(); std::remove(tmp.c_str()); return false; }
     }
-    // prune: same project, sorted by name (= by time), drop the oldest beyond `keep`
+    FlushFileToDisk(tmp);
+    if (std::rename(tmp.c_str(), dest.c_str()) != 0) { std::remove(tmp.c_str()); return false; }
+    FlushDirOf(dest);
+    return true;
+}
+
+bool BackupProjectFile(const std::string& path, int keep) {
+    std::string bytes;
+    if (!ReadWhole(path, bytes)) return false;
+    const std::string stem = StemOf(path);
+    const std::string code = FolderCodeOf(path);
+    const std::string bdir = BackupDirFor(path);
+    // A file opened from the backups folder itself (the Versions list, or by hand): no copy of the copy, they would only pile up.
+    if (RealPathOf(FolderOf(path)) == RealPathOf(bdir)) return true;
+    ::mkdir(bdir.c_str(), 0755);
     std::vector<std::string> mine;
     if (DIR* d = ::opendir(bdir.c_str())) {
         while (dirent* e = ::readdir(d)) {
             std::string n = e->d_name;
-            if (IsBackupOf(n, stem)) mine.push_back(n);
+            if (IsBackupOf(n, stem, code)) mine.push_back(n);
         }
         ::closedir(d);
     }
+    std::sort(mine.begin(), mine.end());   // by name = by time
+    // Nothing new since the newest copy: no copy (it would only push out an older, different one).
+    if (!mine.empty()) {
+        std::string newest;
+        if (ReadWhole(bdir + "/" + mine.back(), newest) && newest == bytes) return true;
+    }
+    std::time_t now = std::time(nullptr);
+    std::string name;
+    for (int tries = 0; tries < 120; ++tries, ++now) {   // two copies in one second: the second takes the next free second
+        char stamp[32];
+        std::tm tmv{};
+        localtime_r(&now, &tmv);
+        std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tmv);
+        name = stem + "~" + code + "-" + stamp + ".t8proj";
+        struct stat st;
+        if (::stat((bdir + "/" + name).c_str(), &st) != 0) break;
+    }
+    if (!WriteFileAtomic(bdir + "/" + name, bytes)) return false;
+    if (std::find(mine.begin(), mine.end(), name) == mine.end()) mine.push_back(name);
     std::sort(mine.begin(), mine.end());
-    while (static_cast<int>(mine.size()) > keep) {
-        std::remove((bdir + "/" + mine.front()).c_str());
-        mine.erase(mine.begin());
+    // prune: keep the newest `keep`; of the older ones keep the newest copy of each day, for up to 14 days
+    const int n = static_cast<int>(mine.size());
+    std::vector<std::string> days;
+    for (int i = n - 1 - keep; i >= 0; --i) {
+        const std::string day = mine[static_cast<size_t>(i)].substr(mine[static_cast<size_t>(i)].size() - 22, 8);
+        const bool newDay = std::find(days.begin(), days.end(), day) == days.end();
+        if (newDay && days.size() < 14) { days.push_back(day); continue; }
+        std::remove((bdir + "/" + mine[static_cast<size_t>(i)]).c_str());
     }
     return true;
 }
 
 std::vector<std::string> ListProjectBackups(const std::string& path) {
     const std::string stem = StemOf(path);
+    const std::string code = FolderCodeOf(path);
     const std::string bdir = BackupDirFor(path);
     std::vector<std::string> out;
     if (DIR* d = ::opendir(bdir.c_str())) {
         while (dirent* e = ::readdir(d)) {
             std::string n = e->d_name;
-            if (IsBackupOf(n, stem)) out.push_back(bdir + "/" + n);
+            if (IsBackupOf(n, stem, code) || IsLegacyBackupOf(n, stem)) out.push_back(bdir + "/" + n);
         }
         ::closedir(d);
     }
     std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
-        auto ts = [](const std::string& x) { return x.size() >= 22 ? x.substr(x.size() - 22) : x; };
-        return ts(a) > ts(b);   // newest first (timestamp suffix YYYYMMDD-HHMMSS.t8proj)
+        return StampOf(a) > StampOf(b);   // newest first (timestamp suffix YYYYMMDD-HHMMSS.t8proj)
     });
     return out;
+}
+
+std::string BackupLabel(const std::string& backupPath) {
+    const std::string ts = StampOf(backupPath);
+    if (!IsStamp(ts)) return backupPath;
+    return ts.substr(0, 4) + "-" + ts.substr(4, 2) + "-" + ts.substr(6, 2) + "  " + ts.substr(9, 2) + ":" + ts.substr(11, 2) + ":" + ts.substr(13, 2);
 }
 
 } // namespace t8

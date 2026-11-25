@@ -2,6 +2,19 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## v44.59 (stage Н2): nothing gets lost when saving and opening
+
+Audit v44.58 items DATA-1, DATA-2, DATA-3, DATA-4, DATA-5 (project files), DATA-7 and LIVE-4.
+
+- **DATA-1, a file from a newer version.** `kProjectFormatVersion` is 8 (keys added in v44.51-v44.58 never raised it). Loading a file with a higher format sets `LastLoadNewerFormat()`; the app keeps it in `AppState::docNewerFormat`, says it in a dialog, and Cmd+S opens "Save a copy" instead of writing over the file (Rename only moves the file, never rewrites it). New guard: `tools/project_format_keys.txt` lists every key the writer can write for the current format; selftest compares it with `Persistence.cpp` and fails when a key is added without raising the format.
+- **DATA-2, a failed open is visible.** Startup and Open show a dialog (`docNoticeTitle / docNoticeText`) for: could not be opened, opened from `.bak`, newer version, repaired values. A startup load that fails continues with a new Untitled project (before: an empty project kept the old path, so Cmd+S wrote nothing over it). `RESTORE NEWEST COPY` (`AppState::RestoreFailedFromBackup`) brings back the newest dated copy as the project file.
+- **DATA-3, damaged numbers.** A sanity pass after parsing (`Sanitizer` in `Persistence.cpp`) forces every index, length, track type / slot and DSP value into range and replaces NaN / inf; the count is reported (`LastLoadFixedValues()`). A healthy file is never changed (selftest: the example project needs 0 repairs).
+- **DATA-4, backups.** Names are `<stem>~<folder code>-YYYYMMDD-HHMMSS.t8proj` (8 hex digits of the folder's path), so equal names in different folders do not prune each other. No copy when the file equals the newest copy; two copies in one second take the next second. Kept: newest 10 plus the newest copy of each of 14 older days. Older backup names are still listed, never pruned. The Versions list shows `BackupLabel()` (date and time).
+- **DATA-5, write safety.** `FileSafety.h`: `F_FULLFSYNC` on macOS (fsync elsewhere) and a folder fsync after rename. `SaveProject` keeps `.bak` as a hard link (copy fallback), so the project path never disappears during a save. `.bak` recovery and backups use `WriteFileAtomic` (tmp + flush + rename). `RestoreBackupFile` checks every write and stays Edited when it fails.
+- **DATA-7, the starter brick.** The first-start brick is `CopySceneToBrickSlot(0)` instead of pointing at LIVE scene 1. On load, any chain step pointing at a LIVE scene (old starter projects, format < 5 files) gets a copy in a free brick slot (generalises the format < 5 migration; the copy follows the track sound like a thrown brick).
+- **LIVE-4, the "Edited" check and recovery.** `DocHash`, `WriteRecovery`, `SaveDocument`, `SaveProjectAs` and restores copy the project under the scene lock and serialise / write outside it (`SaveSnapshot`). Measured in the cloud on the example project: lock held 0.33 ms for the copy instead of 0.94 ms for the text plus the file write and fsync. While Edited, the check runs every 2 s instead of every 0.5 s. `AdoptProject` now takes the lock itself.
+- Tests: 42 new selftest checks (`n2 ...`); updated: format number literals, the v44.5 chain persistence check (its LIVE-slot step is now a brick copy), the u8a backup name.
+
 ## Stage N1 (part 1): measure audio dropouts
 
 First step of "the sound never stops" (audit v44.58, LIVE-5 / TEST-6): measure before fixing.
