@@ -6,6 +6,7 @@
 #include "Scope.h"
 #include "imgui.h"
 #include "InfoLine.h"
+#include "Visual.h"
 #include "core/Scales.h"
 #include <SDL.h>
 #include <algorithm>
@@ -130,7 +131,7 @@ void HeaderPanel::DrawDropouts(AppState& app, float rightX) {
     else std::snprintf(b, sizeof(b), "DSP %.0f%%   XRUN 0", load * 100.0f);
     ImGui::SetCursorScreenPos(ImVec2(rightX - ImGui::CalcTextSize(b).x, ImGui::GetCursorScreenPos().y));
     ImGui::AlignTextToFramePadding();
-    const ImVec4 col = xr ? ImVec4(0.91f, 0.30f, 0.30f, 1.0f) : (load > 0.6f ? ImVec4(0.95f, 0.64f, 0.24f, 1.0f) : ImVec4(0.5f, 0.52f, 0.6f, 1.0f));
+    const ImVec4 col = ImGui::ColorConvertU32ToFloat4(xr ? vis::kRed : (load > 0.6f ? vis::kAccent : vis::kTextDim));   // theme colours (Visual.h)
     ImGui::TextColored(col, "%s", b);
     if (ImGui::IsItemHovered()) {
         // the last few dropouts, newest first: "12s ago 250.0 ms (screen 248.0)"
@@ -143,7 +144,7 @@ void HeaderPanel::DrawDropouts(AppState& app, float rightX) {
             std::snprintf(e, sizeof(e), "%s%us ago %.1f ms (screen %.1f)", k ? ", " : "", ago, d.lenUs.load() / 1000.0, d.waitUs.load() / 1000.0);
             recent += e;
         }
-        const double bufMs = 1000.0 * 128.0 / std::max(1, app.engine.SampleRate());
+        const double bufMs = 1000.0 * mx.audioBufferFrames.load() / std::max(1, app.engine.SampleRate());   // the buffer the device really uses
         Hint("Audio thread load %.0f%% (recent peak %.0f%%). XRUN = audible dropouts: a buffer (%.1f ms) was not ready in time.\n"
              "Longest %.1f ms, of which the screen held the sound %.1f ms. The screen held the sound at most %.1f ms.%s%s\nClick to reset.",
              load * 100.0f, peak * 100.0f, bufMs, mx.audioLongestUs.load() / 1000.0, mx.audioLongestWaitUs.load() / 1000.0,

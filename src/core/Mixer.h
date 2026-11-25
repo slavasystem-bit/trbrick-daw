@@ -114,6 +114,7 @@ public:
     // N1: what the dropout readout shows. audioLockWaitUs = time the audio thread waited for the scene lock in the
     // current callback (added by the sequencer, taken by the callback). The rest is kept since the last reset (click).
     std::atomic<unsigned> audioLockWaitUs{0};
+    std::atomic<int> audioBufferFrames{128};      // frames per callback, as the device delivers them
     std::atomic<unsigned> audioLongestUs{0};      // longest callback (what the dropout lasted)
     std::atomic<unsigned> audioLongestWaitUs{0};  // ... of which waiting for the scene lock (the screen held the sound)
     static constexpr int kDropoutLog = 8;

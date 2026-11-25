@@ -79,6 +79,7 @@ inline void AudioCallback(void* userdata, Uint8* stream, int len) {
         // N1: a dropout is logged with how long it lasted and how much of it the audio thread spent waiting for the
         // scene lock (= the screen or a loader held the sound), so the header can tell "the screen" from "too much DSP".
         const unsigned waitUs = mx.audioLockWaitUs.exchange(0, std::memory_order_relaxed);
+        mx.audioBufferFrames.store(numFrames, std::memory_order_relaxed);
         const unsigned usedUs = static_cast<unsigned>(std::min(used * 1e6, 4.0e9));
         if (usedUs > mx.audioLongestUs.load(std::memory_order_relaxed)) {
             mx.audioLongestUs.store(usedUs, std::memory_order_relaxed);
