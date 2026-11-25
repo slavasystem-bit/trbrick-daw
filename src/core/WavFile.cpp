@@ -1,5 +1,6 @@
 #include "WavFile.h"
 #include "Resample.h"
+#include "FileSafety.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +16,24 @@ struct RiffChunk { char id[4]; uint32_t size; };
 
 uint32_t rd32(const uint8_t* p) { return p[0] | (p[1]<<8) | (p[2]<<16) | (uint32_t(p[3])<<24); }
 uint16_t rd16(const uint8_t* p) { return p[0] | (p[1]<<8); }
+
+// LIVE-8: a damaged or hostile file must never make the reader go past its buffers, allocate gigabytes or resample forever.
+// A chunk can claim any size (up to 4 GB); what is read is limited to what the file really holds, and audio data larger than
+// this is refused (3 minutes of 8-channel 192 kHz 32-bit audio is ~440 MB).
+constexpr uint64_t kMaxAudioBytes = 512ull * 1024 * 1024;
+uint64_t FileSize(FILE* f) {
+    const long here = std::ftell(f);
+    if (here < 0 || std::fseek(f, 0, SEEK_END) != 0) return 0;
+    const long end = std::ftell(f);
+    std::fseek(f, here, SEEK_SET);
+    return end > 0 ? static_cast<uint64_t>(end) : 0;
+}
+uint64_t BytesLeft(FILE* f, uint64_t fileSize) {
+    const long here = std::ftell(f);
+    return (here < 0 || static_cast<uint64_t>(here) >= fileSize) ? 0 : fileSize - static_cast<uint64_t>(here);
+}
+// Rates outside this make no sense for audio and would make the resampler produce absurd amounts of data.
+bool PlausibleRate(double r) { return r >= 1000.0 && r <= 768000.0; }
 } // namespace
 
 namespace {
@@ -37,12 +56,15 @@ bool DecodeWavFile(const std::string& path, std::vector<float>& srcOut, int& src
     std::vector<uint8_t> dataBytes;
     bool haveFmt = false, haveData = false;
 
+    const uint64_t fileSize = FileSize(f);
+    bool tooBig = false;
     uint8_t chunkHdr[8];
     while (std::fread(chunkHdr, 1, 8, f) == 8) {
         char id[5] = {0};
         std::memcpy(id, chunkHdr, 4);
         uint32_t size = rd32(chunkHdr + 4);
         if (std::memcmp(id, "fmt ", 4) == 0) {
+            if (size < 16 || size > 4096) break;   // LIVE-8: the fields below are 16 bytes; a shorter chunk was read past its end
             std::vector<uint8_t> fmt(size);
             if (std::fread(fmt.data(), 1, size, f) != size) break;
             formatTag     = rd16(fmt.data() + 0);
@@ -52,8 +74,10 @@ bool DecodeWavFile(const std::string& path, std::vector<float>& srcOut, int& src
             if (formatTag == 0xFFFE && size >= 26) formatTag = rd16(fmt.data() + 24);   // v44.50: WAVE_FORMAT_EXTENSIBLE (what most DAWs write for 24-bit, 32-bit and surround): the real tag is the first two bytes of the sub-format
             haveFmt = true;
         } else if (std::memcmp(id, "data", 4) == 0) {
-            dataBytes.resize(size);
-            const size_t got = std::fread(dataBytes.data(), 1, size, f);   // v44.50: a file cut short (or a streamed one with a wrong size) still plays what is there
+            const uint64_t left = BytesLeft(f, fileSize);   // LIVE-8: a header that claims 4 GB only gets what the file holds
+            if (std::min<uint64_t>(size, left) > kMaxAudioBytes) { tooBig = true; break; }
+            dataBytes.resize(static_cast<size_t>(std::min<uint64_t>(size, left)));
+            const size_t got = std::fread(dataBytes.data(), 1, dataBytes.size(), f);   // v44.50: a file cut short (or a streamed one with a wrong size) still plays what is there
             dataBytes.resize(got);
             haveData = got > 0;
             if (got != size) break;
@@ -66,10 +90,12 @@ bool DecodeWavFile(const std::string& path, std::vector<float>& srcOut, int& src
     }
     std::fclose(f);
 
+    if (tooBig) { std::cerr << "[wav] audio data larger than " << (kMaxAudioBytes >> 20) << " MB, refused: " << path << "\n"; return false; }
     if (!haveFmt || !haveData) {
         std::cerr << "[wav] missing fmt/data chunk: " << path << "\n";
         return false;
     }
+    if (numChannels > 64 || !PlausibleRate(sampleRate)) { std::cerr << "[wav] bad format (channels " << numChannels << ", rate " << sampleRate << ") in " << path << "\n"; return false; }
 
     int srcChannels = numChannels > 0 ? numChannels : 1;
     std::vector<float> src;
@@ -108,6 +134,8 @@ bool DecodeWavFile(const std::string& path, std::vector<float>& srcOut, int& src
         return false;
     }
 
+    src.resize(src.size() - src.size() % static_cast<size_t>(srcChannels));   // whole frames only
+    if (src.empty()) { std::cerr << "[wav] no audio in " << path << "\n"; return false; }
     srcOut = std::move(src); srcChannelsOut = srcChannels; sampleRateOut = sampleRate;
     return true;
 }
@@ -150,7 +178,8 @@ bool DecodeAiffFile(const std::string& path, std::vector<float>& srcOut, int& sr
     double rate = 0.0;
     char comp[5] = "NONE";
     std::vector<uint8_t> bytes;
-    bool haveComm = false, haveSsnd = false;
+    bool haveComm = false, haveSsnd = false, tooBig = false;
+    const uint64_t fileSize = FileSize(f);
     uint8_t ch[8];
     while (std::fread(ch, 1, 8, f) == 8) {
         const uint32_t size = be32(ch + 4);
@@ -171,12 +200,13 @@ bool DecodeAiffFile(const std::string& path, std::vector<float>& srcOut, int& sr
             const uint32_t offset = be32(so);
             const size_t want = size - 8;
             if (offset > 0 && std::fseek(f, static_cast<long>(offset), SEEK_CUR) != 0) break;
-            const size_t dataLen = want > offset ? want - offset : 0;
+            const size_t dataLen = static_cast<size_t>(std::min<uint64_t>(want > offset ? want - offset : 0, BytesLeft(f, fileSize)));   // LIVE-8
+            if (dataLen > kMaxAudioBytes) { tooBig = true; break; }
             bytes.resize(dataLen);
             const size_t got = std::fread(bytes.data(), 1, dataLen, f);
             bytes.resize(got);
             haveSsnd = got > 0;
-            if (got != dataLen) break;
+            if (got != dataLen || dataLen != (want > offset ? want - offset : 0)) break;
             if (offset > 0) { /* the pad after the data is skipped with the chunk padding below */ }
         } else {
             if (std::fseek(f, static_cast<long>(size), SEEK_CUR) != 0) break;
@@ -185,8 +215,9 @@ bool DecodeAiffFile(const std::string& path, std::vector<float>& srcOut, int& sr
         if (haveComm && haveSsnd) break;
     }
     std::fclose(f);
+    if (tooBig) { std::cerr << "[aiff] audio data larger than " << (kMaxAudioBytes >> 20) << " MB, refused: " << path << "\n"; return false; }
     if (!haveComm || !haveSsnd) { std::cerr << "[aiff] missing COMM / SSND chunk: " << path << "\n"; return false; }
-    if (channels < 1 || channels > 64 || bits < 1 || bits > 64 || !(rate >= 1.0 && rate <= 768000.0)) { std::cerr << "[aiff] bad format in " << path << "\n"; return false; }
+    if (channels < 1 || channels > 64 || bits < 1 || bits > 64 || !PlausibleRate(rate)) { std::cerr << "[aiff] bad format in " << path << "\n"; return false; }
 
     const std::string c(comp);
     const bool little = c == "sowt";
@@ -287,14 +318,24 @@ bool LoadWav(const std::string& path, SampleBuffer& out, int targetSampleRate) {
     return true;
 }
 
+// DATA-5: a recording / stem / imported sample is written to <path>.tmp, flushed to the disk and renamed: a crash or a full disk
+// never leaves half a WAV under the real name, and a failed write is reported (before, fwrite errors were ignored).
+static bool WriteBytesAtomic(const std::string& path, const std::vector<uint8_t>& bytes) {
+    const std::string tmp = path + ".tmp";
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    const bool wrote = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    const bool closed = std::fclose(f) == 0;
+    if (!wrote || !closed) { std::remove(tmp.c_str()); return false; }
+    FlushFileToDisk(tmp);
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) { std::remove(tmp.c_str()); return false; }
+    FlushDirOf(path);
+    return true;
+}
+
 bool WriteWavPCM16(const std::string& path, const std::vector<float>& interleaved,
                     int channels, int sampleRate) {
-    std::vector<uint8_t> bytes = BuildWavPCM16Bytes(interleaved, channels, sampleRate);
-    FILE* f = std::fopen(path.c_str(), "wb");
-    if (!f) return false;
-    std::fwrite(bytes.data(), 1, bytes.size(), f);
-    std::fclose(f);
-    return true;
+    return WriteBytesAtomic(path, BuildWavPCM16Bytes(interleaved, channels, sampleRate));
 }
 
 std::vector<uint8_t> BuildWavPCM16Bytes(const std::vector<float>& interleaved,
@@ -355,11 +396,7 @@ bool WriteWavPCM24(const std::string& path, const std::vector<float>& interleave
         const int32_t v = static_cast<int32_t>(std::lround(std::max(-1.0f, std::min(1.0f, f)) * 8388607.0));
         out.push_back(static_cast<uint8_t>(v)); out.push_back(static_cast<uint8_t>(v >> 8)); out.push_back(static_cast<uint8_t>(v >> 16));
     }
-    FILE* fp = std::fopen(path.c_str(), "wb");
-    if (!fp) return false;
-    std::fwrite(out.data(), 1, out.size(), fp);
-    std::fclose(fp);
-    return true;
+    return WriteBytesAtomic(path, out);
 }
 
 
