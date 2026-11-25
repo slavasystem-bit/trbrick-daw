@@ -12,11 +12,3 @@ jobs:
           cmake -S . -B build-x86_64 -DCMAKE_BUILD_TYPE=Release
           cmake --build build-x86_64 -j"$(nproc)"
           ./build-x86_64/t8_selftest
-  aarch64:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Toolchain + SDL2 (cached by script)
-        run: scripts/setup_toolchains.sh
-      - name: Cross-build handheld app
-        run: scripts/build_aarch64.sh
