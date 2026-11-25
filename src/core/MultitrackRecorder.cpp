@@ -118,7 +118,7 @@ void MultitrackRecorder::FinishTake() {
     char buf[256];
     std::string kept = folder_;
     if (!anyOpen) {
-        std::snprintf(buf, sizeof(buf), "STEMS FAILED: CANNOT WRITE %s", folder_.empty() ? "THE RECORDINGS FOLDER" : userdirs::DisplayPath(folder_).c_str());
+        std::snprintf(buf, sizeof(buf), "STEMS FAILED: CANNOT WRITE %s", folder_.empty() ? "THE RECORDINGS FOLDER" : shownFolder_.c_str());
         kept.clear();
     } else if (frames == 0) {   // armed, but nothing ever played: leave nothing behind
         for (int g = 0; g < kNumStemGroups; ++g) std::remove(wav_[g].Path().c_str());
@@ -126,11 +126,11 @@ void MultitrackRecorder::FinishTake() {
         std::snprintf(buf, sizeof(buf), "MULTITRACK RECORDING STOPPED (NOTHING CAPTURED)");
         kept.clear();
     } else if (ok) {
-        int n = std::snprintf(buf, sizeof(buf), "SAVED %d STEMS (%.1fs) -> %s", kNumStemGroups, secs, userdirs::DisplayPath(folder_).c_str());
+        int n = std::snprintf(buf, sizeof(buf), "SAVED %d STEMS (%.1fs) -> %s", kNumStemGroups, secs, shownFolder_.c_str());
         if (full && n > 0) n += std::snprintf(buf + n, sizeof(buf) - static_cast<size_t>(n), " (STOPPED AT THE 4 GB WAV LIMIT)");
         if (lost > 0.0005 && n > 0) std::snprintf(buf + n, sizeof(buf) - static_cast<size_t>(n), " (%.2fs MISSING: DISK TOO SLOW)", lost);
     } else {
-        std::snprintf(buf, sizeof(buf), "STEMS: DISK ERROR, KEPT %.1fs -> %s", secs, userdirs::DisplayPath(folder_).c_str());
+        std::snprintf(buf, sizeof(buf), "STEMS: DISK ERROR, KEPT %.1fs -> %s", secs, shownFolder_.c_str());
     }
     std::lock_guard<std::mutex> lk(msgMutex_);
     resultMsg_ = buf;
@@ -143,7 +143,7 @@ void MultitrackRecorder::DrainLoop() {
         const bool quitting = shuttingDown_.load(std::memory_order_relaxed);
         State st = state_.load(std::memory_order_acquire);
         if (st == State::Starting) {
-            { std::lock_guard<std::mutex> lk(msgMutex_); folder_ = pendingFolder_; }
+            { std::lock_guard<std::mutex> lk(msgMutex_); folder_ = pendingFolder_; shownFolder_ = pendingShown_; }
             framesSinceFlush_ = 0;
             bool opened = !folder_.empty();
             for (int g = 0; g < kNumStemGroups && opened; ++g)
@@ -191,14 +191,16 @@ std::string MultitrackRecorder::Toggle(const std::string& folder) {
         {
             std::lock_guard<std::mutex> lk(msgMutex_);
             pendingFolder_ = folder.empty() ? userdirs::RecordingFolder(" stems") : folder;   // "<project> 2026-10-26 14.32 stems"
+            pendingShown_ = userdirs::DisplayPath(pendingFolder_);                          // UI thread: userdirs is not thread-safe
         }
         // Idle: the drain thread does not touch the rings, so the read sides can be moved up to the write sides here.
         for (int g = 0; g < kNumStemGroups; ++g) ringRead_[g].store(ringWrite_[g].load(std::memory_order_acquire), std::memory_order_release);
         dropped_.store(0, std::memory_order_relaxed);
         writtenFrames_.store(0, std::memory_order_relaxed);
         started_.store(false, std::memory_order_relaxed);
-        state_.store(State::Starting, std::memory_order_release);
+        // The flag first, then the state (see Recorder::Toggle): the drain thread must see the take as armed when it opens the files.
         armed_.store(true, std::memory_order_release);
+        state_.store(State::Starting, std::memory_order_release);
         return "STEMS ARMED -- WAITING FOR SOUND";
     }
     armed_.store(false, std::memory_order_release);   // the drain thread closes the files

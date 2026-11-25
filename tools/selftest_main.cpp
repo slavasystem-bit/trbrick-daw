@@ -6418,7 +6418,8 @@ int main(int argc, char** argv) {
             check(stopMs < 5.0, "rec: STOP costs the UI thread almost nothing (" + std::to_string(stopMs) + " ms)");
             rec.WaitIdleForTest();
             std::string msg, outPath;
-            check(rec.TakeResult(msg, outPath) && msg.rfind("SAVED", 0) == 0 && outPath == path, "rec: the result arrives once the file is closed: " + msg);
+            const bool gotRec = rec.TakeResult(msg, outPath);
+            check(gotRec && msg.rfind("SAVED", 0) == 0 && outPath == path, "rec: the result arrives once the file is closed: " + msg);
             check(!rec.TakeResult(msg, outPath), "rec: the result is given only once");
             SampleBuffer b;
             const bool loaded = LoadWav(path, b, sr);
@@ -6458,7 +6459,8 @@ int main(int argc, char** argv) {
             rec.WaitIdleForTest();
             WavStreamWriter::SetMaxDataBytesForTest(0);
             SampleBuffer lb;
-            check(rec.TakeResult(msg, outPath) && msg.find("4 GB") != std::string::npos && !rec.IsRecording(), "rec: at the WAV size limit the take stops by itself and says so: " + msg);
+            const bool gotLim = rec.TakeResult(msg, outPath);
+            check(gotLim && msg.find("4 GB") != std::string::npos && !rec.IsRecording(), "rec: at the WAV size limit the take stops by itself and says so: " + msg);
             check(LoadWav(lp, lb, sr) && lb.frames() == sr / 2, "rec: the file stopped at the limit is complete and valid");
 
             // quitting while recording closes the file properly
@@ -6493,7 +6495,8 @@ int main(int argc, char** argv) {
             mt.Toggle();
             mt.WaitIdleForTest();
             std::string msg, outPath;
-            check(mt.TakeResult(msg, outPath) && msg.rfind("SAVED 8 STEMS", 0) == 0 && outPath == folder, "stems: the result arrives once the files are closed: " + msg);
+            const bool gotStems = mt.TakeResult(msg, outPath);
+            check(gotStems && msg.rfind("SAVED 8 STEMS", 0) == 0 && outPath == folder, "stems: the result arrives once the files are closed: " + msg);
             bool allSame = true;
             for (int g = 0; g < kNumStemGroups; ++g) {
                 SampleBuffer sb;
@@ -6508,7 +6511,8 @@ int main(int argc, char** argv) {
             mt.Push(128, ptrs.data());
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
             mt.Toggle(); mt.WaitIdleForTest();
-            check(mt.TakeResult(msg, outPath) && msg.find("NOTHING CAPTURED") != std::string::npos && outPath.empty() && !fs::exists(empty), "stems: a take with no sound leaves no folder: " + msg);
+            const bool gotEmpty = mt.TakeResult(msg, outPath);
+            check(gotEmpty && msg.find("NOTHING CAPTURED") != std::string::npos && outPath.empty() && !fs::exists(empty), "stems: a take with no sound leaves no folder: " + msg);
         }
         fs::remove_all(dir);
     }

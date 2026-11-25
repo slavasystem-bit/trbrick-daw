@@ -149,12 +149,12 @@ private:
     std::atomic<uint64_t> dropped_{0};
 
     std::array<WavStreamWriter, kNumStemGroups> wav_;  // drain thread only
-    std::string folder_;                               // drain thread only (copied from pendingFolder_)
+    std::string folder_, shownFolder_;                 // drain thread only (copied from pendingFolder_ / pendingShown_)
     uint64_t framesSinceFlush_ = 0;                    // drain thread only
     std::atomic<int64_t> writtenFrames_{0};            // frames written so far (stem 0), for ElapsedSeconds()
 
     std::mutex msgMutex_;                              // UI <-> drain thread (never the audio thread)
-    std::string pendingFolder_;
+    std::string pendingFolder_, pendingShown_;
     std::string resultMsg_, resultPath_;
     bool hasResult_ = false;
 };

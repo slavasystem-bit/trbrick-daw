@@ -98,7 +98,8 @@ private:
     std::atomic<int64_t> writtenFrames_{0};  // for ElapsedSeconds(), any thread
 
     std::mutex msgMutex_;                    // UI <-> drain thread (never the audio thread)
-    std::string pendingPath_;                // set by Toggle before Starting
+    std::string pendingPath_, pendingShown_; // set by Toggle before Starting (the shown form made on the UI thread)
+    std::string shownPath_;                  // drain thread only
     std::string resultMsg_, resultPath_;
     bool hasResult_ = false;
 };

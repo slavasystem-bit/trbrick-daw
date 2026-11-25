@@ -56,13 +56,13 @@ void Recorder::FinishTake() {
     const double lost = static_cast<double>(dropped_.load()) / std::max(1, sampleRate_);
     char buf[256];
     if (ok) {
-        int n = std::snprintf(buf, sizeof(buf), "SAVED %.1fs -> %s", secs, userdirs::DisplayPath(wav_.Path()).c_str());
+        int n = std::snprintf(buf, sizeof(buf), "SAVED %.1fs -> %s", secs, shownPath_.c_str());
         if (full && n > 0) n += std::snprintf(buf + n, sizeof(buf) - static_cast<size_t>(n), " (STOPPED AT THE 4 GB WAV LIMIT)");
         if (lost > 0.0005 && n > 0) std::snprintf(buf + n, sizeof(buf) - static_cast<size_t>(n), " (%.2fs MISSING: DISK TOO SLOW)", lost);
     } else if (wav_.Frames() > 0) {
-        std::snprintf(buf, sizeof(buf), "RECORDING: DISK ERROR, KEPT %.1fs -> %s", secs, userdirs::DisplayPath(wav_.Path()).c_str());
+        std::snprintf(buf, sizeof(buf), "RECORDING: DISK ERROR, KEPT %.1fs -> %s", secs, shownPath_.c_str());
     } else {
-        std::snprintf(buf, sizeof(buf), "RECORDING FAILED: CANNOT WRITE %s", userdirs::DisplayPath(wav_.Path()).c_str());
+        std::snprintf(buf, sizeof(buf), "RECORDING FAILED: CANNOT WRITE %s", shownPath_.c_str());
     }
     std::lock_guard<std::mutex> lk(msgMutex_);
     resultMsg_ = buf;
@@ -76,11 +76,10 @@ void Recorder::DrainLoop() {
         State st = state_.load(std::memory_order_acquire);
         if (st == State::Starting) {
             std::string path;
-            { std::lock_guard<std::mutex> lk(msgMutex_); path = pendingPath_; }
+            { std::lock_guard<std::mutex> lk(msgMutex_); path = pendingPath_; shownPath_ = pendingShown_; }
             framesSinceFlush_ = 0;
             if (wav_.Open(path, 2, sampleRate_)) {
-                State expect = State::Starting;
-                state_.compare_exchange_strong(expect, State::Recording, std::memory_order_acq_rel);   // a stop may already be waiting
+                state_.store(State::Recording, std::memory_order_release);   // a stop that is already waiting is seen just below
             } else {
                 recording_.store(false, std::memory_order_release);
                 FinishTake();
@@ -118,13 +117,16 @@ std::string Recorder::Toggle(const std::string& path) {
         {
             std::lock_guard<std::mutex> lk(msgMutex_);
             pendingPath_ = path.empty() ? userdirs::RecordingPath("", "wav") : path;   // "<project> 2026-10-26 14.32.wav" in Documents/TR-Brick/Recordings
+            pendingShown_ = userdirs::DisplayPath(pendingPath_);                         // UI thread: userdirs is not thread-safe
         }
         // Idle: the drain thread does not touch the ring, so the read side can be moved up to the write side here.
         ringRead_.store(ringWrite_.load(std::memory_order_acquire), std::memory_order_release);
         dropped_.store(0, std::memory_order_relaxed);
         writtenFrames_.store(0, std::memory_order_relaxed);
-        state_.store(State::Starting, std::memory_order_release);
+        // The flag first, then the state: the drain thread acts on Starting and must already see the take as running (else it
+        // would open, see "stopped", close an empty take and leave REC on with nobody draining).
         recording_.store(true, std::memory_order_release);   // the ring fills from this moment, the file opens on the drain thread
+        state_.store(State::Starting, std::memory_order_release);
         return "RECORDING";
     }
     // The drain thread sees recording_ off and closes the take (if the file is still opening, it opens it first).
