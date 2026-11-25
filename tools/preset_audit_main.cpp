@@ -41,7 +41,6 @@ Result Measure(const std::string& name, const SynthPatch& p, std::vector<float>*
     int note; double hold; Register(name, note, hold);
     auto st = Render(p, note, hold, 2.5);
     Result r; r.name = name; r.note = note;
-    const size_t nOn = static_cast<size_t>(hold * kSr);
     // the window each sound is judged in: a plucked / stabbed sound (sustain ~ 0) in its first 400 ms, a slow pad once it has risen, the rest after the attack
     double w0, w1;
     if (p.sustain < 0.2f) { w0 = 0.02; w1 = 0.42; }

@@ -15,6 +15,16 @@ Audit v44.58 items DATA-1, DATA-2, DATA-3, DATA-4, DATA-5 (project files), DATA-
 - **LIVE-4, the "Edited" check and recovery.** `DocHash`, `WriteRecovery`, `SaveDocument`, `SaveProjectAs` and restores copy the project under the scene lock and serialise / write outside it (`SaveSnapshot`). Measured in the cloud on the example project: lock held 0.33 ms for the copy instead of 0.94 ms for the text plus the file write and fsync. While Edited, the check runs every 2 s instead of every 0.5 s. `AdoptProject` now takes the lock itself.
 - Tests: 42 new selftest checks (`n2 ...`); updated: format number literals, the v44.5 chain persistence check (its LIVE-slot step is now a brick copy), the u8a backup name.
 
+## Stage N0: safety net for merges
+
+Nothing gets played or merged without green tests (audit v44.58: TEST-1, TEST-2, part of CODE-5 and TEST-7).
+
+- **CI (`.github/workflows/build.yml`):** four jobs on every pull request and on main: Linux build + `t8_selftest` + `t8_fuzz --seeds 30` (and a check that the tests left no files in the repo); ASan + UBSan build running selftest and `t8_fuzz --seeds 10`; TSan build running `t8_fuzz --threads`; macOS build of everything including the app + selftest.
+- **Launcher gate (`tools/mac/launch.sh`):** branch protection is not available on a free private repo, so the TR-Brick button is the gate. The PR menu shows each PR's check state; a PR starts only when all its checks are green (red, running or not started = refused, with Enter to start main instead). The commit that is fetched must be the one whose checks were read. After a build that changed the installed version the launcher builds and runs `t8_selftest` on the Mac; a failing PR is not started, a failing main (self-check, configure or build) falls back to the last main build that passed (`~/TR-Brick/last-good`; a PR never becomes the fallback). The self-check runner is built into the launcher, so PRs made before this one are checked too. Developer switches: `TRB_ALLOW_UNCHECKED=1`, `TRB_SKIP_SELFTEST=1`.
+- **TEST-2:** the selftest "a long note across a chain step is released" had its render loop inside a comment and always passed; the loop is back (and the check was seen failing when the render stops too early).
+- **Warnings:** `-Wall -Wextra` on all first-party targets (imgui moved into its own `t8imgui` library, so third_party stays quiet). `T8_WERROR=ON` (used by CI) makes unused variables / values and misleading indentation errors in `tools/`. The remaining warnings in `src/` are listed for a later step. `T8_SANITIZE=address,undefined|thread` builds the checking variants.
+- **Tests run in a scratch folder:** `tools/run_tests.sh <build> selftest|fuzz [args]` runs them in a temp folder with symlinks to the repo, so `selftest_*` files no longer land in the repo root.
+
 ## Launcher: straight from GitHub
 
 No more zips: the TR-Brick button on the Desktop takes the program from the GitHub repository.

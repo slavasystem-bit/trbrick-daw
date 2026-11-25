@@ -1,14 +1,88 @@
 name: build
-on: [push, pull_request]
+# Every pull request and every change to main runs all of these. The TR-Brick button on
+# the Mac (tools/mac/launch.sh) refuses to start a pull request unless they are all green.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  x86-and-selftest:
+  linux:
+    name: Linux build, selftest, fuzz
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake g++ libsdl2-dev libasound2-dev
-      - name: Build + selftest (x86_64)
+      - name: Build (all targets, harmful warnings in tools/ are errors)
         run: |
-          cmake -S . -B build-x86_64 -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build-x86_64 -DCMAKE_BUILD_TYPE=Release -DT8_WERROR=ON
           cmake --build build-x86_64 -j"$(nproc)"
-          ./build-x86_64/t8_selftest
+      - name: t8_selftest
+        run: tools/run_tests.sh build-x86_64 selftest
+      - name: t8_fuzz --seeds 30
+        run: tools/run_tests.sh build-x86_64 fuzz --seeds 30
+      - name: Tests left no files in the repo
+        run: |
+          if [ -n "$(git status --porcelain --ignored -- . ':!build-x86_64')" ]; then
+            git status --porcelain --ignored -- . ':!build-x86_64'; echo "tests wrote files into the repo"; exit 1
+          fi
+
+  sanitizers:
+    name: Memory and undefined-behaviour check (ASan + UBSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libsdl2-dev libasound2-dev
+      - name: Build t8_selftest and t8_fuzz with sanitizers
+        run: |
+          cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O1 -g" -DT8_SANITIZE=address,undefined -DT8_WERROR=ON
+          cmake --build build-asan --target t8_selftest t8_fuzz -j"$(nproc)"
+      - name: t8_selftest (sanitizers)
+        run: tools/run_tests.sh build-asan selftest
+      - name: t8_fuzz --seeds 10 (sanitizers)
+        run: tools/run_tests.sh build-asan fuzz --seeds 10
+
+  threads:
+    name: Thread race check (TSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libsdl2-dev libasound2-dev
+      - name: Build t8_fuzz with ThreadSanitizer
+        run: |
+          cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O1 -g" -DT8_SANITIZE=thread
+          cmake --build build-tsan --target t8_fuzz -j"$(nproc)"
+      - name: t8_fuzz --threads (TSan)
+        # setarch -R: newer Ubuntu kernels randomise memory in a way TSan cannot handle
+        run: setarch "$(uname -m)" -R tools/run_tests.sh build-tsan fuzz --threads --seeds 5
+
+  macos:
+    name: macOS build and selftest
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: brew install sdl2
+      - name: Build (all targets, including the app)
+        run: |
+          cmake -S . -B build-mac -DCMAKE_BUILD_TYPE=Release -DT8_WERROR=ON
+          cmake --build build-mac -j"$(sysctl -n hw.ncpu)"
+      - name: t8_selftest
+        run: tools/run_tests.sh build-mac selftest
