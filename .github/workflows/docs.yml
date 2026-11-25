@@ -1,6 +1,6 @@
 name: docs
 # Pull requests that change documents (*.md, docs/) get this quick check. For a docs-only pull
-# request build.yml does not run at all (to save minutes), so without this the Mac button would
+# request build.yml does not run at all (no need to build for text), so without this the Mac button would
 # see "checks not started" forever. Pull requests that also change code get both workflows.
 on:
   pull_request:
