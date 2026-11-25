@@ -314,6 +314,7 @@ int main(int argc, char** argv) {
     };
     unsigned lastBlocks = app.engine.GetMixer().audioBlocks.load();
     double stallTimer = 0.0, deviceChangeTimer = -1.0, audioRetryTimer = 0.0;
+    unsigned blocksAtDeviceChange = 0;
 
     HeaderPanel headerPanel;
     MenuBar menuBar;
@@ -351,7 +352,9 @@ int main(int argc, char** argv) {
             }
             ImGui_ImplSDL2_ProcessEvent(&e);
             if (e.type == SDL_QUIT) app.RequestDoc(AppState::DocAction::Quit);   // U8b: asks Save / Don't Save / Cancel when something is unsaved
-            if ((e.type == SDL_AUDIODEVICEADDED || e.type == SDL_AUDIODEVICEREMOVED) && e.adevice.iscapture == 0) deviceChangeTimer = 0.6;   // settle, then reopen
+            // N1 (LIVE-6): a device that appears (AirPods, an HDMI screen, a USB box) no longer restarts the sound. A removed one is
+            // checked after a moment, and the sound is restarted only if OUR output stopped (see the watchdog below).
+            if (e.type == SDL_AUDIODEVICEREMOVED && e.adevice.iscapture == 0) { deviceChangeTimer = 0.6; blocksAtDeviceChange = app.engine.GetMixer().audioBlocks.load(); }
 
             if (e.type == SDL_DROPFILE && e.drop.file) {   // a WAV dropped on the window -> the selected drum track
                 const std::string dropped = e.drop.file;
@@ -396,9 +399,18 @@ int main(int argc, char** argv) {
         if (app.quitRequested) running = false;
         {   // ---- audio watchdog (v44.3) ----
             const char* why = nullptr;
-            if (dt > 2.5) why = "woke up after a long pause";                       // the laptop slept
+            // N1 (LIVE-6): a long frame is a sleep only if the audio callback did not run through it either (a slow screen
+            // frame, a project load, used to restart the device and cut the reverb tails too).
+            const unsigned blocksNow = app.engine.GetMixer().audioBlocks.load();
+            const int bufFrames = std::max(1, app.engine.GetMixer().audioBufferFrames.load());
+            const double expectedBlocks = dt * engineRate / bufFrames;
+            if (dt > 2.5 && audioDev != 0 && static_cast<double>(blocksNow - lastBlocks) < 0.25 * expectedBlocks) why = "woke up after a long pause";   // the laptop slept
             else if (app.audioRestartRequested) why = "requested";
-            else if (deviceChangeTimer >= 0.0 && (deviceChangeTimer -= dt) < 0.0) { why = "output device changed"; deviceChangeTimer = -1.0; }
+            else if (deviceChangeTimer >= 0.0 && (deviceChangeTimer -= dt) < 0.0) {
+                deviceChangeTimer = -1.0;
+                const bool stillPlaying = audioDev != 0 && SDL_GetAudioDeviceStatus(audioDev) == SDL_AUDIO_PLAYING && app.engine.GetMixer().audioBlocks.load() != blocksAtDeviceChange;
+                if (!stillPlaying) why = "output device removed";   // our output is gone: reopen the default one
+            }
             else if (audioDev != 0) {
                 const unsigned blocks = app.engine.GetMixer().audioBlocks.load();
                 if (blocks == lastBlocks) { if ((stallTimer += dt) > 1.0) why = "the audio callback stopped"; } else stallTimer = 0.0;

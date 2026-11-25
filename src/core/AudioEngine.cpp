@@ -7,6 +7,7 @@ namespace t8 {
 
 void AudioEngine::Init(int sampleRate) {
     sampleRate_ = sampleRate;
+    WarmSincBank();   // N1 (LIVE-9): the drum / riser interpolation kernels, built here instead of on the audio thread
     drums_.SetKit(&kit_);
     scratch_.resize(4096 * 2, 0.0f);
     delayBus_.resize(4096 * 2, 0.0f);

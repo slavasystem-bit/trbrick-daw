@@ -69,12 +69,9 @@ int DrumKit::VariantCount(DrumSlot slot) const {
 }
 
 std::shared_ptr<const SincTable> DrumEngine::SincFor(double rate) {
-    for (auto& c : sincCache_) if (c.table && std::fabs(c.rate - rate) < 1e-9) return c.table;
-    // pitching up: the passband must stay below the new Nyquist, otherwise the top end folds back (aliasing)
-    auto table = std::make_shared<const SincTable>(16, 128, std::min(1.0, 0.95 / rate));
-    sincCache_[sincNext_] = CachedSinc{rate, table};
-    sincNext_ = (sincNext_ + 1) % static_cast<int>(sincCache_.size());
-    return table;
+    // pitching up: the passband must stay below the new Nyquist, otherwise the top end folds back (aliasing).
+    // N1 (LIVE-9): from the bank built at startup, so the audio thread never builds or frees a table.
+    return SharedSincForRate(rate);
 }
 
 DrumVoice* DrumEngine::AllocVoice() {

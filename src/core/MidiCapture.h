@@ -37,11 +37,17 @@ struct CapturedEvent {
 
 class MidiCapture {
 public:
+    // N1 (LIVE-9): the Log* calls run on the audio thread, so the room is made here (UI thread): about 2 hours of a busy pattern.
+    // When it is full, further events are dropped (counted) instead of growing the vector on the audio thread.
+    static constexpr size_t kCapacity = 200000;
     void Start() {
-        active_ = true;
-        elapsedSeconds_ = 0.0;
         events_.clear();
+        events_.reserve(kCapacity);
+        dropped_ = 0;
+        elapsedSeconds_ = 0.0;
+        active_ = true;
     }
+    size_t Dropped() const { return dropped_; }
     void Stop() { active_ = false; }
     bool IsActive() const { return active_; }
     double ElapsedSeconds() const { return elapsedSeconds_; }
@@ -60,7 +66,7 @@ public:
         e.timeSeconds = elapsedSeconds_;
         e.isDrum = true;
         e.drumSlot = slot;
-        events_.push_back(e);
+        Add(e);
     }
 
     void LogSynth(int synthIndex, int8_t note) {
@@ -70,7 +76,7 @@ public:
         e.synthIndex = synthIndex;
         e.noteCount = 1;
         e.notes[0] = note;
-        events_.push_back(e);
+        Add(e);
     }
 
     void LogChord(const int8_t* notes, int count) {
@@ -80,12 +86,14 @@ public:
         e.isChord = true;
         e.noteCount = count < 0 ? 0 : (count > kMaxChordVoices ? kMaxChordVoices : count);   // v44.44: was 4, a six-note chord lost two notes
         for (int i = 0; i < e.noteCount; ++i) e.notes[i] = notes[i];
-        events_.push_back(e);
+        Add(e);
     }
 
     const std::vector<CapturedEvent>& Events() const { return events_; }
 
 private:
+    void Add(const CapturedEvent& e) { if (events_.size() < events_.capacity()) events_.push_back(e); else ++dropped_; }
+    size_t dropped_ = 0;
     bool active_ = false;
     double elapsedSeconds_ = 0.0;
     std::vector<CapturedEvent> events_;
