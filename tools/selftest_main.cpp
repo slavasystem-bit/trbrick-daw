@@ -80,11 +80,18 @@ void* operator new(std::size_t n) {
     if (void* p = std::malloc(n ? n : 1)) return p;
     throw std::bad_alloc();
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"   // the replaced operators pair malloc/free on purpose
+#endif
 void* operator new[](std::size_t n) { return ::operator new(n); }
 void operator delete(void* p) noexcept { if (p && g_countAllocs) g_audioAllocs.fetch_add(1, std::memory_order_relaxed); std::free(p); }
 void operator delete[](void* p) noexcept { ::operator delete(p); }
 void operator delete(void* p, std::size_t) noexcept { ::operator delete(p); }
 void operator delete[](void* p, std::size_t) noexcept { ::operator delete(p); }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 static bool nearlyEqual(float a, float b, float eps) { return std::fabs(a - b) < eps; }
 

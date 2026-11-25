@@ -18,6 +18,7 @@
 // immune to UI-thread scheduling jitter, unlike the original
 // std::chrono::steady_clock-based v1 implementation.
 #include "Types.h"
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -45,23 +46,23 @@ public:
         events_.reserve(kCapacity);
         dropped_ = 0;
         elapsedSeconds_ = 0.0;
-        active_ = true;
+        active_.store(true, std::memory_order_release);   // the events above are visible to the audio thread before it logs
     }
     size_t Dropped() const { return dropped_; }
-    void Stop() { active_ = false; }
-    bool IsActive() const { return active_; }
+    void Stop() { active_.store(false, std::memory_order_release); }
+    bool IsActive() const { return active_.load(std::memory_order_acquire); }
     double ElapsedSeconds() const { return elapsedSeconds_; }
 
     // Called once per AudioEngine::Render block (any time, active or not,
     // same as Recorder::Push) so the internal clock always matches the
     // audio actually rendered.
     void Advance(int numFrames, int sampleRate) {
-        if (!active_ || sampleRate <= 0) return;
+        if (!IsActive() || sampleRate <= 0) return;
         elapsedSeconds_ += static_cast<double>(numFrames) / static_cast<double>(sampleRate);
     }
 
     void LogDrum(DrumSlot slot) {
-        if (!active_) return;
+        if (!IsActive()) return;
         CapturedEvent e;
         e.timeSeconds = elapsedSeconds_;
         e.isDrum = true;
@@ -70,7 +71,7 @@ public:
     }
 
     void LogSynth(int synthIndex, int8_t note) {
-        if (!active_) return;
+        if (!IsActive()) return;
         CapturedEvent e;
         e.timeSeconds = elapsedSeconds_;
         e.synthIndex = synthIndex;
@@ -80,7 +81,7 @@ public:
     }
 
     void LogChord(const int8_t* notes, int count) {
-        if (!active_) return;
+        if (!IsActive()) return;
         CapturedEvent e;
         e.timeSeconds = elapsedSeconds_;
         e.isChord = true;
@@ -94,7 +95,7 @@ public:
 private:
     void Add(const CapturedEvent& e) { if (events_.size() < events_.capacity()) events_.push_back(e); else ++dropped_; }
     size_t dropped_ = 0;
-    bool active_ = false;
+    std::atomic<bool> active_{false};   // Start/Stop on the UI thread, Log* on the audio thread
     double elapsedSeconds_ = 0.0;
     std::vector<CapturedEvent> events_;
 };

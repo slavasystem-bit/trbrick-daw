@@ -109,10 +109,7 @@ private:
     int nextVoice_ = 0;
     uint32_t noiseSeed_ = 1234567u;
 
-    // interpolation kernels by playback rate (small cache; built on first use of a tune value)
-    struct CachedSinc { double rate = 0.0; std::shared_ptr<const SincTable> table; };
-    std::array<CachedSinc, 16> sincCache_{};
-    int sincNext_ = 0;
+    // interpolation kernel for a playback rate: from the bank built at startup (SharedSincForRate, N1 LIVE-9)
     std::shared_ptr<const SincTable> SincFor(double rate);
     DrumVoice* AllocVoice();
 };
