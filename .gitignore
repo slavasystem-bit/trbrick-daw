@@ -18,3 +18,8 @@ Thumbs.db
 .idea/
 __pycache__/
 *.pyc
+
+# Test leftovers if t8_selftest is run straight from the repo root (use tools/run_tests.sh instead)
+selftest_*
+/ui_settings.cfg
+/imgui.ini
