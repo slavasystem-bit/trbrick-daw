@@ -76,7 +76,22 @@ inline void AudioCallback(void* userdata, Uint8* stream, int len) {
         Mixer& mx = app->engine.GetMixer();
         mx.audioLoad.store(mx.audioLoad.load(std::memory_order_relaxed) * 0.9f + load * 0.1f, std::memory_order_relaxed);
         mx.audioLoadPeak.store(std::max(load, mx.audioLoadPeak.load(std::memory_order_relaxed) * 0.995f), std::memory_order_relaxed);
-        if (load > 1.0f) mx.audioXruns.fetch_add(1, std::memory_order_relaxed);
+        // N1: a dropout is logged with how long it lasted and how much of it the audio thread spent waiting for the
+        // scene lock (= the screen or a loader held the sound), so the header can tell "the screen" from "too much DSP".
+        const unsigned waitUs = mx.audioLockWaitUs.exchange(0, std::memory_order_relaxed);
+        mx.audioBufferFrames.store(numFrames, std::memory_order_relaxed);
+        const unsigned usedUs = static_cast<unsigned>(std::min(used * 1e6, 4.0e9));
+        if (usedUs > mx.audioLongestUs.load(std::memory_order_relaxed)) {
+            mx.audioLongestUs.store(usedUs, std::memory_order_relaxed);
+            mx.audioLongestWaitUs.store(waitUs, std::memory_order_relaxed);
+        }
+        if (load > 1.0f) {
+            const unsigned n = mx.audioXruns.fetch_add(1, std::memory_order_relaxed);
+            Mixer::Dropout& d = mx.dropouts[n % Mixer::kDropoutLog];
+            d.lenUs.store(usedUs, std::memory_order_relaxed);
+            d.waitUs.store(waitUs, std::memory_order_relaxed);
+            d.atMs.store(SDL_GetTicks(), std::memory_order_relaxed);
+        }
     }
     // Live recording (see Recorder.h) taps the exact same final mixed
     // buffer SDL is about to play -- Push() is a no-op unless a recording

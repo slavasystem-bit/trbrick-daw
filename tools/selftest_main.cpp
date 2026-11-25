@@ -903,7 +903,7 @@ int main(int argc, char** argv) {
             if (cutShort) out.resize(out.size() - ssnd.size() / 2);
             return out;
         };
-        auto writeFile = [](const std::string& path, const std::vector<uint8_t>& b) { FILE* f = std::fopen(path.c_str(), "wb"); if (!f) return false; std::fwrite(b.data(), 1, b.size(), f); std::fclose(f); return true; };
+        auto writeFile = [](const std::string& path, const std::vector<uint8_t>& b) { FILE* f = std::fopen(path.c_str(), "wb"); if (!f) return false; if (!b.empty()) std::fwrite(b.data(), 1, b.size(), f); std::fclose(f); return true; };
         std::vector<float> ramp;   // 64 frames, stereo: left rises, right falls
         for (int i = 0; i < 64; ++i) { ramp.push_back(-0.8f + 1.6f * static_cast<float>(i) / 63.0f); ramp.push_back(0.8f - 1.6f * static_cast<float>(i) / 63.0f); }
         auto maxDiff = [&](const SampleBuffer& b, const std::vector<float>& ref) { if (b.data.size() != ref.size()) return 9.0f; float m = 0; for (size_t i = 0; i < ref.size(); ++i) m = std::max(m, std::fabs(b.data[i] - ref[i])); return m; };
@@ -1458,7 +1458,8 @@ int main(int argc, char** argv) {
         hSeq.Play();
         std::vector<float> hbuf(256 * 2);
         const double spH = 60.0 / 120.0 / 4.0 * kSampleRate;
-        int hn = static_cast<int>(spH * 45.8);   // chain step 2, step 5: the note from step 6 ended at step 4 for (int r = 0; r < hn; r += 256) hSeq.RenderAndAdvance(hbuf.data(), 256, kSampleRate);
+        int hn = static_cast<int>(spH * 45.8);   // chain step 2, step 5: the note from step 6 ended at step 4
+        for (int r = 0; r < hn; r += 256) hSeq.RenderAndAdvance(hbuf.data(), 256, kSampleRate);
         check(!hEngine.Synth(0).IsActive(), "notes: a long note across a chain step is released (no hanging note)");
         hSeq.Stop();
     }
@@ -2020,7 +2021,11 @@ int main(int argc, char** argv) {
                 secs = std::min(secs, std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
             }
             std::printf("[info] worst-case synth load on this machine: %.1f%% of real time (x86_64)\n", secs * 100.0);
+#ifdef T8_SANITIZED
+            std::printf("[info] thick synths CPU check skipped: sanitizer builds run several times slower\n");
+#else
             check(secs < 0.7, "thick synths: worst case (all voices maxed, six-note chord) uses < 70% of real time");   // v44.43: was 50% with four chord voices; the shared build machine measures 37-57%
+#endif
         }
     }
 
@@ -3604,7 +3609,8 @@ int main(int argc, char** argv) {
             Project lp; check(LoadProject(lp, path) && lp.songChain[0].automation == a && lp.songChain[0].muteMask == kMuteKickBass && !lp.songChain[1].automation.Any(), "dynamics: lanes survive save / load (the step without lanes stays clean)");
             std::ifstream in(path); std::string line, out;
             while (std::getline(in, line)) {
-                if (line.rfind("dyn0=", 0) == 0) continue; if (line.rfind("arr0=", 0) == 0) { size_t c = 0; for (int k = 0; k < 10 && c != std::string::npos; ++k) c = line.find(',', c + 1); line = line.substr(0, c); }
+                if (line.rfind("dyn0=", 0) == 0) continue;
+                if (line.rfind("arr0=", 0) == 0) { size_t c = 0; for (int k = 0; k < 10 && c != std::string::npos; ++k) c = line.find(',', c + 1); line = line.substr(0, c); }
                 out += line + "\n";
             }
             in.close(); { std::ofstream o(path, std::ios::trunc); o << out; }
@@ -6020,7 +6026,7 @@ int main(int argc, char** argv) {
         {   // SynthSample: the name field, comparable as plain memory
             SynthPatch a, b; a.sample.SetFile("a_very_long_name.wav"); a.sample.SetFile("x.wav");
             b.sample.SetFile("x.wav");
-            check(std::memcmp(&a, &b, sizeof(SynthPatch)) == 0 && a.sample.File() == "x.wav", "sample engine: the file name field is cleared on every write (patches compare with memcmp)");
+            check(std::memcmp(a.sample.file, b.sample.file, sizeof(a.sample.file)) == 0 && a.sample.File() == "x.wav", "sample engine: the file name field is cleared on every write (patches compare with memcmp)");   // the name bytes only: the padding between fields of two separately made patches is not defined (it differs on macOS)
             SynthPatch c; c.sample.SetFile(std::string(300, 'z'));
             check(c.sample.File().size() == SynthSample::kFileMax - 1, "sample engine: a name that is too long is cut, never overruns");
         }
@@ -6424,6 +6430,29 @@ int main(int argc, char** argv) {
         run(2.4);
         check(a.sequencer.PlayPatternIndex() == 6 && a.engine.GetMixer().tracks[kick].mute, "arm: the kick is silent from the first beat of the new scene");
         a.sequencer.Stop();
+    }
+    {   // N1: the dropout readout knows how long the screen held the scene lock and how long the audio thread waited for it
+        AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);
+        SceneMutex& sm = a.sequencer.PatternMutex();
+        std::vector<float> buf(256 * 2);
+        a.sequencer.RenderAndAdvance(buf.data(), 128, kSampleRate);   // marks this thread as the audio thread
+        sm.ResetMaxHold();
+        { std::lock_guard<SceneMutex> lk(sm); std::this_thread::sleep_for(std::chrono::milliseconds(3)); }
+        check(sm.MaxHoldUs() < 1000, "n1: the audio thread's own holds of the scene lock are not counted as the screen holding the sound");
+        std::atomic<bool> held{false};
+        std::thread ui([&] { std::lock_guard<SceneMutex> lk(sm); held = true; std::this_thread::sleep_for(std::chrono::milliseconds(30)); });
+        while (!held) std::this_thread::yield();
+        a.engine.GetMixer().audioLockWaitUs.store(0);
+        a.sequencer.RenderAndAdvance(buf.data(), 128, kSampleRate);
+        ui.join();
+        const unsigned waited = a.engine.GetMixer().audioLockWaitUs.load();
+        check(waited >= 15000, "n1: the audio thread measures how long it waited for the scene lock (" + std::to_string(waited) + " us)");
+        check(sm.MaxHoldUs() >= 25000, "n1: a hold of the scene lock by another thread is measured (" + std::to_string(sm.MaxHoldUs()) + " us)");
+        { std::lock_guard<SceneMutex> outer(sm); std::lock_guard<SceneMutex> inner(sm); }
+        check(sm.HeldByThisThread() == false, "n1: the scene lock is free again after nested holds");
+        a.engine.GetMixer().audioXruns.store(3); a.engine.GetMixer().audioLongestUs.store(9000); a.engine.GetMixer().dropouts[1].lenUs.store(5);
+        a.engine.GetMixer().ResetDropouts(); sm.ResetMaxHold();
+        check(a.engine.GetMixer().audioXruns.load() == 0 && a.engine.GetMixer().audioLongestUs.load() == 0 && a.engine.GetMixer().dropouts[1].lenUs.load() == 0 && sm.MaxHoldUs() == 0, "n1: a click on the readout clears the dropout log");
     }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;

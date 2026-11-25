@@ -10,6 +10,30 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# ---- warnings and sanitizers (first-party code only, never third_party/) ----
+# Warnings are on for everyone. CI also turns on T8_WERROR, which makes the warning
+# classes that once hid a broken test (a loop swallowed by a comment) fatal in tools/.
+# T8_SANITIZE=address,undefined or T8_SANITIZE=thread builds the checking variants
+# that CI runs t8_selftest / t8_fuzz under (see docs/AUDIT_v44.43.md, section 5).
+option(T8_WERROR "Fail the build on warnings that hide bugs in tools/ (used by CI)" OFF)
+set(T8_SANITIZE "" CACHE STRING "Sanitizers to build with, e.g. address,undefined or thread")
+set(T8_WARN_FLAGS -Wall -Wextra)
+set(T8_TOOL_WERROR_FLAGS -Werror=unused-variable -Werror=misleading-indentation -Werror=unused-value)
+if(T8_SANITIZE)
+    add_compile_options(-fsanitize=${T8_SANITIZE} -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=${T8_SANITIZE})
+    add_compile_definitions(T8_SANITIZED=1)   # lets the selftest skip its CPU-time checks
+endif()
+function(t8_first_party target)
+    target_compile_options(${target} PRIVATE ${T8_WARN_FLAGS})
+endfunction()
+function(t8_tool target)
+    t8_first_party(${target})
+    if(T8_WERROR)
+        target_compile_options(${target} PRIVATE ${T8_TOOL_WERROR_FLAGS})
+    endif()
+endfunction()
+
 # ---- SDL2 ------------------------------------------------------------
 # Point CMake at a prebuilt install via SDL2_ROOT, or rely on a system SDL2
 # (brew install sdl2 on a Mac).
@@ -51,6 +75,7 @@ add_library(t8core STATIC
     src/core/SampleLibrary.cpp
 )
 target_include_directories(t8core PUBLIC src/core)
+t8_first_party(t8core)
 if(UNIX AND NOT APPLE)
     find_package(Threads REQUIRED)
     target_link_libraries(t8core PUBLIC Threads::Threads)
@@ -60,29 +85,44 @@ endif()
 add_executable(t8_selftest tools/selftest_main.cpp src/app/SynthParams.cpp)
 target_link_libraries(t8_selftest PRIVATE t8core)
 target_include_directories(t8_selftest PRIVATE src third_party/imgui)   # ValueField.h rules + widget ratchet
+t8_tool(t8_selftest)
 
 # Random sequences of UI operations with audio in between; run it under the sanitizers (see docs/AUDIT_v44.43.md).
 add_executable(t8_fuzz tools/fuzz_main.cpp src/app/SynthParams.cpp)
 target_link_libraries(t8_fuzz PRIVATE t8core)
 target_include_directories(t8_fuzz PRIVATE src third_party/imgui)
+t8_tool(t8_fuzz)
 
 # ---- offline render + metrics (t8_render) and engine audit (t8_audit) ------
 add_executable(t8_render tools/render_main.cpp)
 target_link_libraries(t8_render PRIVATE t8core)
 target_include_directories(t8_render PRIVATE src tools)
+t8_tool(t8_render)
 add_executable(t8_kitgen tools/kitgen_main.cpp)
 target_link_libraries(t8_kitgen PRIVATE t8core)
+t8_tool(t8_kitgen)
 
 add_executable(t8_presetaudit tools/preset_audit_main.cpp)
 target_link_libraries(t8_presetaudit PRIVATE t8core)
 target_include_directories(t8_presetaudit PRIVATE src tools)
+t8_tool(t8_presetaudit)
 
 add_executable(t8_audit tools/audit_main.cpp)
 target_link_libraries(t8_audit PRIVATE t8core)
 target_include_directories(t8_audit PRIVATE src tools)
+t8_tool(t8_audit)
 
 # ---- the app ----------------------------------------------------------
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
+add_library(t8imgui STATIC
+    "${IMGUI_DIR}/imgui.cpp"
+    "${IMGUI_DIR}/imgui_draw.cpp"
+    "${IMGUI_DIR}/imgui_tables.cpp"
+    "${IMGUI_DIR}/imgui_widgets.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp"
+)
+target_include_directories(t8imgui PUBLIC "${IMGUI_DIR}" "${IMGUI_DIR}/backends")
 add_executable(trbrick_daw
     src/main.cpp
     src/app/SynthParams.cpp
@@ -106,14 +146,18 @@ add_executable(trbrick_daw
     src/ui_desktop/PianoRollPanel.cpp
     src/ui_desktop/MixLabPanel.cpp
     src/ui_desktop/ChordLabPanel.cpp
-    "${IMGUI_DIR}/imgui.cpp"
-    "${IMGUI_DIR}/imgui_draw.cpp"
-    "${IMGUI_DIR}/imgui_tables.cpp"
-    "${IMGUI_DIR}/imgui_widgets.cpp"
-    "${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp"
-    "${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp"
 )
-target_include_directories(trbrick_daw PRIVATE src "${IMGUI_DIR}" "${IMGUI_DIR}/backends")
+target_include_directories(trbrick_daw PRIVATE src)
+target_link_libraries(trbrick_daw PRIVATE t8imgui)
+t8_first_party(trbrick_daw)
+# imgui's SDL backends need the SDL2 headers; the app links SDL itself below
+if(TARGET SDL2::SDL2-static)
+    target_link_libraries(t8imgui PUBLIC SDL2::SDL2-static)
+elseif(TARGET SDL2::SDL2)
+    target_link_libraries(t8imgui PUBLIC SDL2::SDL2)
+else()
+    target_include_directories(t8imgui PUBLIC ${SDL2_INCLUDE_DIRS})
+endif()
 if(TARGET SDL2::SDL2main)
     target_link_libraries(trbrick_daw PRIVATE SDL2::SDL2main)
 endif()
