@@ -1,0 +1,95 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;background:#101218;font-family:Inter,Helvetica,Arial,sans-serif;color:#c9ccd6;font-size:12px;width:1160px}
+.sec{padding:14px 18px 6px}.h{color:#e8a24a;font-size:11px;letter-spacing:.08em;margin:0 0 8px}
+.note{color:#8b90a0;font-size:11px;margin:6px 0 0;max-width:1000px;line-height:1.45}
+.panel{background:#1a1c24;border:1px solid #2a2e3a;border-radius:6px;padding:10px 12px;display:inline-block;vertical-align:top}
+.row{display:flex;gap:12px;align-items:flex-start}
+.cap{color:#6fd18a;font-size:9.5px;letter-spacing:.08em;margin-bottom:5px}
+.cap.l{color:#e8a24a}
+.bars{display:flex;gap:3px}
+.col{display:flex;flex-direction:column;gap:3px;width:19px}
+.bar{height:44px;border-radius:3px;position:relative;box-sizing:border-box}
+.bar svg{position:absolute;left:2.5px;top:4px}
+.s{height:13px;border-radius:3px;background:#262a35;border:1px solid #343948;color:#8b90a0;font-size:8.5px;line-height:11px;text-align:center;box-sizing:border-box}
+.s.on{background:#e8a24a;border-color:#e8a24a;color:#1a1c24;font-weight:700}
+.s.dis{opacity:.35}
+.empty{border:1px solid #3c4052}
+.btn{white-space:nowrap;overflow:hidden;height:22px;border-radius:4px;background:#262a35;border:1px solid #343948;color:#c9ccd6;font-size:10px;line-height:20px;text-align:center;box-sizing:border-box;padding:0 2px}
+.btn.on{background:#b8453d;border-color:#d9574e;color:#fff}
+.btn.am{background:#e8a24a;color:#1a1c24;border-color:#e8a24a}
+.btn.new{outline:1px dashed #6fd18a;outline-offset:1px}
+.xy{width:92px;height:92px;border-radius:8px;background:#12141a;border:1px solid #3a3f50;position:relative}
+.xy i{position:absolute;left:14px;top:14px;width:12px;height:12px;border-radius:50%;background:#e8a24a;box-shadow:0 0 0 3px #7a5a2a}
+.tag{display:inline-block;font-size:9px;color:#6fd18a;border:1px solid #2f5a40;border-radius:3px;padding:0 4px;margin-left:6px}
+.pads{display:grid;grid-template-columns:repeat(4,50px);gap:4px}.pad{height:44px;border-radius:4px;background:#262a35;border:1px solid #343948;text-align:center;font-size:10.5px;display:flex;align-items:center;justify-content:center;white-space:pre-line}
+.pad.on{background:#b8453d;color:#fff}
+.sel{height:22px;border-radius:4px;background:#12141a;border:1px solid #343948;line-height:20px;padding:0 8px;box-sizing:border-box;font-size:10.5px}
+.lbl{color:#6b7080;font-size:10px;line-height:22px}
+</style></head><body>
+<script>
+const C=['#ee4a3c','#f6c94c','#f0709c','#5fd0f0','#5694e8','#d6dae8','#22d3ae','#76e280','#c4e868','#b28cf2'];
+const G=[
+'<circle cx="7" cy="7" r="4.5" fill="none" stroke="#12141a" stroke-width="1.6"/><circle cx="7" cy="7" r="1.5" fill="#12141a"/>',
+'<ellipse cx="7" cy="5" rx="5" ry="2" fill="none" stroke="#12141a" stroke-width="1.5"/><path d="M2 5v5c0 1.5 10 1.5 10 0V5" fill="none" stroke="#12141a" stroke-width="1.5"/>',
+'<path d="M3 11l3-7M11 11l-3-7M7 2v3" stroke="#12141a" stroke-width="1.6" fill="none"/>',
+'<path d="M2 5h10M3 8h8M7 8v4" stroke="#12141a" stroke-width="1.6" fill="none"/>',
+'<path d="M2 4h10M3 7h8M4 10h6M7 10v3" stroke="#12141a" stroke-width="1.6" fill="none"/>',
+'<path d="M3 3h8l-1 9H4z" fill="none" stroke="#12141a" stroke-width="1.5"/>',
+'<path d="M1 7c2-6 3 6 6 0s4 6 6 0" fill="none" stroke="#12141a" stroke-width="1.6"/>',
+'<path d="M1 10l3-7 3 7 3-7 3 7" fill="none" stroke="#12141a" stroke-width="1.6"/>',
+'<path d="M1 10V4h4v6h4V4h4" fill="none" stroke="#12141a" stroke-width="1.6"/>',
+'<circle cx="7" cy="3.5" r="1.6" fill="#12141a"/><circle cx="7" cy="7.5" r="1.6" fill="#12141a"/><circle cx="7" cy="11.5" r="1.6" fill="#12141a"/>'];
+function gl(t,c){return '<svg width="14" height="14" viewBox="0 0 14 14" style="filter:'+(c?'none':'invert(0)')+'">'+G[t].replace(/#12141a/g,c||'#12141a')+'</svg>'}
+// state per track: 'on','mute','solo-off','empty'
+function bars(states,solos,withS,dim){let h='<div class="bars">';
+ for(let t=0;t<10;t++){const st=states[t];let b='';
+  if(st==='empty')b='<div class="bar empty">'+gl(t,'#505468')+'</div>';
+  else if(st==='mute')b='<div class="bar" style="background:'+C[t]+'33;border:1px solid '+C[t]+'66">'+gl(t,C[t]+'bb')+'</div>';
+  else if(st==='silenced')b='<div class="bar" style="background:'+C[t]+'22;border:1px dashed '+C[t]+'55">'+gl(t,C[t]+'88')+'</div>';
+  else b='<div class="bar" style="background:'+C[t]+'ee">'+gl(t)+'</div>';
+  const so=solos.includes(t);
+  h+='<div class="col">'+b+(withS?'<div class="s'+(so?' on':'')+(st==='empty'?' dis':'')+'">S</div>':'')+'</div>';}
+ return h+'</div>'}
+const base=['on','on','empty','on','on','on','on','on','empty','on'];
+const mut=base.slice(); mut[0]='mute'; mut[5]='mute';
+const sol=base.map(s=>s==='empty'?'empty':'silenced'); sol[6]='on';
+function xy(){return '<div class="xy"><i></i></div>'}
+</script>
+
+<div class="sec"><p class="h">1  TRACK  ·  WHO PLAYS (brick editor)</p>
+<div class="row">
+ <div class="panel"><div class="cap">WHO PLAYS &nbsp;<span style="color:#8b90a0">bar = mute · S = solo</span></div><script>document.write(bars(mut,[],true))</script></div>
+ <div class="panel"><div class="cap">…Bass soloed (the others go off, dashed)</div><script>document.write(bars(sol,[6],true))</script></div>
+ <div class="panel"><div class="cap">before: chord bar was an empty outline</div><script>document.write(bars(['on','on','empty','on','on','on','on','on','empty','empty'],[],false))</script></div>
+</div>
+<p class="note">Click or drag over the bars = mute (as now). The new S under each bar = solo of that instrument; pressing it again brings back what played before. Same switch as M and S in the sequencer on the same brick, so they always agree. The chord bar was empty because its notes live in the chord bank, not in the scene: fixed, it now lights up whenever any chord scene has chords.</p></div>
+
+<div class="sec"><p class="h">2  LIVE  ·  performance panel</p>
+<div class="panel" style="display:block;margin-bottom:10px"><div class="cap l">NOW</div>
+<div class="row"><div>LIVE<br><br></div></div>
+<div class="row" style="margin-top:-18px">
+ <script>document.write(xy())</script>
+ <div class="pads"><div class="pad">KICK</div><div class="pad">DRUMS</div><div class="pad">HATS</div><div class="pad">ALL
+DRUMS</div><div class="pad">BASS</div><div class="pad">SYN2</div><div class="pad">SYN3</div><div class="pad">DROP</div></div>
+ <div style="display:flex;flex-direction:column;gap:4px">
+  <div style="display:flex;gap:4px"><div class="btn" style="width:70px">MUTE ALL</div><div class="btn" style="width:70px">STUTTER</div><div class="sel" style="width:84px">DENS 2 ▾</div></div>
+  <div style="display:flex;gap:4px"><span class="lbl">FILL</span><div class="sel" style="width:112px">RANDOM ▾</div><div class="btn" style="width:70px">FILL</div></div>
+  <div style="display:flex;gap:4px"><span class="lbl">RISER</span><div class="sel" style="width:112px">RANDOM ▾</div><div class="sel" style="width:94px">DROP 1 BAR ▾</div><div class="btn" style="width:70px">RISER</div></div>
+ </div></div></div>
+
+<div class="panel" style="display:block"><div class="cap l">PROPOSED <span class="tag">new</span></div>
+<div class="row">
+ <script>document.write(xy())</script>
+ <div>
+  <div class="cap" style="color:#8b90a0">INSTRUMENTS &nbsp;bar = mute · S = solo</div>
+  <script>document.write(bars(mut,[],true))</script>
+  <div style="display:flex;gap:4px;margin-top:5px"><div class="btn" style="width:70px">ALL DRUMS</div><div class="btn" style="width:70px">DRUMS</div><div class="btn" style="width:70px">HATS</div></div>
+  <div style="display:flex;gap:4px;margin-top:3px"><div class="btn" style="width:70px">MUTE ALL</div><div class="btn" style="width:70px">DROP</div><div class="btn new" style="width:70px">ALL ON</div></div>
+ </div>
+ <div style="display:flex;flex-direction:column;gap:4px;margin-left:6px">
+  <div style="display:flex;gap:4px"><div class="btn" style="width:70px">STUTTER</div><div class="sel" style="width:84px">DENS 2 ▾</div></div>
+  <div style="display:flex;gap:4px"><span class="lbl">FILL</span><div class="sel" style="width:112px">RANDOM ▾</div><div class="btn" style="width:70px">FILL</div></div>
+  <div style="display:flex;gap:4px"><span class="lbl">RISER</span><div class="sel" style="width:112px">RANDOM ▾</div><div class="sel" style="width:94px">DROP 1 BAR ▾</div><div class="btn" style="width:70px">RISER</div></div>
+ </div></div></div>
+<p class="note">Ten instrument tiles with the same icons and colours as WHO PLAYS and the sequencer: click = mute, S under = solo. They replace the four single pads KICK / BASS / SYN2 / SYN3 (and add the clap, open hat, perc and chord that had no pad). The groups stay: ALL DRUMS, DRUMS (snare + clap + perc), HATS, MUTE ALL, DROP. ALL ON (new, dashed green) = every mute and solo of the scene off in one press. Muted bars are dim, bars silenced by someone's solo are dim with a dashed outline. Everything reads the same switches as the M and S of the sequencer, so the three places never disagree.</p></div>
+</body></html>

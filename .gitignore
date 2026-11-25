@@ -1,0 +1,20 @@
+# Build output
+build/
+build-*/
+package/
+*.o
+*.obj
+*.app/
+*.dSYM/
+
+# User data (lives in ~/Documents/TR-Brick, never in the repo)
+data/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+__pycache__/
+*.pyc

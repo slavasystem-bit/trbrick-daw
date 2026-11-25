@@ -1,0 +1,89 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;background:#101218;font-family:Inter,Helvetica,Arial,sans-serif;color:#c9ccd6;font-size:12px;width:1180px}
+.sec{padding:14px 18px 6px}.h{color:#e8a24a;font-size:11px;letter-spacing:.08em;margin:0 0 8px}
+.note{color:#8b90a0;font-size:11px;margin:6px 0 0;max-width:1120px;line-height:1.5}
+.panel{background:#1a1c24;border:1px solid #2a2e3a;border-radius:6px;padding:10px 12px;display:block;width:1120px;box-sizing:border-box;position:relative}
+.lbl{color:#6b7080;font-size:10px;letter-spacing:.06em}
+.row{display:flex;gap:6px;align-items:center;margin:4px 0}
+.btn{height:22px;border-radius:4px;background:#262a35;border:1px solid #343948;font-size:10px;line-height:20px;text-align:center;padding:0 9px;box-sizing:border-box}
+.btn.am{background:#5a3f16;border-color:#e8a24a;color:#ffdca0}
+.tab{height:22px;border-radius:4px;background:#1f222c;font-size:10px;line-height:22px;text-align:center;width:70px;color:#8b90a0}
+.tab.on{background:#5a3f16;color:#ffdca0}
+.wave{position:relative;height:84px;border-radius:5px;background:#12141a;border:1px solid #2c303c;overflow:hidden}
+.wave svg{position:absolute;left:0;top:0}
+.knob{width:62px;text-align:center}.knob .b{height:30px;border-radius:4px;background:#262a35;border:1px solid #343948;position:relative}
+.knob .b i{position:absolute;left:0;bottom:0;height:5px;background:#e8a24a;border-radius:0 0 3px 3px}
+.knob .v{font-size:10px;color:#a9adbb;margin-top:2px}
+.new{outline:1px dashed #6fd18a;outline-offset:2px}
+.seq{display:grid;grid-template-columns:90px repeat(16,1fr);gap:3px;align-items:center}
+.nm{font-size:11px;color:#c9ccd6}.c{height:15px;border-radius:2px;background:#2a2e3a}.c.on{background:#e86a8a}.c.sl{background:#b07ae6}
+</style></head><body>
+
+<div class="sec"><p class="h">1  The 11th instrument: SAMPLER (row under Chord in the sequencer, same M and S, same colour system)</p>
+<div class="panel" style="width:800px">
+ <div class="seq nm">
+  <span>Perc</span><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c on"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c"></i>
+  <span>Chord</span><i class="c" style="background:#6f4bb0;grid-column:span 4"></i><i class="c" style="background:#6f4bb0;grid-column:span 4"></i><i class="c" style="background:#6f4bb0;grid-column:span 4"></i><i class="c" style="background:#6f4bb0;grid-column:span 4"></i>
+  <span class="new">Sampler</span><i class="c sl"></i><i class="c"></i><i class="c"></i><i class="c"></i><i class="c sl"></i><i class="c"></i><i class="c sl"></i><i class="c"></i><i class="c sl"></i><i class="c"></i><i class="c"></i><i class="c sl"></i><i class="c sl"></i><i class="c"></i><i class="c"></i><i class="c"></i>
+ </div>
+</div>
+<p class="note">The sampler is a normal row: steps, M, S, mute masks, bricks, LIVE bars (11 bars now), WHO PLAYS, MIX LAB, stems. What a step plays depends on the MODE below: ONE-SHOT = the sample at the pitch of the step's note, SLICES = the step picks a slice (the note number is the slice number), LOOP = the step starts the loop (it runs to the end or until the next step).</p></div>
+
+<div class="sec"><p class="h">2  Instrument block for the SAMPLER  ·  mode ONE-SHOT</p>
+<div class="panel">
+ <div class="row"><span style="color:#e8a24a">●</span><b style="font-size:11px">Sampler</b><span class="lbl">SAMPLER</span><div class="btn">COPY PARAMS</div></div>
+ <div style="display:grid;grid-template-columns:150px 470px 1fr;gap:14px;margin-top:6px">
+  <div>
+   <div class="lbl">SAMPLE</div>
+   <div class="btn new" style="width:140px;margin-top:4px;text-align:left">amen_break_01.wav  ▾</div>
+   <div class="row"><div class="btn" style="width:68px">LOAD...</div><div class="btn" style="width:68px">HEAR</div></div>
+   <div class="lbl" style="margin-top:6px">or drop a WAV / AIFF on the window</div>
+   <div class="lbl" style="margin-top:8px">MODE</div>
+   <div class="row new"><div class="tab on" style="width:46px;font-size:9px">ONE-SHOT</div><div class="tab" style="width:42px;font-size:9px">SLICES</div><div class="tab" style="width:36px;font-size:9px">LOOP</div></div>
+  </div>
+  <div>
+   <div class="wave new">
+    <svg width="470" height="84"><g stroke="#e8a24a" stroke-width="1.5" opacity=".9">
+     <path d="M0 42 L6 20 L10 66 L14 14 L18 70 L24 22 L30 60 L40 30 L52 54 L66 36 L84 46 L110 40 L150 44 L220 42 L330 42 L470 42" fill="none"/></g>
+     <line x1="0" y1="42" x2="470" y2="42" stroke="#2c303c"/>
+     <rect x="0" y="0" width="2" height="84" fill="#6fd18a"/><text x="6" y="12" fill="#6fd18a" font-size="9">START</text></svg>
+   </div>
+   <div class="row" style="margin-top:6px"><span class="lbl">ROOT</span><div class="btn" style="width:44px">C4</div><span class="lbl" style="margin-left:8px">KEY LOCK</span><div class="btn" style="width:40px">OFF</div><span class="lbl" style="margin-left:8px">DIRECTION</span><div class="btn" style="width:56px">FORWARD</div><span class="lbl" style="margin-left:8px">1.84 s · 44.1 kHz · stereo</span></div>
+  </div>
+  <div style="display:flex;gap:6px;align-items:flex-start">
+   <div class="knob"><div class="lbl">VOLUME</div><div class="b"><i style="width:69%"></i></div><div class="v">69%</div></div>
+   <div class="knob"><div class="lbl">PAN</div><div class="b"><i style="width:50%"></i></div><div class="v">C</div></div>
+   <div class="knob"><div class="lbl">START</div><div class="b"><i style="width:0%"></i></div><div class="v">0 ms</div></div>
+   <div class="knob"><div class="lbl">ATTACK</div><div class="b"><i style="width:3%"></i></div><div class="v">1 ms</div></div>
+   <div class="knob"><div class="lbl">DECAY</div><div class="b"><i style="width:100%"></i></div><div class="v">FULL</div></div>
+  </div>
+ </div>
+</div>
+<p class="note">Same tabs as every instrument (VOICE · EQ · FX · AUTO): the EQ, FX sends, insert FX and automation are the ones the other ten already have. VOICE is the part above. ONE-SHOT: the sample plays from START at the pitch of the note (ROOT = the note that plays it unchanged); the next step cuts it (mono) unless you tick POLY (up to 4 voices).</p></div>
+
+<div class="sec"><p class="h">3  Modes SLICES and LOOP  ·  only the middle part of the VOICE page changes</p>
+<div class="panel" style="width:1120px">
+ <div class="lbl" style="margin-bottom:4px">SLICES</div>
+ <div class="wave new" style="width:760px">
+  <svg width="760" height="84"><g stroke="#e8a24a" stroke-width="1.5" opacity=".9">
+   <path d="M0 42 L8 18 L14 68 L22 12 L30 72 L44 24 L58 60 L86 30 L100 54 L120 42 L190 42 M190 42 L196 16 L202 70 L210 20 L222 62 L260 36 L290 48 M290 42 L296 14 L302 70 L316 24 L340 56 L380 40 M380 42 L386 22 L392 66 L408 26 L430 58 L470 38 M470 42 L476 12 L482 72 L496 20 L520 60 L560 36 M560 42 L566 18 L572 68 L590 22 L620 56 L670 40 M670 42 L676 20 L682 66 L700 28 L730 52 L760 42" fill="none"/></g>
+   <g stroke="#6fd18a" stroke-width="1"><line x1="190" y1="0" x2="190" y2="84"/><line x1="290" y1="0" x2="290" y2="84"/><line x1="380" y1="0" x2="380" y2="84"/><line x1="470" y1="0" x2="470" y2="84"/><line x1="560" y1="0" x2="560" y2="84"/><line x1="670" y1="0" x2="670" y2="84"/></g>
+   <g fill="#6fd18a" font-size="9"><text x="4" y="11">1</text><text x="194" y="11">2</text><text x="294" y="11">3</text><text x="384" y="11">4</text><text x="474" y="11">5</text><text x="564" y="11">6</text><text x="674" y="11">7</text></g></svg>
+ </div>
+ <div class="row" style="margin-top:6px"><span class="lbl">SLICE BY</span><div class="btn am">TRANSIENTS</div><div class="btn">EVEN 8</div><div class="btn">EVEN 16</div><span class="lbl" style="margin-left:8px">SENSITIVITY</span><div class="btn" style="width:60px">60%</div><span class="lbl" style="margin-left:8px">7 slices · click the wave to add or remove a marker · the step's NOTE picks the slice (C = 1, C# = 2 ...)</span><div class="btn">TO PATTERN</div></div>
+ <div class="lbl" style="margin:14px 0 4px">LOOP</div>
+ <div class="wave new" style="width:760px;height:60px">
+  <svg width="760" height="60"><g stroke="#e8a24a" stroke-width="1.5" opacity=".9"><path d="M0 30 L10 10 L16 52 L30 14 L44 48 L90 24 L150 36 L170 30 L190 8 L196 54 L212 12 L226 50 L270 26 L340 34 L380 30 L390 10 L396 52 L412 16 L426 46 L470 28 L540 34 L570 30 L580 8 L586 54 L602 14 L616 48 L660 24 L730 36 L760 30" fill="none"/></g>
+   <g stroke="#6fd18a"><line x1="190" y1="0" x2="190" y2="60"/><line x1="380" y1="0" x2="380" y2="60"/><line x1="570" y1="0" x2="570" y2="60"/></g></svg>
+ </div>
+ <div class="row" style="margin-top:6px"><span class="lbl">LENGTH</span><div class="btn" style="width:56px">4 BEATS</div><span class="lbl" style="margin-left:8px">SAMPLE BPM</span><div class="btn" style="width:56px">136.0</div><div class="btn">TAP</div><span class="lbl" style="margin-left:8px">PROJECT BPM</span><div class="btn" style="width:46px">124</div><span class="lbl" style="margin-left:8px">TEMPO FIT</span><div class="btn am">SPEED + PITCH</div><span class="lbl" style="margin-left:8px">plays at 0.91x = −1.6 semitones</span></div>
+</div>
+<p class="note">SLICES: marks the hits of a break (transients) or cuts it in even parts; TO PATTERN writes the slices as steps in the order they come, so a chopped break plays back as it was, then you rearrange the steps. LOOP: you say how many beats the sample is (or let the BPM come from its length); it plays at project BPM / SAMPLE BPM times the speed, so the pitch moves with the tempo, as on a turntable. No time-stretch in this release, honestly: a big tempo change changes the sound.</p></div>
+
+<div class="sec"><p class="h">4  Scope proposed</p>
+<div class="panel" style="width:1120px;line-height:1.7">
+ <b style="color:#e8a24a">v44.50 · SAMPLER 1:</b> the 11th row everywhere the other ten are (sequencer, M/S, bricks, LIVE and WHO PLAYS bars, MIX LAB, stems, arrangement lanes, project file with old projects opening unchanged), loading a WAV / AIFF by LOAD... or by drop, ONE-SHOT mode, waveform view, the samples are copied into the project's <i>samples</i> folder so a project does not lose them.<br>
+ <b style="color:#e8a24a">v44.51 · SAMPLER 2:</b> SLICES (transients, even cuts, TO PATTERN) and LOOP with the tempo fit.
+</div>
+<p class="note">Why two: the first release touches about 35 files and the format of the project, so it should be proved on its own (selftest, fuzz, ASan, old-project round trip) before the modes are built on top.</p></div>
+</body></html>

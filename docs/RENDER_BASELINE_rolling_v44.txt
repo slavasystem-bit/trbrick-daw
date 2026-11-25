@@ -1,0 +1,6 @@
+project   : examples/rolling.t8proj (scene 1, 124.0 bpm, 16 steps)
+rendered  : 17.5 s @ 44100 Hz -> render.wav
+peak      : -1.37 dBFS   (clipped samples: 0)
+rms       : -12.85 dBFS   crest 11.5 dB
+loudness  : -13.2 LUFS integrated
+stereo    : L/R correlation 1.00   dc -0.00035

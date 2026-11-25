@@ -1,0 +1,127 @@
+cmake_minimum_required(VERSION 3.16)
+project(trbrick_daw CXX)
+
+# TR-Brick DAW -- macOS desktop app (Dear ImGui + SDL2) on top of the t8core
+# engine. The handheld / muOS build was retired in v31; see CHANGELOG.md.
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# ---- SDL2 ------------------------------------------------------------
+# Point CMake at a prebuilt install via SDL2_ROOT, or rely on a system SDL2
+# (brew install sdl2 on a Mac).
+if(DEFINED SDL2_ROOT)
+    set(CMAKE_PREFIX_PATH "${SDL2_ROOT}" ${CMAKE_PREFIX_PATH})
+endif()
+find_package(SDL2 QUIET CONFIG)
+if(NOT SDL2_FOUND)
+    find_package(SDL2 REQUIRED)
+endif()
+
+# ---- core engine (no UI dependency) -----------------------------------
+add_library(t8core STATIC
+    src/core/Types.cpp
+    src/core/WavFile.cpp
+    src/core/DrumEngine.cpp
+    src/core/SubtractiveSynth.cpp
+    src/core/FMSynth.cpp
+    src/core/Wavetables.cpp
+    src/core/WavetableSynth.cpp
+    src/core/Chords.cpp
+    src/core/ChordProgressions.cpp
+    src/core/Effects.cpp
+    src/core/Scales.cpp
+    src/core/DrumPatterns.cpp
+    src/core/Styles.cpp
+    src/core/DrumBreaks.cpp
+    src/core/SynthPresets.cpp
+    src/core/AudioEngine.cpp
+    src/core/Sequencer.cpp
+    src/core/Persistence.cpp
+    src/core/UserDirs.cpp
+    src/core/Recorder.cpp
+    src/core/MultitrackRecorder.cpp
+    src/core/ZipWriter.cpp
+    src/core/Risers.cpp
+    src/core/NotesExport.cpp
+    src/core/MixAnalysis.cpp
+    src/core/SampleLibrary.cpp
+)
+target_include_directories(t8core PUBLIC src/core)
+if(UNIX AND NOT APPLE)
+    find_package(Threads REQUIRED)
+    target_link_libraries(t8core PUBLIC Threads::Threads)
+endif()
+
+# ---- offline self-test (no audio device needed) -----------------------
+add_executable(t8_selftest tools/selftest_main.cpp src/app/SynthParams.cpp)
+target_link_libraries(t8_selftest PRIVATE t8core)
+target_include_directories(t8_selftest PRIVATE src third_party/imgui)   # ValueField.h rules + widget ratchet
+
+# Random sequences of UI operations with audio in between; run it under the sanitizers (see docs/AUDIT_v44.43.md).
+add_executable(t8_fuzz tools/fuzz_main.cpp src/app/SynthParams.cpp)
+target_link_libraries(t8_fuzz PRIVATE t8core)
+target_include_directories(t8_fuzz PRIVATE src third_party/imgui)
+
+# ---- offline render + metrics (t8_render) and engine audit (t8_audit) ------
+add_executable(t8_render tools/render_main.cpp)
+target_link_libraries(t8_render PRIVATE t8core)
+target_include_directories(t8_render PRIVATE src tools)
+add_executable(t8_kitgen tools/kitgen_main.cpp)
+target_link_libraries(t8_kitgen PRIVATE t8core)
+
+add_executable(t8_presetaudit tools/preset_audit_main.cpp)
+target_link_libraries(t8_presetaudit PRIVATE t8core)
+target_include_directories(t8_presetaudit PRIVATE src tools)
+
+add_executable(t8_audit tools/audit_main.cpp)
+target_link_libraries(t8_audit PRIVATE t8core)
+target_include_directories(t8_audit PRIVATE src tools)
+
+# ---- the app ----------------------------------------------------------
+set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
+add_executable(trbrick_daw
+    src/main.cpp
+    src/app/SynthParams.cpp
+    src/ui_desktop/DesktopTheme.cpp
+    src/ui_desktop/HeaderPanel.cpp
+    src/ui_desktop/MenuBar.cpp
+    src/ui_desktop/DocumentDialogs.cpp
+    src/ui_desktop/ChainPanel.cpp
+    src/ui_desktop/BricksPanel.cpp
+    src/ui_desktop/SequencerPanel.cpp
+    src/ui_desktop/MixerPanel.cpp
+    src/ui_desktop/LanePanel.cpp
+    src/ui_desktop/GroovePanel.cpp
+    src/ui_desktop/ContextPanel.cpp
+    src/ui_desktop/SoundPanel.cpp
+    src/ui_desktop/PresetBrowser.cpp
+    src/ui_desktop/ListBrowser.cpp
+    src/ui_desktop/Shortcuts.cpp
+    src/ui_desktop/BottomPanel.cpp
+    src/ui_desktop/FxPanel.cpp
+    src/ui_desktop/PianoRollPanel.cpp
+    src/ui_desktop/MixLabPanel.cpp
+    src/ui_desktop/ChordLabPanel.cpp
+    "${IMGUI_DIR}/imgui.cpp"
+    "${IMGUI_DIR}/imgui_draw.cpp"
+    "${IMGUI_DIR}/imgui_tables.cpp"
+    "${IMGUI_DIR}/imgui_widgets.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp"
+    "${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp"
+)
+target_include_directories(trbrick_daw PRIVATE src "${IMGUI_DIR}" "${IMGUI_DIR}/backends")
+if(TARGET SDL2::SDL2main)
+    target_link_libraries(trbrick_daw PRIVATE SDL2::SDL2main)
+endif()
+if(TARGET SDL2::SDL2-static)
+    target_link_libraries(trbrick_daw PRIVATE t8core SDL2::SDL2-static)
+elseif(TARGET SDL2::SDL2)
+    target_link_libraries(trbrick_daw PRIVATE t8core SDL2::SDL2)
+else()
+    target_include_directories(trbrick_daw PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(trbrick_daw PRIVATE t8core ${SDL2_LIBRARIES})
+endif()

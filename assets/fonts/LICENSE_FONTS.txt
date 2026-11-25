@@ -1,0 +1,10 @@
+Inter.ttf      -- Inter, by Rasmus Andersson (https://rsms.me/inter/), SIL Open Font License 1.1.
+                  Copied from google/fonts (ofl/inter), variable font -- ImGui's stb_truetype
+                  loader renders its default (Regular) master; no other weight is used.
+JetBrainsMono.ttf -- JetBrains Mono, by JetBrains s.r.o. (https://www.jetbrains.com/lp/mono/),
+                  SIL Open Font License 1.1. Copied from google/fonts (ofl/jetbrainsmono),
+                  variable font, same note as above.
+
+Both fonts are used by trbrick_daw_desktop (src/ui_desktop/) only -- the
+handheld app (trbrick_daw) still uses its own hand-rolled Font5x7 bitmap
+font and does not need these.
