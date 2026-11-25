@@ -19,6 +19,25 @@ Audit v44.58 items DATA-1, DATA-2, DATA-3, DATA-4, DATA-5 (project files), DATA-
 - **TEST-3, fuzz.** Seven new ops (65-71): LINK on selected pads / UNLINK / menu toggle with undo and redo (after LINK every selected scene is in the reference's group with its mute / solo; undoing a LINK step restores the groups exactly); OPEN / GO / launch click while held apart / the CLICK switch (opening never moves the player or leaves the opened scene queued); the armed scene (a switch on the coming scene never changes the playing one); PITCH fader / steps / push / range, and every render now goes through `VariSpeed::Process` like the audio callback; riser, live break, repeater; master FX values; reopening a damaged copy of the project (`LoadProjectFile`, repaired or refused). The fuzz now keeps its user folders in `selftest_tmp_fuzz/`. Not covered here: MIX LAB / CHORD LAB and recording (recording belongs to the audio stage).
 - Tests: 42 new selftest checks (`n2 ...`) and 7 for damaged audio files (`live-8:`, including 400 randomly damaged WAVs), 12 for LINK undo and the pad gestures (`link v44.59:`, `pads v44.59:`); updated: format number literals, the v44.5 chain persistence check (its LIVE-slot step is now a brick copy), the u8a backup name.
 
+## Stage N1 (part 1): measure audio dropouts
+
+First step of "the sound never stops" (audit v44.58, LIVE-5 / TEST-6): measure before fixing.
+
+- **DSP / XRUN readout moved to the tab row**, right-aligned left of PITCH (`HeaderPanel::DrawDropouts`). At the end of the header row it was hidden whenever the window was 1440 px or narrower. It is always shown now: grey `XRUN 0`, red `XRUN 3 (250 ms)` with the longest dropout.
+- **Who held the sound:** the audio thread measures how long it waited for the scene lock in every callback (`Mixer::audioLockWaitUs`), and `SceneMutex` measures how long any other thread held it (`MaxHoldUs`, the audio thread's own holds are not counted). The info-line text of the readout shows the longest dropout, how much of it was spent waiting for the screen, the longest screen hold overall, and the last 5 dropouts (time ago, length, wait). A click resets all of it.
+- Dropout log: the callback keeps the last 8 dropouts (`Mixer::dropouts`, length and lock wait), no allocation on the audio thread.
+- Selftest: the lock wait and the screen hold are measured, the audio thread's own render is not counted, the reset clears the log.
+
+## Stage N0: safety net for merges
+
+Nothing gets played or merged without green tests (audit v44.58: TEST-1, TEST-2, part of CODE-5 and TEST-7).
+
+- **CI (`.github/workflows/build.yml`):** four jobs on every pull request and on main: Linux build + `t8_selftest` + `t8_fuzz --seeds 30` (and a check that the tests left no files in the repo); ASan + UBSan build running selftest and `t8_fuzz --seeds 10`; TSan build running `t8_fuzz --threads`; macOS build of everything including the app + selftest.
+- **Launcher gate (`tools/mac/launch.sh`):** branch protection is not available on a free private repo, so the TR-Brick button is the gate. The PR menu shows each PR's check state; a PR starts only when all its checks are green (red, running or not started = refused, with Enter to start main instead). The commit that is fetched must be the one whose checks were read. After a build that changed the installed version the launcher builds and runs `t8_selftest` on the Mac; a failing PR is not started, a failing main (self-check, configure or build) falls back to the last main build that passed (`~/TR-Brick/last-good`; a PR never becomes the fallback). The self-check runner is built into the launcher, so PRs made before this one are checked too. Developer switches: `TRB_ALLOW_UNCHECKED=1`, `TRB_SKIP_SELFTEST=1`.
+- **TEST-2:** the selftest "a long note across a chain step is released" had its render loop inside a comment and always passed; the loop is back (and the check was seen failing when the render stops too early).
+- **Warnings:** `-Wall -Wextra` on all first-party targets (imgui moved into its own `t8imgui` library, so third_party stays quiet). `T8_WERROR=ON` (used by CI) makes unused variables / values and misleading indentation errors in `tools/`. The remaining warnings in `src/` are listed for a later step. `T8_SANITIZE=address,undefined|thread` builds the checking variants.
+- **Tests run in a scratch folder:** `tools/run_tests.sh <build> selftest|fuzz [args]` runs them in a temp folder with symlinks to the repo, so `selftest_*` files no longer land in the repo root.
+
 ## Launcher: straight from GitHub
 
 No more zips: the TR-Brick button on the Desktop takes the program from the GitHub repository.
@@ -1236,7 +1255,6 @@ Foundation release: the app is now Mac-only and the engine got its measuring too
   hairline. Settings live in `ui_settings.cfg`.
 - **Audio safety (v25)**: DSP load / xrun counter in the header; notes crossing a loop or
   scene edge are released (Panic); oscillators band-limited; device-rate engine.
-
 
 ## v22 - v24
 

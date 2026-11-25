@@ -1,3 +1,4 @@
+#include <chrono>
 #include "Sequencer.h"
 #include <algorithm>
 #include <cmath>
@@ -727,7 +728,15 @@ void Sequencer::FireRatchetEvent(const RatchetEvent& ev) {
 void Sequencer::RenderAndAdvance(float* out, int numFrames, int sampleRate) {
     // Held for the whole callback: this is what makes it safe for the UI
     // thread to edit pattern/mixer state concurrently (see PatternMutex()).
-    std::lock_guard<SceneMutex> lock(patternMutex_);
+    // N1: when the lock is busy, measure how long the audio thread waits for it (shown in the header's XRUN hint).
+    patternMutex_.MarkAudioThread();
+    if (!patternMutex_.try_lock()) {
+        const auto t0 = std::chrono::steady_clock::now();
+        patternMutex_.lock();
+        const auto waited = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+        engine_->GetMixer().audioLockWaitUs.fetch_add(static_cast<unsigned>(std::max<long long>(0, waited)), std::memory_order_relaxed);
+    }
+    std::lock_guard<SceneMutex> lock(patternMutex_, std::adopt_lock);
 
     // Tempo-synced delay (see Types.h's DelayDivisionSeconds/
     // FxSettings::delayDivisionIndex): recompute the actual delay time

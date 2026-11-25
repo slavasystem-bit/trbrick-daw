@@ -20,6 +20,8 @@
 #include <vector>
 #include <random>
 #include <thread>
+#include <chrono>
+#include <algorithm>
 #include <cstdio>
 
 namespace t8 {
@@ -29,14 +31,38 @@ namespace t8 {
 // CheckSceneLock(), which counts a violation (and says so once on stderr) instead of letting a data race go unnoticed.
 class SceneMutex {
 public:
-    void lock() { m_.lock(); owner_.store(std::this_thread::get_id(), std::memory_order_relaxed); ++depth_; }
-    bool try_lock() { if (!m_.try_lock()) return false; owner_.store(std::this_thread::get_id(), std::memory_order_relaxed); ++depth_; return true; }
-    void unlock() { if (--depth_ == 0) owner_.store(std::thread::id{}, std::memory_order_relaxed); m_.unlock(); }
+    void lock() { m_.lock(); Acquired(); }
+    bool try_lock() { if (!m_.try_lock()) return false; Acquired(); return true; }
+    void unlock() {
+        if (--depth_ == 0) {
+            // N1: how long a thread other than the audio thread kept the lock (the audio thread can wait that long).
+            if (owner_.load(std::memory_order_relaxed) != audioThread_.load(std::memory_order_relaxed)) {
+                const auto held = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - since_).count();
+                const unsigned us = held < 0 ? 0u : static_cast<unsigned>(std::min<long long>(held, 0xFFFFFFFFll));
+                unsigned prev = maxHoldUs_.load(std::memory_order_relaxed);
+                while (us > prev && !maxHoldUs_.compare_exchange_weak(prev, us, std::memory_order_relaxed)) {}
+            }
+            owner_.store(std::thread::id{}, std::memory_order_relaxed);
+        }
+        m_.unlock();
+    }
     bool HeldByThisThread() const { return owner_.load(std::memory_order_relaxed) == std::this_thread::get_id(); }
+    // N1: the thread that renders audio says so once (RenderAndAdvance); its own holds are the render itself and are not counted.
+    void MarkAudioThread() { audioThread_.store(std::this_thread::get_id(), std::memory_order_relaxed); }
+    // Longest time any other thread (the screen, a loader) held the lock since the last reset, in microseconds.
+    unsigned MaxHoldUs() const { return maxHoldUs_.load(std::memory_order_relaxed); }
+    void ResetMaxHold() { maxHoldUs_.store(0, std::memory_order_relaxed); }
 private:
+    void Acquired() {
+        owner_.store(std::this_thread::get_id(), std::memory_order_relaxed);
+        if (++depth_ == 1) since_ = std::chrono::steady_clock::now();
+    }
     std::recursive_mutex m_;
     std::atomic<std::thread::id> owner_{};
-    int depth_ = 0;   // only touched by the owner
+    std::atomic<std::thread::id> audioThread_{};
+    std::atomic<unsigned> maxHoldUs_{0};
+    int depth_ = 0;                                  // only touched by the owner
+    std::chrono::steady_clock::time_point since_{};  // only touched by the owner
 };
 
 

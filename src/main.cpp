@@ -528,7 +528,9 @@ int main(int argc, char** argv) {
 
         {   // v44.57: the PITCH strip at the right end of the tab row (drawn first, the tab bar then starts where it did)
             const ImVec2 here = ImGui::GetCursorScreenPos();
-            headerPanel.DrawPitch(app, ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x - 8.0f);
+            const float pitchLeft = headerPanel.DrawPitch(app, ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x - 8.0f);
+            ImGui::SetCursorScreenPos(here);
+            headerPanel.DrawDropouts(app, pitchLeft - 24.0f);   // N1: always visible (the header row has no room at 1440 px)
             ImGui::SetCursorScreenPos(here);
         }
         if (ImGui::BeginTabBar("##MainTabs", ImGuiTabBarFlags_None)) {
