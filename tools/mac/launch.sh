@@ -245,13 +245,16 @@ cd "$APP" || fail "Cannot open $APP"
 command -v cmake >/dev/null 2>&1 || fail "cmake is not installed. One-time setup, run in Terminal:  brew install cmake sdl2"
 CUR_ID="$(cat "$STATE" 2>/dev/null)"
 IS_TEST=""; case "$CUR_ID" in *refs/pull/*) IS_TEST=1 ;; esac   # the installed version is a pull request (also when offline)
+# A pull request chosen in THIS run ($PR) is refused when it fails. One that is only left installed from an
+# earlier test (offline, GitHub unreachable) falls back to the last good main version, so a show never ends with no app.
+LEFTOVER=""; [ -n "$IS_TEST" ] && [ -z "$PR" ] && LEFTOVER=" (the installed version is a TEST version left from an earlier check)"
 
 # The last main version that passed the self-check on this Mac (a pull request never becomes the fallback).
 # Only the program file is kept: it starts beside the newer version's kits / presets / assets in $APP.
 build_failed() {
-    if [ -z "$IS_TEST" ] && [ -x "$GOOD/trbrick_daw" ]; then
-        warn "$1
-   Starting the last version that passed the self-check instead. Tell Claude in the project."
+    if [ -z "$PR" ] && [ -x "$GOOD/trbrick_daw" ]; then
+        warn "$1$LEFTOVER
+   Starting the last main version that passed the self-check instead. Tell Claude in the project."
         cd "$APP" || exit 1
         [ -n "${TRB_NO_LAUNCH:-}" ] && { echo "-- Fallback ready (start skipped) --"; exit 0; }
         "$GOOD/trbrick_daw"; echo ""; echo "TR-Brick closed."; pause; exit 0
@@ -310,12 +313,12 @@ else
     else
         rm -f "$TESTED"
         grep '^\[FAIL\]' "$LOG" 2>/dev/null | head -5
-        if [ -n "$IS_TEST" ]; then
+        if [ -n "$PR" ]; then
             fail "The self-check FAILED on this Mac for $LABEL, so it will NOT be started.
    Do not merge it. Tell Claude in the project (details: $LOG)."
         elif [ -x "$GOOD/trbrick_daw" ]; then
-            warn "The self-check FAILED on this Mac for the main version.
-   Starting the last version that passed it instead (details: $LOG). Tell Claude in the project."
+            warn "The self-check FAILED on this Mac$LEFTOVER.
+   Starting the last main version that passed it instead (details: $LOG). Tell Claude in the project."
             APP_BIN="$GOOD/trbrick_daw"
         else
             warn "The self-check FAILED on this Mac and there is no earlier good version to fall back to.
