@@ -2228,7 +2228,7 @@ struct AppState {
         for (int slot = 0; slot < kNumDrumTracks; ++slot) WriteGenreSlot(pat.tracks[static_cast<size_t>(slot)], gp, slot, spb, len, barsUsed);
         pat.swing = gp.swing;
         SyncMixer(pat);
-        std::string msg = std::string(gp.name) + " PATTERN";
+        std::string msg = std::string(gp.name) + " BEAT";
         if (len != oldLen) msg += ", SCENE LENGTH " + std::to_string(oldLen) + " -> " + std::to_string(len) + " (" + std::to_string(barsUsed) + " BARS)";
         else if (gp.bars > 1) msg += " (" + std::to_string(barsUsed) + " BARS)";
         if (barsUsed < gp.bars) msg += ", ONLY THE FIRST " + std::to_string(barsUsed) + " OF " + std::to_string(gp.bars) + " BARS FIT THE " + GridLabel(spb) + " GRID";
@@ -2443,7 +2443,7 @@ struct AppState {
         PushUndo();
         ResizeSceneNoUndo(pat, newLen);
         SyncMixer(pat);
-        SetStatus("LEN " + std::to_string(oldLen) + " -> " + std::to_string(newLen) + (newLen > oldLen ? " (PATTERN REPEATED)" : ""));
+        SetStatus("LEN " + std::to_string(oldLen) + " -> " + std::to_string(newLen) + (newLen > oldLen ? " (REPEATED)" : ""));
     }
 
     // ---- Drum "swap" (live-performance feature) ----------------------------
@@ -4011,7 +4011,7 @@ struct AppState {
         }
         pat.swing = data.swing;
         SyncMixer(pat);
-        SetStatus(name + " PATTERN (SAVED)");
+        SetStatus(name + " BEAT (SAVED)");
     }
     void SaveCurrentAsCustomPattern(const std::string& name) {
         // Nothing to save if the 6 drum tracks are empty (a silent "beat" would

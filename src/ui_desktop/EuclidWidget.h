@@ -12,15 +12,18 @@
 
 namespace t8::desktop {
 
-inline void DrawEuclidTools(AppState& app, int ti) {
+inline void DrawEuclidTools(AppState& app, int ti, float buttonFont = 0.0f) {   // buttonFont > 0: the button text size (UI-7, a full row)
     static int hits = 3, steps = 8, rotate = 0;
     ImGui::PushID("euclidTools");
     const bool euclidOn = [&] { const Track& tt = app.StepTrack(app.CurrentPattern(), ti); return tt.euclidOn; }();   // v44.55: lit while the melody is spread
     char btnLabel[48];
     if (euclidOn) { const Track& tt = app.StepTrack(app.CurrentPattern(), ti); std::snprintf(btnLabel, sizeof btnLabel, "EUCLID %d/%d###euclidBtn", tt.euclidHits, tt.euclidSteps); }
     else std::snprintf(btnLabel, sizeof btnLabel, "EUCLID###euclidBtn");
-    if (ToggleButton(btnLabel, euclidOn)) ImGui::OpenPopup("EuclidPopup");
-    if (ImGui::IsItemHovered()) Hint("Spread N hits evenly over M steps (3 of 8 = the 3-3-2 pattern), rotate it, write it on this track.\nSPREAD MELODY: the notes of the track are spread over the hits and the original comes back when you turn it off.\nAlso: slide the whole track by steps. Undoable.");
+    if (buttonFont > 0.0f) ImGui::PushFont(nullptr, buttonFont);
+    const bool euclidHit = ToggleButton(btnLabel, euclidOn);
+    if (buttonFont > 0.0f) ImGui::PopFont();
+    if (euclidHit) ImGui::OpenPopup("EuclidPopup");
+    if (ImGui::IsItemHovered()) Hint("Spread N hits evenly over M steps (3 of 8 = the 3-3-2 rhythm), rotate it, write it on this track.\nSPREAD MELODY: the notes of the track are spread over the hits and the original comes back when you turn it off.\nAlso: slide the whole track by steps. Undoable.");
     const ImVec2 bmin = ImGui::GetItemRectMin(), bmax = ImGui::GetItemRectMax();
     ImGui::SetNextWindowPos(ImVec2(bmin.x, bmax.y + 4.0f), ImGuiCond_Appearing);
     if (ImGui::BeginPopup("EuclidPopup")) {

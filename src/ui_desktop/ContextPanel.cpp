@@ -315,9 +315,9 @@ void ContextPanel::DrawCommonRow(AppState& app, int ti) {
     std::snprintf(buf, sizeof(buf), "%d", trackLen);
     FloatCell(app, "len", "STEPS", static_cast<float>(trackLen), 1.0f, static_cast<float>(kMaxSteps), 1.0f, buf,
               [&](float v) { t.useOwnLength = true; t.length = std::clamp(static_cast<int>(v + 0.5f), 1, kMaxSteps); });
-    // v39: this track's own swing; the lowest position means "follow the pattern swing" (shown as PAT)
+    // v39: this track's own swing; the lowest position means "follow the scene swing" (shown as SCENE)
     ImGui::SameLine(0, 6);
-    if (t.swing < 0.0f) std::snprintf(buf, sizeof(buf), "PAT");
+    if (t.swing < 0.0f) std::snprintf(buf, sizeof(buf), "SCENE");
     else std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(t.swing * 100.0f + 0.5f));
     FloatCell(app, "tsw", "SWING", t.swing < 0.0f ? -0.01f : t.swing, -0.01f, 0.75f, 0.01f, buf,
               [&](float v) { t.swing = v < 0.0f ? -1.0f : std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 0.75f); });
@@ -668,7 +668,7 @@ void ContextPanel::DrawDrumVoice(AppState& app, int ti) {
         FloatCell(app, "ksweep", "SWEEP", ks.sweep, 1.0f, 10.0f, 0.1f, buf, [&](float v) { setF(ks.sweep, v); }, off);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%.0fMS", ks.sweepMs);
-        FloatCell(app, "ksweept", "SWEEP T", ks.sweepMs, 5.0f, 150.0f, 1.0f, buf, [&](float v) { setF(ks.sweepMs, v); }, off);
+        FloatCell(app, "ksweept", "SWEEP TIME", ks.sweepMs, 5.0f, 150.0f, 1.0f, buf, [&](float v) { setF(ks.sweepMs, v); }, off);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%.0fMS", ks.decayMs);
         FloatCell(app, "kdecay", "LENGTH", ks.decayMs, 80.0f, 1200.0f, 10.0f, buf, [&](float v) { setF(ks.decayMs, v); }, off);

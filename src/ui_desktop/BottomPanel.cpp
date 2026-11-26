@@ -253,7 +253,7 @@ void BottomPanel::DrawStyleDetail(AppState& app, int styleId, float width) {
                   sd.chordBeats, sd.chordBeats == 1 ? "" : "s", static_cast<int>(sd.bassLine.size()), kKeyNames[std::clamp(app.project.randomizerKeyRoot, 0, kNumKeys - 1)], kScaleNames[std::clamp(app.project.randomizerScale, 0, kNumScales - 1)]);
     std::snprintf(b4, sizeof b4, "%d BPM (this scene: %d)", sd.bpm, static_cast<int>(app.CurrentPattern().bpm + 0.5f));
     Row rows[4] = {
-        {"BEAT", &app.styleBeat, "BEAT: the drum pattern with its swing, the groove (baked into the steps), the kit and the scene length (it grows to the typical length, never shrinks).", b1},
+        {"BEAT", &app.styleBeat, "BEAT: the drum rhythm with its swing, the groove (baked into the steps), the kit and the scene length (it grows to the typical length, never shrinks).", b1},
         {"SOUND", &app.styleSound, "SOUND: the presets of bass, synth 2, synth 3 and chord.", b2},
         {"NOTES", &app.styleNotes, "NOTES: a bass line and a chord progression, written in the key and scale you have set.", b3},
         {"TEMPO", &app.styleTempo, "TEMPO: the BPM of the style. Off by default, so a style never changes the tempo of a set by surprise.", b4},
@@ -375,18 +375,18 @@ void BottomPanel::DrawRandomKit(AppState& app) {
         if (ImGui::Button(">##beatNext", ImVec2(24, btnH - 2))) app.rndGenreIndex = (app.rndGenreIndex + 1) % patCount;
         ImGui::SameLine(0, 6);
         if (ImGui::Button("APPLY", ImVec2(50, btnH - 2))) ApplyBeat(app, app.rndGenreIndex);
-        if (ImGui::IsItemHovered()) Hint("Replace the drum tracks with the browsed typical pattern");
+        if (ImGui::IsItemHovered()) Hint("Replace the drum tracks with the browsed typical beat");
         ImGui::SameLine(0, 4);
         static char patName[48] = "";
         if (ImGui::Button("SAVE", ImVec2(44, btnH - 2))) { patName[0] = '\0'; ImGui::OpenPopup("BeatSaveName"); }
-        if (ImGui::IsItemHovered()) Hint("Save the current drum pattern under a name (it joins the BEAT list)");
+        if (ImGui::IsItemHovered()) Hint("Save the current drum beat under a name (it joins the BEAT list)");
         if (NamePrompt("BeatSaveName", patName, sizeof(patName), "BEAT NAME")) app.SaveCurrentAsCustomPattern(patName);
     }
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.16f, 0.16f, 1.0f));
     ImGui::SetCursorScreenPos(ImVec2(styleChipsEnd.x + 8.0f, styleChipsEnd.y));   // v44.49: beside the B S N T chips (the panel has no room for a row of its own)
     if (ImGui::Button("CLEAR ALL", ImVec2(104, btnH - 6))) { app.ClearPattern(); app.SetStatus("SCENE CLEARED (ALL INSTRUMENTS)"); }
     ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered()) Hint("Clear every track of this pattern (Undo brings it back)");
+    if (ImGui::IsItemHovered()) Hint("Clear every track of this scene (Undo brings it back)");
     ImGui::EndGroup();
 
     ImGui::SameLine(0, 12);
@@ -493,7 +493,7 @@ void BottomPanel::DrawRandomKit(AppState& app) {
                 if (ToggleButton("FIRST ON THE ONE", rh.onTheOne, ImVec2(140, 0), ToggleTab())) rh.onTheOne = !rh.onTheOne;
                 ImGui::SameLine(0, 4);
                 if (ToggleButton("SAME EVERY BAR", rh.sameEveryBar, ImVec2(130, 0), ToggleTab())) rh.sameEveryBar = !rh.sameEveryBar;
-                if (ImGui::IsItemHovered()) Hint("ON: one bar is drawn and repeated through the pattern.\nOFF: every bar gets a figure of its own.");
+                if (ImGui::IsItemHovered()) Hint("ON: one bar is drawn and repeated through the scene.\nOFF: every bar gets a figure of its own.");
                 ImGui::SameLine(0, 10);
                 if (ImGui::Button("ROLL", ImVec2(60, 0))) { app.rndDensityMode[melodicIndex] = 2; app.RandomizeRhythm(melodicIndex); }
                 if (ImGui::IsItemHovered()) Hint("Switch this part to RHYTHM and write a figure now");

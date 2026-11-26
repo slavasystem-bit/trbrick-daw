@@ -28,12 +28,21 @@ struct ParamCellResult {
     int steps = 0;            // net +/- steps from drag, or +1/-1 from a click on a discrete cell
 };
 
+// UI-7: a caption or value wider than its cell ("KEY LOCK", "SWEEP TIME", "FORWARD") is drawn smaller to fit instead of being cut
+// ("KEY LOCI", "FORWARI"); it never goes below kParamCellMinFont points, and only past that is it clipped.
+inline constexpr float kParamCellMinFont = 10.0f;
 inline void ParamCellCenteredText(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const char* text, ImU32 col) {
+    float size = ImGui::GetFontSize();
     ImVec2 ts = ImGui::CalcTextSize(text);
+    const float room = (p1.x - p0.x) - 2.0f;
+    if (ts.x > room && ts.x > 0.0f) {
+        const float fit = std::max(kParamCellMinFont, size * room / ts.x);
+        if (fit < size) { ts.x *= fit / size; ts.y *= fit / size; size = fit; }
+    }
     float x = p0.x + ((p1.x - p0.x) - ts.x) * 0.5f;
     if (x < p0.x) x = p0.x;
     dl->PushClipRect(p0, p1, true);
-    dl->AddText(ImVec2(x, p0.y + ((p1.y - p0.y) - ts.y) * 0.5f), col, text);
+    dl->AddText(ImGui::GetFont(), size, ImVec2(x, p0.y + ((p1.y - p0.y) - ts.y) * 0.5f), col, text);
     dl->PopClipRect();
 }
 

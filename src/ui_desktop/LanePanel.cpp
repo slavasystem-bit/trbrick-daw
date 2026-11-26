@@ -53,7 +53,7 @@ void LanePanel::Draw(AppState& app, const LiveLayout& layout) {
     if (ImGui::IsItemHovered()) Hint("Microtiming of each hit, -50 ... +50 %% of a step.\nBelow the middle line = ahead of the grid (rushing), above = laid back.");
     ImGui::SameLine(0, 4);
     if (ToggleButton("SWING", swingTab_, ImVec2(0, 0), ToggleTab())) { swingTab_ = true; }
-    if (ImGui::IsItemHovered()) Hint("Swing of the whole pattern and of this track on its own, with a preview of where the hits land.");
+    if (ImGui::IsItemHovered()) Hint("Swing of the whole scene and of this track on its own, with a preview of where the hits land.");
     if (!swingTab_) {
     ImGui::SameLine(0, 14);
     if (ImGui::Button("HUMANIZE")) HumanizeLane(app, ti, kind_, humanizePct_);
