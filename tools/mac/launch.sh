@@ -9,7 +9,8 @@
 #   3. if it is a different version from the one installed, copies the program into
 #      ~/TR-Brick/app (your own tracks, backups and the project file are never overwritten);
 #   4. builds only what changed (the build folder stays between versions);
-#   5. runs the self-check (t8_selftest) on this Mac whenever the version changed;
+#   5. runs the self-check (t8_selftest) on this Mac whenever the version changed, unless GitHub's own Mac
+#      already passed the same self-check on this exact version (then it is skipped: saves 2-3 minutes);
 #   6. starts the program.
 # Safety rules (stage N0):
 #   - a pull request with FAILED GitHub checks is refused (the main version can be started instead).
@@ -96,9 +97,16 @@ choose_version() {   # sets REF (git ref to fetch) and LABEL (what to show)
             echo ""
             echo "Which version to start?"
             echo "   Enter  = main version (the one you play)"
-            echo "$list" | while IFS=$'\t' read -r n t; do
-                printf '   %-6s = test pull request #%s: %s  [%s]\n' "$n" "$n" "$t" "$(pr_checks_word "$(pr_checks_state "$n")")"
-            done
+            # ask GitHub about every pull request at the same time (one by one took a second or two each)
+            local tmpd; tmpd="$(mktemp -d "${TMPDIR:-/tmp}/trb_checks.XXXXXX")"
+            while IFS=$'\t' read -r n t; do
+                ( pr_checks_state "$n" > "$tmpd/$n" ) &
+            done <<< "$list"
+            wait
+            while IFS=$'\t' read -r n t; do
+                printf '   %-6s = test pull request #%s: %s  [%s]\n' "$n" "$n" "$t" "$(pr_checks_word "$(cat "$tmpd/$n" 2>/dev/null)")"
+            done <<< "$list"
+            rm -rf "$tmpd"
             echo ""
             read -r -t 15 -p "Your choice (Enter = main, starts by itself in 15 s): " choice || { choice=""; echo ""; }
             choice="$(echo "$choice" | tr -d ' #')"
@@ -285,6 +293,29 @@ run_selftest() {
 }
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
 
+# Did GitHub's own Mac already build this exact version and pass the same self-check on it?
+# (the "macOS build and selftest" check of the build workflow runs t8_selftest on a Mac for every
+# pull request and every change to main). Then running it here again only costs 2-3 minutes.
+CI_SELFTEST_JOB="macOS build and selftest"
+github_mac_selftest_passed() {
+    [ -n "${TRB_GIT_URL:-}${TRB_SOURCE_DIR:-}${TRB_OFFLINE:-}" ] && return 1
+    [ -n "$ID" ] && [ "$ID" = "$CUR_ID" ] || return 1     # only for the version downloaded in this run
+    local sha="${ID##*:}"
+    case "$sha" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;; *) return 1 ;; esac
+    command -v gh >/dev/null 2>&1 || return 1
+    local res
+    res="$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" \
+            --jq ".check_runs[] | select(.name == \"$CI_SELFTEST_JOB\") | .conclusion" 2>/dev/null)"
+    # every run of that check on this version must have passed (a newer re-run that failed counts)
+    [ -n "$res" ] && ! echo "$res" | grep -qvx success
+}
+
+NEED_SELFTEST=""
+CI_SELFTEST_OK=""
+if [ -z "${TRB_SKIP_SELFTEST:-}" ] && ! { [ -n "$CUR_ID" ] && [ "$(cat "$TESTED" 2>/dev/null)" = "$CUR_ID" ]; }; then
+    if github_mac_selftest_passed; then CI_SELFTEST_OK=1; else NEED_SELFTEST=1; fi
+fi
+
 mkdir -p build-mac
 if [ -f build-mac/CMakeCache.txt ] && ! grep -q "^CMAKE_HOME_DIRECTORY:INTERNAL=$APP\$" build-mac/CMakeCache.txt; then
     echo "-- The program folder moved: starting a clean build --"
@@ -297,7 +328,14 @@ if [ ! -f CMakeCache.txt ]; then
     cmake .. -DCMAKE_BUILD_TYPE=Release ${TRB_CMAKE_ARGS:-} || { rm -f CMakeCache.txt; build_failed "cmake configure failed -- see the error above."; }
 fi
 echo "-- Building (only what changed) --"
-make -j"$JOBS" trbrick_daw || build_failed "Build failed -- see the errors above."
+if [ -n "$NEED_SELFTEST" ]; then
+    # the self-check is needed too: build it at the same time as the program (its one big file then
+    # compiles beside the program's files instead of after them). If that fails, build the program alone,
+    # so a broken self-check is reported by the self-check step below, not as a broken program.
+    make -j"$JOBS" trbrick_daw t8_selftest || make -j"$JOBS" trbrick_daw || build_failed "Build failed -- see the errors above."
+else
+    make -j"$JOBS" trbrick_daw || build_failed "Build failed -- see the errors above."
+fi
 cd "$APP" || exit 1
 
 # ---- self-check on this Mac (only when the installed version changed) ---------------------------------------------------
@@ -306,6 +344,13 @@ if [ -n "${TRB_SKIP_SELFTEST:-}" ]; then
     echo "-- Self-check skipped (TRB_SKIP_SELFTEST) --"
 elif [ -n "$CUR_ID" ] && [ "$(cat "$TESTED" 2>/dev/null)" = "$CUR_ID" ]; then
     echo "-- Self-check: already passed for this version --"
+elif [ -n "$CI_SELFTEST_OK" ]; then
+    echo "-- Self-check: already passed on GitHub's Mac for this exact version (skipped here, saves 2-3 minutes) --"
+    printf '%s' "$CUR_ID" > "$TESTED"
+    if [ -z "$IS_TEST" ]; then
+        mkdir -p "$GOOD" && cp -p "$APP_BIN" "$GOOD/trbrick_daw.new" && mv "$GOOD/trbrick_daw.new" "$GOOD/trbrick_daw" \
+            && printf '%s' "$CUR_ID" > "$GOOD/version.txt"
+    fi
 else
     echo "-- Self-check on this Mac (about a minute, only after an update) --"
     LOG="$ROOT/selftest-last.log"

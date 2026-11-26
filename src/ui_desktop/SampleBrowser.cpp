@@ -1,4 +1,5 @@
 #include "SampleBrowser.h"
+#include "ValueField.h"
 #include "BrowserCore.h"
 #include "InfoLine.h"
 #include "Interaction.h"
@@ -163,6 +164,13 @@ void SampleBrowser::Rebuild(AppState& app) {
         if (!lib) { waitLib_ = true; return; }
         for (const LibSample& ls : *lib) {
             Item it; it.src = Source::Library; it.key = ls.rel; it.name = ls.locked ? ls.name + "  [LOCKED]" : ls.name; it.folder = DirOf(ls.rel); it.type = ls.category; it.bpm = ls.bpm; it.favKey = LibFavKey(ls.rel);
+            auto g = guess_.find(ls.rel);
+            if (g == guess_.end()) {
+                unsigned m = 0;
+                for (const std::string& t : GuessSampleTags(ls.rel)) for (int i = 0; i < kNumSampleTags; ++i) if (t == kSampleTags[i]) m |= 1u << i;
+                g = guess_.emplace(ls.rel, std::make_pair(GuessSampleGenre(ls.rel), m)).first;
+            }
+            it.genre = g->second.first; it.tags = g->second.second;
             out.push_back(std::move(it));
         }
     };
@@ -207,9 +215,17 @@ void SampleBrowser::Rebuild(AppState& app) {
 
 bool SampleBrowser::Visible(const Item& it) const {
     if (src_ == Source::Library && !folder_.empty() && it.key.compare(0, folder_.size() + 1, folder_ + "/") != 0) return false;
-    if (type_ >= 0 && (src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent) && it.type != kLibCategories[type_]) return false;
+    const bool typed = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
+    if (type_ >= 0 && typed && it.type != kLibCategories[type_]) return false;
+    if (genre_ >= 0 && typed && it.genre != kSampleGenres[genre_]) return false;
+    if (tagMask_ && typed && (it.tags & tagMask_) != tagMask_) return false;
+    if ((bpmLo_ > 0 || bpmHi_ > 0) && typed) {
+        if (it.bpm <= 0.0) return false;
+        if (bpmLo_ > 0 && it.bpm < bpmLo_ - 0.5) return false;
+        if (bpmHi_ > 0 && it.bpm > bpmHi_ + 0.5) return false;
+    }
     if (search_[0]) {
-        const std::string hay = Lower(it.name + " " + it.folder + " " + it.type);
+        const std::string hay = Lower(it.name + " " + it.folder + " " + it.type + " " + GenreTagsText(it));
         std::string q = Lower(search_), w;
         for (size_t p = 0; p <= q.size(); ++p) {   // every word of the search must be there
             if (p == q.size() || q[p] == ' ') { if (!w.empty() && hay.find(w) == std::string::npos) return false; w.clear(); }
@@ -388,11 +404,15 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::SameLine(0, 18);
     if (focusSearch_) { ImGui::SetKeyboardFocusHere(); focusSearch_ = false; }
     ImGui::SetNextItemWidth(260.0f);
-    if (ImGui::InputTextWithHint("##sbSearch", "search name, folder, type ...", search_, sizeof(search_))) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
+    if (ImGui::InputTextWithHint("##sbSearch", "search name, folder, type, genre, tag ...", search_, sizeof(search_))) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
     const bool searchActive = ImGui::IsItemActive();
+    // C4b part 6 (review): a number typed into a BPM field belongs to that field: no search capture, no browse / take / close keys.
+    // The field is drawn further down, so last frame's state is used (ImGui sets WantTextInput while a text field is being edited).
+    const bool fieldTyping = (io.WantTextInput && !searchActive) || bpmTyping_;
+    bpmTyping_ = false;   // set again below while a BPM field is being typed into
     if ((io.KeySuper || io.KeyCtrl) && ImGui::IsKeyPressed(ImGuiKey_F, false)) focusSearch_ = true;
-    bool wantHear = trashStage_ == 0 && browser::HearKey(searchActive, search_);
-    if (trashStage_ == 0 && browser::CaptureTyping(search_, sizeof(search_), searchActive)) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
+    bool wantHear = trashStage_ == 0 && !fieldTyping && browser::HearKey(searchActive, search_);
+    if (trashStage_ == 0 && !fieldTyping && browser::CaptureTyping(search_, sizeof(search_), searchActive)) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
     ImGui::SameLine(ImGui::GetWindowWidth() - 14.0f - 22.0f - 8.0f - 2 * 52.0f - 4.0f);
     if (ToggleButton("LIST##sbList", list_, ImVec2(52, 0), ToggleTab())) { list_ = true; scrollToSel_ = true; }
     if (ImGui::IsItemHovered()) Hint("One file per row: name, folder, type, tempo. A click on a column title sorts.");
@@ -454,6 +474,45 @@ void SampleBrowser::Draw(AppState& app) {
     }
     ImGui::EndDisabled();
     if (!typed && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("TYPE filters MY LIBRARY, FAVORITES and RECENT.");
+    // GENRE and TAGS (C4b v1): guessed from the folder and file names; the filters add up with TYPE, the folder and the search
+    ImGui::BeginDisabled(!typed);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("GENRE");
+    ImGui::SameLine(0, 8);
+    if (ToggleButton("ALL##sbgAll", genre_ < 0, ImVec2(0, 0), ToggleTab())) { genre_ = -1; dirty_ = true; sel_ = 0; }
+    for (int g = 0; g < kNumSampleGenres; ++g) {
+        ImGui::SameLine(0, 4);
+        char lab[32]; std::snprintf(lab, sizeof lab, "%s##sbg%d", kSampleGenres[g], g);
+        if (ToggleButton(lab, genre_ == g, ImVec2(0, 0), ToggleTab())) { genre_ = genre_ == g ? -1 : g; dirty_ = true; sel_ = 0; }
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("%s", typed ? "The genre the program reads from the folder and file names (\"BL_HipHop_95bpm\" = HIP HOP)." : "GENRE filters MY LIBRARY, FAVORITES and RECENT.");
+    ImGui::BeginDisabled(!typed);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("TAGS ");
+    ImGui::SameLine(0, 8);
+    for (int t = 0; t < kNumSampleTags; ++t) {
+        if (t) ImGui::SameLine(0, 4);
+        char lab[32]; std::snprintf(lab, sizeof lab, "%s##sbtg%d", kSampleTags[t], t);
+        if (ToggleButton(lab, (tagMask_ >> t) & 1u, ImVec2(0, 0), ToggleTab())) { tagMask_ ^= 1u << t; dirty_ = true; sel_ = 0; }
+    }
+    ImGui::SameLine(0, 18);
+    ImGui::TextDisabled("BPM");
+    ImGui::SameLine(0, 6);
+    auto bpmField = [&](const char* id, int* v, const char* hint) {   // the program's number field: drag, wheel, type; Option+click = any
+        float f = static_cast<float>(*v);
+        ValueSpec sp; sp.lo = 0.0f; sp.hi = 300.0f; sp.step = 0.5f; sp.wheel = 1.0f; sp.def = 0.0f; sp.integer = true; sp.offText = "any";
+        if (ValueField(id, &f, sp, 48.0f).changed) { *v = static_cast<int>(f); dirty_ = true; sel_ = 0; }
+        if (ImGui::IsItemHovered()) Hint("%s", hint);
+        ImGui::PushID(id); const ImGuiID wid = ImGui::GetID("##vf"); ImGui::PopID();   // the same id ValueField uses
+        if (valuefield_detail::E().id == wid) bpmTyping_ = true;   // double-clicked: the number is being typed
+    };
+    bpmField("##sbBpmLo", &bpmLo_, "Lowest tempo (any = no limit). Files without a tempo in the name are hidden while a tempo is set.");
+    ImGui::SameLine(0, 4);
+    ImGui::TextDisabled("-");
+    ImGui::SameLine(0, 4);
+    bpmField("##sbBpmHi", &bpmHi_, "Highest tempo (any = no limit).");
+    ImGui::EndDisabled();
     }
     ImGui::Dummy(ImVec2(1, 2));
 
@@ -553,7 +612,7 @@ void SampleBrowser::Draw(AppState& app) {
     const float cardW = 176.0f, cardH = 52.0f, gap = 8.0f;
     const int cols = list_ ? 1 : std::max(1, static_cast<int>((fullW + gap) / (cardW + gap)));
     bool pick = false, moved = false, favToggled = false;
-    if (n > 0 && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+    if (n > 0 && !fieldTyping && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
         int d = 0;
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) d = cols;
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) d = -cols;
@@ -566,7 +625,7 @@ void SampleBrowser::Draw(AppState& app) {
         if (interaction::KeyConfirm()) pick = true;
     }
     {   // Left / Right in LIST: close / open the folder of the library (Left also goes up to the parent folder)
-        const bool lr = list_ && src_ == Source::Library && (!searchActive || search_[0] == '\0') && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const bool lr = list_ && src_ == Source::Library && !fieldTyping && (!searchActive || search_[0] == '\0') && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
         if (lr && ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
             if (!folder_.empty()) openFolders_.insert(folder_);
             else if (sel_ >= 0 && sel_ < n) { const std::string d0 = DirOf(items_[static_cast<size_t>(vis_[static_cast<size_t>(sel_)])].key); if (!d0.empty()) { folder_ = d0; for (const auto& f : FolderChain(d0 + "/x")) openFolders_.insert(f); dirty_ = true; sel_ = 0; } }
@@ -590,24 +649,33 @@ void SampleBrowser::Draw(AppState& app) {
     };
     const bool showBpm = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
     // THIS PROJECT copies have no type or tempo: WHERE IT PLAYS gets the rest of the row (the whole text is in the info line too)
-    const float xName = 26.0f, xFolder = fullW * (copies ? 0.40f : 0.46f), xType = copies ? fullW : fullW * 0.76f, xBpm = copies ? fullW : fullW * 0.88f;
+    // Columns, left to right: NAME, FOLDER (THIS PROJECT copies: WHERE IT PLAYS), TYPE, GENRE · TAGS, BPM. The library and the
+    // collections show all five; THIS PROJECT copies have no type or tempo, so WHERE IT PLAYS gets the rest of the row (the whole
+    // text is in the info line too); other sources show NAME, FOLDER, TYPE.
+    const float xName = 26.0f;
+    const float xFolder = fullW * (copies ? 0.40f : showBpm ? 0.36f : 0.46f);
+    const float xType = copies ? fullW : fullW * (showBpm ? 0.56f : 0.76f);
+    const float xGenre = showBpm ? fullW * 0.66f : fullW;
+    const float xBpm = showBpm ? fullW * 0.90f : fullW;
     if (list_) {   // column titles: a click sorts by that column, a second click turns the order around
         const ImVec2 h0 = ImGui::GetCursorScreenPos();
-        const char* const kCols[4] = {"NAME", copies ? "WHERE IT PLAYS" : "FOLDER", "TYPE", "BPM"};
-        const float xs[4] = {xName, xFolder, xType, xBpm};
-        for (int c = 0; c < 4; ++c) {
-            if ((c == 3 && !showBpm) || (c == 2 && copies)) continue;
-            const float x1 = c < 3 ? xs[c + 1] : fullW;
+        const char* const kCols[5] = {"NAME", copies ? "WHERE IT PLAYS" : "FOLDER", "TYPE", "GENRE \xC2\xB7 TAGS", "BPM"};
+        const int kSortOf[5] = {0, 1, 2, 4, 3};   // SortItems' column numbers
+        const float xs[6] = {xName, xFolder, xType, xGenre, xBpm, fullW};
+        for (int c = 0; c < 5; ++c) {
+            if (xs[c + 1] - xs[c] < 1.0f && c < 4) continue;   // a column that has no room here
+            if (c == 4 && !showBpm) continue;
+            const int sc = kSortOf[c];
             ImGui::SetCursorScreenPos(ImVec2(h0.x + xs[c], h0.y));
             ImGui::PushID(c);
-            if (ImGui::InvisibleButton("##col", ImVec2(std::max(10.0f, x1 - xs[c] - 4.0f), 20.0f)) && src_ != Source::Recent) {
-                if (sortCol_ == c) sortDesc_ = !sortDesc_; else { sortCol_ = c; sortDesc_ = false; }
+            if (ImGui::InvisibleButton("##col", ImVec2(std::max(10.0f, xs[c + 1] - xs[c] - 4.0f), 20.0f)) && src_ != Source::Recent) {
+                if (sortCol_ == sc) sortDesc_ = !sortDesc_; else { sortCol_ = sc; sortDesc_ = false; }
                 dirty_ = true;
             }
             if (ImGui::IsItemHovered()) Hint(src_ == Source::Recent ? "RECENT is always newest first." : "Sort by this column (click again = the other way round)");
             ImGui::PopID();
             std::string lab = kCols[c];
-            if (sortCol_ == c && src_ != Source::Recent) lab += sortDesc_ ? "  v" : "  ^";
+            if (sortCol_ == sc && src_ != Source::Recent) lab += sortDesc_ ? "  v" : "  ^";
             dl->AddText(ImVec2(h0.x + xs[c], h0.y + 3), vis::kTextDim, lab.c_str());
         }
         ImGui::SetCursorScreenPos(ImVec2(h0.x, h0.y + 22.0f));
@@ -650,7 +718,8 @@ void SampleBrowser::Draw(AppState& app) {
                     };
                     cell(xName, xFolder, it.name, vis::kText);
                     cell(xFolder, xType, it.folder, vis::kTextDim);
-                    cell(xType, xBpm, it.type, vis::kTextDim);
+                    cell(xType, xGenre, it.type, vis::kTextDim);
+                    if (showBpm) cell(xGenre, xBpm, GenreTagsText(it), vis::kTextDim);
                     if (showBpm && it.bpm > 0.0) { char b[16]; std::snprintf(b, sizeof b, "%.0f", it.bpm); cell(xBpm, fullW, b, vis::kTextDim); }
                     if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), it.folder.c_str(), who.c_str());
                 } else {
@@ -678,18 +747,18 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::PopStyleVar();
     if (n == 0) {
         ImGui::Dummy(ImVec2(1, 20));
-        const bool narrowed = search_[0] || (type_ >= 0 && (src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent)) || (src_ == Source::Library && !folder_.empty());
+        const bool narrowed = search_[0] || ((type_ >= 0 || genre_ >= 0 || tagMask_ || bpmLo_ > 0 || bpmHi_ > 0) && (src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent)) || (src_ == Source::Library && !folder_.empty());
         const char* msg = src_ == Source::Kits && !kitScanDone_ ? "Reading the kit folders ..."
                         : waitKit_ ? "Reading the kit ..."
                         : waitLib_ ? "Reading the library ..."
-                        : narrowed ? "Nothing here matches - clear the search or the TYPE."
+                        : narrowed ? "Nothing here matches - clear the search, TYPE, GENRE, TAGS or BPM."
                         : src_ == Source::Project && target_ == AppState::LibTarget::Drum ? "This kit has no sample for this drum. Try KITS or MY LIBRARY."
                         : copies && inUseOnly_ && copiedCount_ > 0 ? "No sample plays in this project yet. ALL COPIED shows every file copied into it."
                         : copies ? "This project has no samples yet. Take one from MY LIBRARY or FROM FINDER..."
                         : src_ == Source::Favorites && favs_.empty() ? "No favorites yet - click the star in a row."
                         : src_ == Source::Recent && recent_.empty() ? "Nothing taken yet."
                         : src_ == Source::Library && libList && libList->empty() ? "The library is empty. Put .wav / .aif files in the samples folder (Library > Show Samples Folder) and use Library > Rescan Samples."
-                        : "Nothing here matches - clear the search or the TYPE.";
+                        : "Nothing here matches - clear the search, TYPE, GENRE, TAGS or BPM.";
         ImGui::TextWrapped("%s", msg);
     }
     scrollToSel_ = false;
@@ -708,6 +777,7 @@ void SampleBrowser::Draw(AppState& app) {
         ImGui::TextUnformatted(cur->name.c_str());
         std::string meta = cur->type;
         if (cur->bpm > 0.0) { char b[24]; std::snprintf(b, sizeof b, "%s%.0f BPM", meta.empty() ? "" : "  ", cur->bpm); meta += b; }
+        if (const std::string gt = GenreTagsText(*cur); !gt.empty()) meta += (meta.empty() ? "" : "\n") + gt;
         if (!meta.empty()) ImGui::TextDisabled("%s", meta.c_str());
         ImGui::TextDisabled("%s", (cur->src == Source::Library ? "My library / " + cur->folder : cur->folder).c_str());
         ImGui::PopTextWrapPos();
@@ -767,7 +837,7 @@ void SampleBrowser::Draw(AppState& app) {
 
     if (trashBusy) { wantHear = false; pick = false; }
     if (wantHear && cur) Hear(app, *cur);
-    if (!trashBusy) {
+    if (!trashBusy && !fieldTyping) {
         const bool hadSearch = search_[0] != '\0';
         if (browser::EscapeClosesOrClears(search_, &sel_, &scrollToSel_)) keepOpen = false;
         if (hadSearch && search_[0] == '\0') dirty_ = true;

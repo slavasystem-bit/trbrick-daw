@@ -2,14 +2,6 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
-## Stage C1 (part 1): one word for a scene, labels that fit
-
-ROADMAP stage C1 "Shell and words", audit v44.58 items UI-6 and UI-7. No change to sound or to project files.
-
-- **UI-6: "pattern" is "scene" everywhere you read it** (left over from v44.45): the sequencer menu says Paste whole scene (under Copy whole scene), the brick slot menu says Change scene / Scene 01, and the hints of LEN, GROOVE, RESET, GRID, the swing lane, the groove window and CLEAR ALL say scene. A track that follows the scene swing shows SCENE (was PAT). A drum rhythm from the BEAT list is a beat: the message after APPLY reads "HOUSE BEAT" (was "HOUSE PATTERN"), LEN says "(REPEATED)".
-- **UI-7: labels are no longer cut.** A caption or value wider than its cell in the instrument block (KEY LOCK, SWEEP TIME, FORWARD) is drawn smaller to fit, never below 10 points (`ParamCellCenteredText`). The piano roll toolbar fits at 1440 px: ALL / ACTIVE (were ALL NOTES / ACTIVE ONLY), no "ROLL" word (the instrument name is amber in its place), and EUCLID n/m and GHOST shrink to fit when the row is full (were cut to "EUC"). NUDGE in the roll lane fits its column (was "NUDG").
-- Not found: the cut "MINE" from the audit list (the MINE button is gone since the SAMPLES browser of C4b).
-
 ## Fix: the last project's samples play from the first note after the program starts
 
 - When the program opened the last project at start, a synth or the chord on ENGINE > SAMPLE played the default synth (and the sampler track had no sample) until the scene's sound was touched. The start-up code handed the scene's sound over before the sequencer knew the audio engine, so the hand-over was silently skipped.
