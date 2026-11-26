@@ -170,7 +170,7 @@ constexpr ImU32 kAmber = vis::kAccent;
 } // namespace
 
 void ChainPanel::Draw(AppState& app) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "TRACK STRIP");
     Project& proj = app.project;
     ImGui::PushID("ChainPanel");
 

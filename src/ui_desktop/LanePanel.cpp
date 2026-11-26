@@ -19,7 +19,7 @@
 namespace t8::desktop {
 
 void LanePanel::Draw(AppState& app, const LiveLayout& layout) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "LANES");
     const int ti = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
     Pattern& pat = app.CurrentPattern();
     Track& t = app.StepTrack(pat, ti);

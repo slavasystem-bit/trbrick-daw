@@ -147,7 +147,7 @@ static void FitLoop(Track& tr, int perBar) {
 }
 
 void ChordLabPanel::Place(AppState& app, const LabChord& c, int start, int len) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
     start = std::clamp(start, 0, kMaxSteps - 1);
     len = std::clamp(len, 1, kMaxSteps - start);
@@ -165,7 +165,7 @@ void ChordLabPanel::Place(AppState& app, const LabChord& c, int start, int len) 
 }
 
 void ChordLabPanel::Resize(AppState& app, int bi, int newEnd) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
     Track& tr = JamTrack(app);
     const std::vector<Blk> bl = Blocks(tr);
@@ -191,7 +191,7 @@ void ChordLabPanel::Resize(AppState& app, int bi, int newEnd) {
 }
 
 void ChordLabPanel::Split(AppState& app, int bi) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
     Track& tr = JamTrack(app);
     const std::vector<Blk> bl = Blocks(tr);
@@ -209,7 +209,7 @@ void ChordLabPanel::Split(AppState& app, int bi) {
 }
 
 void ChordLabPanel::DeleteBlock(AppState& app, int bi) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
     Track& tr = JamTrack(app);
     const std::vector<Blk> bl = Blocks(tr);
@@ -222,7 +222,7 @@ void ChordLabPanel::DeleteBlock(AppState& app, int bi) {
 }
 
 void ChordLabPanel::ClearJam(AppState& app) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     BeginEdit(app);
     Track& tr = JamTrack(app);
     for (Step& s : tr.steps) s = Step{};
@@ -237,7 +237,7 @@ void ChordLabPanel::StartFrom(AppState& app, int pi) {
     const int len = DefaultLen(app);
     const int row = app.chdComplex ? 1 : 0;   // the CHORDS tab's 7TH / TRIAD choice carries over
     {
-        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+        SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
         BeginEdit(app);
         Track& tr = JamTrack(app);
         for (Step& s : tr.steps) s = Step{};

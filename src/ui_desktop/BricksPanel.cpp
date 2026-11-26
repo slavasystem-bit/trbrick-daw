@@ -86,7 +86,7 @@ void BricksPanel::ZoomTo(float newPpb, float anchorScreenX) {
 }
 
 void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "BRICKS");
     Project& proj = app.project;
     ImGuiIO& io = ImGui::GetIO();
     ImGui::PushID("BricksPanel");
@@ -1081,7 +1081,7 @@ float BricksPanel::InspectorHeight() { return 104.0f; }
 
 void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
     (void)chain;
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "BRICK INSPECTOR");
     Project& proj = app.project;
     const ImVec4 amber(0.95f, 0.64f, 0.24f, 1.0f);
     ImGui::PushID("Inspector");
