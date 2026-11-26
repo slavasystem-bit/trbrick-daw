@@ -543,7 +543,7 @@ int main(int argc, char** argv) {
             // 3. sequencer | mixer-or-piano-roll (same height, row-aligned)
             bool showRoll = false;
             {
-                std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+                SceneLock lock(app.sequencer.PatternMutex(), "LAYOUT");
                 int sel = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
                 if (sel != lastSelTrack) { lastSelTrack = sel; app.deskRollClosed = false; app.deskLanesClosed = false; }
                 showRoll = app.CurrentPattern().tracks[sel].type != TrackType::Drum && !app.deskRollClosed;
@@ -557,7 +557,7 @@ int main(int argc, char** argv) {
             ImGui::BeginChild("MixerOrRollChild", ImVec2(0, midH), ImGuiChildFlags_Borders, fixedFlags);
             bool showLanes = false;
             {
-                std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+                SceneLock lock(app.sequencer.PatternMutex(), "LAYOUT");
                 showLanes = app.CurrentPattern().tracks[std::clamp(app.seqCursorTrack, 0, kNumTracks - 1)].type == TrackType::Drum && !app.deskLanesClosed;
             }
             if (app.grooveViewOpen) groovePanel.Draw(app, layout);   // v44.3: the groove window replaces the mixer on any track
@@ -703,7 +703,7 @@ int main(int argc, char** argv) {
                     if (ImGui::IsItemHovered()) Hint("Back to the jam. Scenes are edited on LIVE.");
                     ImGui::SameLine(0, 8);
                     if (ImGui::Button("THROW THE LIVE SCENE ONTO THE TRACK", ImVec2(300, 30))) {
-                        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+                        SceneLock lock(app.sequencer.PatternMutex(), "LAYOUT");
                         app.ThrowIntoChain();
                     }
                     if (ImGui::IsItemHovered()) Hint("Makes the scene you are playing the first brick of the track.");

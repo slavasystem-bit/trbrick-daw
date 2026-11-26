@@ -39,9 +39,16 @@ public:
             if (owner_.load(std::memory_order_relaxed) != audioThread_.load(std::memory_order_relaxed)) {
                 const auto held = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - since_).count();
                 const unsigned us = held < 0 ? 0u : static_cast<unsigned>(std::min<long long>(held, 0xFFFFFFFFll));
+                heldTotalUs_.fetch_add(us, std::memory_order_relaxed);
                 unsigned prev = maxHoldUs_.load(std::memory_order_relaxed);
-                while (us > prev && !maxHoldUs_.compare_exchange_weak(prev, us, std::memory_order_relaxed)) {}
+                while (us > prev) {
+                    if (maxHoldUs_.compare_exchange_weak(prev, us, std::memory_order_relaxed)) {
+                        maxHoldWho_.store(holder_ ? holder_ : "OTHER", std::memory_order_relaxed);   // diagnostic: may pair with a newer max
+                        break;
+                    }
+                }
             }
+            holder_ = nullptr;
             owner_.store(std::thread::id{}, std::memory_order_relaxed);
         }
         m_.unlock();
@@ -51,7 +58,15 @@ public:
     void MarkAudioThread() { audioThread_.store(std::this_thread::get_id(), std::memory_order_relaxed); }
     // Longest time any other thread (the screen, a loader) held the lock since the last reset, in microseconds.
     unsigned MaxHoldUs() const { return maxHoldUs_.load(std::memory_order_relaxed); }
-    void ResetMaxHold() { maxHoldUs_.store(0, std::memory_order_relaxed); }
+    void ResetMaxHold() { maxHoldUs_.store(0, std::memory_order_relaxed); maxHoldWho_.store("", std::memory_order_relaxed); }
+    // N1 (LIVE-5): who held the lock that long ("CONTEXT", "MIXER", ...; "OTHER" = a hold that was not named, "" = none yet).
+    // The name comes from the OUTERMOST SceneLock of that hold, so a panel's name covers everything it called while holding it.
+    const char* MaxHoldWho() const { return maxHoldWho_.load(std::memory_order_relaxed); }
+    // N1 (LIVE-5): total time other threads held the lock, in microseconds (only ever grows). The screen samples it once a
+    // second to show how much of the time the sound could not get the lock at once.
+    unsigned long long HeldTotalUs() const { return heldTotalUs_.load(std::memory_order_relaxed); }
+    // Names the current hold; only the outermost level counts (call right after taking the lock, see SceneLock).
+    void NameHolder(const char* who) { if (depth_ == 1) holder_ = who; }
 private:
     void Acquired() {
         owner_.store(std::this_thread::get_id(), std::memory_order_relaxed);
@@ -61,10 +76,25 @@ private:
     std::atomic<std::thread::id> owner_{};
     std::atomic<std::thread::id> audioThread_{};
     std::atomic<unsigned> maxHoldUs_{0};
+    std::atomic<const char*> maxHoldWho_{""};        // string literals only (SceneLock names)
+    std::atomic<unsigned long long> heldTotalUs_{0};
+    const char* holder_ = nullptr;                   // only touched by the owner
     int depth_ = 0;                                  // only touched by the owner
     std::chrono::steady_clock::time_point since_{};  // only touched by the owner
 };
 
+
+// N1 (LIVE-5): a scene lock with a name, so the XRUN hint can say which panel held the sound longest. Use instead of
+// std::lock_guard<SceneMutex> where the screen takes the lock; `who` must be a string literal (it is kept, not copied).
+class SceneLock {
+public:
+    SceneLock(SceneMutex& m, const char* who) : m_(m) { m_.lock(); m_.NameHolder(who); }
+    ~SceneLock() { m_.unlock(); }
+    SceneLock(const SceneLock&) = delete;
+    SceneLock& operator=(const SceneLock&) = delete;
+private:
+    SceneMutex& m_;
+};
 
 // The sample variant a drum track is "set to": the one most of its active steps use (all steps when none is active).
 // Live breaks / fills have no steps of their own, so they play this variant instead of always the first sample.

@@ -18,7 +18,7 @@
 namespace t8::desktop {
 
 void GroovePanel::Draw(AppState& app, const LiveLayout& layout) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "GROOVE");
     Pattern& pat = app.CurrentPattern();
     const int ti = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
     Track& cur = app.StepTrack(pat, ti);

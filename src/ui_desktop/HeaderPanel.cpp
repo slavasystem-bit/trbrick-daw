@@ -30,7 +30,7 @@ void Gap(float w = 10.0f) { ImGui::SameLine(0, w); }
 // v44.3: MASTER FX sits in the tab bar, right next to the LIVE tab (called by main inside BeginTabBar). v44.19 (U8c): the FILE
 // drawer is gone -- the menu bar (MenuBar.cpp) carries File / Edit / View / Library / Settings.
 void HeaderPanel::DrawMenus(AppState& app) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "MENUS");
     const bool fxHit = ImGui::TabItemButton("MASTER FX  v", ImGuiTabItemFlags_None);
     if (ImGui::IsItemHovered()) Hint("Project-wide delay / reverb / distortion / sidechain");
     const ImVec2 fxMax = ImGui::GetItemRectMax();
@@ -55,7 +55,7 @@ void HeaderPanel::DrawMenus(AppState& app) {
 float HeaderPanel::DrawPitch(AppState& app, float rightX) {
     double bpm;
     {
-        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+        SceneLock lock(app.sequencer.PatternMutex(), "PITCH");
         bpm = app.CurrentPattern().bpm;
     }
     const float stripW = app.pitchMode ? 452.0f : 118.0f;
@@ -133,6 +133,15 @@ void HeaderPanel::DrawDropouts(AppState& app, float rightX) {
     ImGui::AlignTextToFramePadding();
     const ImVec4 col = ImGui::ColorConvertU32ToFloat4(xr ? vis::kRed : (load > 0.6f ? vis::kAccent : vis::kTextDim));   // theme colours (Visual.h)
     ImGui::TextColored(col, "%s", b);
+    {   // N1 (LIVE-5): share of the last second in which other threads (mostly the screen) held the scene lock
+        const Uint32 nowMs = SDL_GetTicks();
+        if (lastShareMs_ == 0 || nowMs - lastShareMs_ >= 1000) {
+            const unsigned long long total = sm.HeldTotalUs();
+            if (lastShareMs_ != 0)
+                heldShare_ = std::min(1.0f, static_cast<float>(static_cast<double>(total - lastHeldTotalUs_) / (1000.0 * (nowMs - lastShareMs_))));
+            lastShareMs_ = nowMs; lastHeldTotalUs_ = total;
+        }
+    }
     if (ImGui::IsItemHovered()) {
         // the last few dropouts, newest first: "12s ago 250.0 ms (screen 248.0)"
         std::string recent;
@@ -145,16 +154,19 @@ void HeaderPanel::DrawDropouts(AppState& app, float rightX) {
             recent += e;
         }
         const double bufMs = 1000.0 * mx.audioBufferFrames.load() / std::max(1, app.engine.SampleRate());   // the buffer the device really uses
+        const char* who = sm.MaxHoldWho();
         Hint("Audio thread load %.0f%% (recent peak %.0f%%). XRUN = audible dropouts: a buffer (%.1f ms) was not ready in time.\n"
-             "Longest %.1f ms, of which the screen held the sound %.1f ms. The screen held the sound at most %.1f ms.%s%s\nClick to reset.",
+             "Longest %.1f ms, of which the screen held the sound %.1f ms. The screen held the sound at most %.1f ms%s%s%s, "
+             "and %.0f%% of the last second.%s%s\nClick to reset.",
              load * 100.0f, peak * 100.0f, bufMs, mx.audioLongestUs.load() / 1000.0, mx.audioLongestWaitUs.load() / 1000.0,
-             sm.MaxHoldUs() / 1000.0, recent.empty() ? "" : "\nLast: ", recent.c_str());
+             sm.MaxHoldUs() / 1000.0, who[0] ? " (" : "", who, who[0] ? ")" : "", heldShare_ * 100.0f,
+             recent.empty() ? "" : "\nLast: ", recent.c_str());
     }
     if (ImGui::IsItemClicked()) { mx.ResetDropouts(); sm.ResetMaxHold(); }
 }
 
 void HeaderPanel::Draw(AppState& app) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "HEADER");
     Pattern& pat = app.CurrentPattern();
 
     ImGui::PushID("HeaderPanel");

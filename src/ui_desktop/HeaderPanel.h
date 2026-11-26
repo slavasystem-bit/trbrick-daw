@@ -22,6 +22,10 @@ public:
 
 private:
     FxPanel fxPanel_;
+    // N1 (LIVE-5): share of the last second in which the screen (or a loader) held the scene lock, see DrawDropouts
+    float heldShare_ = 0.0f;
+    unsigned lastShareMs_ = 0;
+    unsigned long long lastHeldTotalUs_ = 0;
 };
 
 } // namespace t8::desktop

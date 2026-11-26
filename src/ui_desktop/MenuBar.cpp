@@ -116,23 +116,23 @@ void MenuBar::Draw(AppState& app) {
             const bool canUndo = app.FindApplicable(app.undoStack) >= 0;
             const bool canRedo = app.FindApplicable(app.redoStack) >= 0;
             if (Item("Undo", "^Z", "Take back the last change.", canUndo)) {
-                std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+                SceneLock lock(app.sequencer.PatternMutex(), "MENU");
                 app.SetStatus(app.Undo() ? app.lastUndoLabel : "NOTHING TO UNDO");
             }
             if (Item("Redo", "Shift+^Z", "Bring back what Undo took away.", canRedo)) {
-                std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+                SceneLock lock(app.sequencer.PatternMutex(), "MENU");
                 app.SetStatus(app.Redo() ? app.lastUndoLabel : "NOTHING TO REDO");
             }
             ImGui::Separator();
             const int tr = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
             if (Item("Copy Track", "^C", "Copy the track under the cursor (the digits 1-0 or Cmd+arrows move the cursor).")) app.CopyTrack(tr);
             if (Item("Paste Track", "^V", "Paste it onto the track under the cursor (same kind of track only).", app.hasTrackClipboard)) {
-                std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+                SceneLock lock(app.sequencer.PatternMutex(), "MENU");
                 app.PasteTrack(tr);
             }
             if (Item("Copy Scene", "Shift+^C", "Copy the whole edited scene.")) { app.CopyPattern(); app.SetStatus("SCENE COPIED"); }
             if (Item("Paste Scene", "Shift+^V", "Replace the edited scene with the copied one (undoable).", app.hasPatternClipboard)) {
-                std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+                SceneLock lock(app.sequencer.PatternMutex(), "MENU");
                 app.SetStatus(app.PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
             }
             ImGui::EndMenu();
@@ -320,7 +320,7 @@ void MenuBar::DrawBeatsDialog(AppState& app) {
         const bool beatEnter = ImGui::InputTextWithHint("##newbeat", "beat name", newBeat_, sizeof(newBeat_), ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine(0, 6);
         if ((ImGui::Button("SAVE BEAT", ImVec2(96, 0)) || beatEnter) && newBeat_[0] != '\0') {
-            std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+            SceneLock lock(app.sequencer.PatternMutex(), "MENU");
             app.SaveCurrentAsCustomPattern(newBeat_);
             newBeat_[0] = '\0';
         }
@@ -346,7 +346,7 @@ void MenuBar::DrawBeatsDialog(AppState& app) {
         }
         ImGui::EndChild();
         if (!applyName.empty()) {
-            std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+            SceneLock lock(app.sequencer.PatternMutex(), "MENU");
             app.ApplyCustomPattern(applyName);
         }
         if (!renameName.empty()) {
