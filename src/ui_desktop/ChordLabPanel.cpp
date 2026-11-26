@@ -285,15 +285,15 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
     ImGui::PushFont(nullptr, 14.0f);
 
     // header
-    Text(dl, ImVec2(o.x + 4, o.y + 2), vis::kTeal, "CHORD LAB \xC2\xB7 JAM", 15.0f);
+    Text(dl, ImVec2(o.x + 4, o.y + 2), vis::kTeal, soundView_ ? "SOUND" : "JAM", 15.0f);   // C1: the name CHORD LAB is on the tool strip above
     {
         char hb[200];
         if (jam_ >= 0) std::snprintf(hb, sizeof hb, "draft in chord slot %d over scene %02d  -  the scene keeps its own chords until ADD TO SCENE", jam_ + 1, scene + 1);
         else std::snprintf(hb, sizeof hb, "showing the chords of scene %02d  -  nothing is changed yet: your first change starts a draft in a chord slot", scene + 1);
-        Text(dl, ImVec2(o.x + 150, o.y + 4), vis::kTextDim, hb, 12.0f);
+        Text(dl, ImVec2(o.x + 70, o.y + 4), vis::kTextDim, hb, 12.0f);
     }
     {   // v44.46: the sound of the chords is one switch away, in the place of the whole jam (the loop keeps playing)
-        ImGui::SetCursorScreenPos(ImVec2(o.x + W - 30 - 142, o.y));
+        ImGui::SetCursorScreenPos(ImVec2(o.x + W - 142, o.y));
         int v = soundView_ ? 1 : 0;
         const char* vl[2] = {"JAM", "SOUND"};
         if (Segmented("##lview", &v, vl, 2, 68.0f)) {
@@ -302,9 +302,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         }
         if (ImGui::IsItemHovered()) Hint("JAM: the palette and the loop.  SOUND: the sound of the chord instrument (preset, oscillators, filter, envelope, EQ, FX) while the loop keeps playing.");
     }
-    ImGui::SetCursorScreenPos(ImVec2(o.x + W - 30, o.y));
-    if (MiniButton("X", 26.0f)) { app.chordLabOpen = false; }
-    if (ImGui::IsItemHovered()) Hint(jam_ >= 0 ? "Close CHORD LAB. The draft stays in its chord slot." : "Close CHORD LAB. Nothing was changed.");
+    // C1: closing is the x of the tool strip above (or C / Esc), the same for MIX LAB, CHORD LAB and MASTER FX
 
     if (soundView_) {
         ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + 28.0f));
@@ -678,7 +676,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint(has ? "The open brick plays this chord slot (the chord bank goes on). The scene's own chords stay as they are. Undo takes it back." : "Build a loop of chords first.");
             ImGui::SameLine(0, 8);
-            if (ImGui::Button("CLOSE", ImVec2(70, 28))) app.chordLabOpen = false;
+            if (ImGui::Button("CLOSE", ImVec2(70, 28))) app.CloseTool(AppState::Tool::ChordLab);
             if (ImGui::IsItemHovered()) Hint("Back to the brick: inspector and notes.");
         } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.86f, 0.50f, 0.12f, 1.0f));

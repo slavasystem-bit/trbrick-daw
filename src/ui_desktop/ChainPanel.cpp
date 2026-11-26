@@ -332,7 +332,7 @@ void ChainPanel::Draw(AppState& app) {
             ImVec2 ts = ImGui::CalcTextSize(lbl.c_str());
             dl->AddText(ImVec2(p0.x + (sw - ts.x) * 0.5f, p0.y + (kChordH - ts.y) * 0.5f + 4.0f),
                         !bankOn ? vis::kLineHi : (empty ? IM_COL32(110, 114, 132, 255) : vis::kText), lbl.c_str());
-            if (app.chordLabOpen && editing) {   // v44.43: the slot the CHORD LAB jam lives in
+            if (app.ChordLabOpen() && editing) {   // v44.43: the slot the CHORD LAB jam lives in
                 dl->AddRect(p0, p1, vis::kTeal, 5.0f, 0, 2.0f);
                 dl->AddText(ImVec2(p0.x + 20, p0.y + 2), vis::kTeal, "DRAFT");
             }
@@ -384,7 +384,7 @@ void ChainPanel::Draw(AppState& app) {
         if (ImGui::IsItemHovered())
             Hint("ON: the chord track plays the chord scenes (1-8) instead of each scene's own chords,\nso you can change the chords without touching the drums / bass - and the other way round.\nOFF: every scene plays its own chords.");
         ImGui::SameLine(0, 4);
-        if (ToggleButton("CHORD LAB", app.chordLabOpen, ImVec2(88.0f, 30.0f), ToggleTab())) app.chordLabOpen = !app.chordLabOpen;
+        if (ToggleButton("CHORD LAB", app.ChordLabOpen(), ImVec2(88.0f, 30.0f), ToggleTab())) app.ToggleTool(AppState::Tool::ChordLab);   // C1: the same as key C
         if (ImGui::IsItemHovered())
             Hint("CHORD LAB: jam with chords over the running scene. A palette of the chords of the key (with borrowed ones), a fit against your bass / synth notes, a loop to build in, and the reasons.\nThe jam is a draft in a chord slot; ADD TO SCENE and THROW ONTO THE TRACK take it on.");
     }

@@ -27,25 +27,13 @@ void Label(const char* text) {
 void Gap(float w = 10.0f) { ImGui::SameLine(0, w); }
 } // namespace
 
-// v44.3: MASTER FX sits in the tab bar, right next to the LIVE tab (called by main inside BeginTabBar). v44.19 (U8c): the FILE
-// drawer is gone -- the menu bar (MenuBar.cpp) carries File / Edit / View / Library / Settings.
-void HeaderPanel::DrawMenus(AppState& app) {
-    SceneLock lock(app.sequencer.PatternMutex(), "MASTER FX");
-    const bool fxHit = ImGui::TabItemButton("MASTER FX  v", ImGuiTabItemFlags_None);
-    if (ImGui::IsItemHovered()) Hint("Project-wide delay / reverb / distortion / sidechain");
-    const ImVec2 fxMax = ImGui::GetItemRectMax();
-    if (fxHit || app.masterFxRequest) { ImGui::OpenPopup("MasterFxPopover"); app.masterFxRequest = false; }
-
-    // the popover was designed for the 14 px LIVE styling
+// C1 (UI-1): MASTER FX is a tool like MIX LAB and CHORD LAB: main draws it in the room under the header (key F, Esc closes).
+// It used to be a popover from a "MASTER FX v" tab button that Esc did not close. The document lives in the menu bar (U8c).
+void HeaderPanel::DrawMasterFx(AppState& app) {
     ImGui::PushFont(nullptr, 14.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 4));
-    // anchored to the right edge of the app shell so the wide chain section never runs off screen
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - 6.0f, fxMax.y + 4), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    if (ImGui::BeginPopup("MasterFxPopover")) {
-        fxPanel_.Draw(app);
-        ImGui::EndPopup();
-    }
+    fxPanel_.Draw(app);
     ImGui::PopStyleVar(2);
     ImGui::PopFont();
 }
@@ -70,8 +58,9 @@ float HeaderPanel::DrawPitch(AppState& app, float rightX) {
         ToggleColors pc;   // lit blue-white while the arrows drive it (the "pitch light" of a deck), amber would read as a warning
         pc.on = ImVec4(0.55f, 0.78f, 1.0f, 1.0f); pc.textOn = ImVec4(0.05f, 0.08f, 0.12f, 1.0f);
         if (ToggleButton(pb, app.pitchMode, ImVec2(62, 0), pc)) app.pitchMode = !app.pitchMode;
-        if (ImGui::IsItemHovered())
-            Hint("PITCH: plays EVERYTHING faster or slower, tempo and pitch together, like the pitch fader of a Technics deck - to play along with a record. Now %+.1f%% = %.1f BPM.\nClick or key P: the arrow keys drive it (up / down 0.1%%, Shift 1%%; left / right = a push while held; Return = 0%%; R = range). Exports are not affected.",
+        if (ImGui::IsItemHovered() && (ImGui::IsMouseDoubleClicked(0) || (ImGui::GetIO().KeyAlt && ImGui::IsMouseClicked(0)))) { app.PitchSet(0.0f); app.pitchMode = false; }
+        if (ImGui::IsItemHovered())   // C1 (UI-4): the keys work at any time, there is no hidden keyboard mode any more
+            Hint("PITCH: plays EVERYTHING faster or slower, tempo and pitch together, like the pitch fader of a Technics deck - to play along with a record. Now %+.1f%% = %.1f BPM.\nAt any time: Option+Up / Down = faster / slower by 0.1%% (Shift 1%%), Option+Left / Right = a push while held. Double click or Option+click = 0%%.\nClick: shows the fader and the range. Exports are not affected.",
                  pct, app.PitchedBpm(bpm));
         if (app.pitchMode) {
             // the fader: centre = 0%, drag or click to set, Option+click / double click = 0
@@ -106,7 +95,7 @@ float HeaderPanel::DrawPitch(AppState& app, float rightX) {
             static const char* const kRangeNames[2] = {"8%", "16%"};
             int rg = app.pitchRange16 ? 1 : 0;
             if (Segmented("##pitchRange", &rg, kRangeNames, 2)) app.PitchSetRange16(rg == 1);
-            if (ImGui::IsItemHovered()) Hint("PITCH range: +-8%% (fine) or +-16%% (like the 16%% switch of a deck). Key R.");
+            if (ImGui::IsItemHovered()) Hint("PITCH range: +-8%% (fine) or +-16%% (like the 16%% switch of a deck).");
 
             ImGui::SameLine(0, 6);
             ImGui::AlignTextToFramePadding();
@@ -229,9 +218,10 @@ void HeaderPanel::Draw(AppState& app) {
     if (ImGui::IsItemHovered()) Hint(onTrack ? "Next brick (its own notes open in the editor)." : "Next scene.");
 
     // ---- LAUNCH quantize (when a scene change takes effect) ----------------
-    Gap(8);
-    Label("LAUNCH");
-    {
+    // C1 (UI-9): only on LIVE; TRACK plays bricks in order, LAUNCH is about clicking scenes
+    if (app.ShownTab() != 1) {
+        Gap(8);
+        Label("LAUNCH");
         static const char* const kLaunchNames[3] = {"NOW", "BEAT", "BAR"};
         int lq = app.sequencer.LaunchQuantize();
         if (Segmented("##launchq", &lq, kLaunchNames, 3)) app.sequencer.SetLaunchQuantize(lq);
@@ -330,22 +320,9 @@ void HeaderPanel::Draw(AppState& app) {
     }
     if (ImGui::IsItemHovered()) Hint("Step grid of this scene: 1/16 (default), 1/32, 1/16 triplets, 1/8 triplets.\nSwitching the grid converts the scene (notes stay where they are in time).\nThe triplet grids move every note to the nearest step in time\n(tempo and feel stay put; 16ths between the triplet steps snap). The length keeps its number of bars. Undoable.");
 
-    // (MASTER FX sits next to the LIVE tab: see DrawMenus; the document lives in the menu bar)
+    // C1 (UI-9): no MASTER button here any more: the chain switch is CHAIN ON / OFF in MASTER FX (key F), and the MASTER FX
+    // button in the tab row shows a dot while the chain is on.
     Gap(10);
-    // ---- MASTER CHAIN on/off (compressor + polish; details in MASTER FX) ---
-    {
-        MasterChainSettings& mc = app.project.fx.master;
-        bool on = mc.chainOn;
-        if (ToggleButton("MASTER", on, ImVec2(0, 0), ToggleTeal())) {
-            app.PushSoundUndo();
-            mc.chainOn = !mc.chainOn;
-            if (mc.chainOn && mc.chainPreset < 0 && !mc.compOn && mc.lowDb == 0 && mc.highDb == 0 && mc.saturation == 0) ApplyMasterPreset(mc, 0);
-            app.engine.GetMixer().fx = app.project.fx;
-        }
-        if (ImGui::IsItemHovered())
-            Hint("Master chain: compressor, high-pass, tone, saturation, width and limiter\nfor a finished sound without extra mastering. Edit it in MASTER FX.");
-    }
-
     // ---- UNDO -----------------------------------------------------------
     ImGui::SameLine();
     if (ImGui::Button("UNDO")) app.SetStatus(app.Undo() ? app.lastUndoLabel : "NOTHING TO UNDO");

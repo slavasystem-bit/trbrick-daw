@@ -7203,6 +7203,23 @@ int main(int argc, char** argv) {
         check(roll.find("DrawEuclidTools(app, ti, fit") != std::string::npos, "c1 ui-7: EUCLID n/m and GHOST shrink to fit the roll toolbar");
         check(cell.find("kParamCellMinFont = 10.0f") != std::string::npos && cell.find("ImGui::GetFont(), size") != std::string::npos, "c1 ui-7: a cell label is drawn smaller to fit, not below 10 points");
     }
+    {   // C1 (UI-1, UI-4, UI-9): the shell -- two tabs, three tools that open the same way, keys, header, PITCH without a hidden mode
+        auto slurp = [](const std::string& path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+        const std::string mn = slurp("src/main.cpp"), keys = slurp("src/ui_desktop/Shortcuts.cpp"), head = slurp("src/ui_desktop/HeaderPanel.cpp"), menu = slurp("src/ui_desktop/MenuBar.cpp");
+        check(mn.find("BeginTabItem(\"MIX LAB\"") == std::string::npos && mn.find("###tabLive") != std::string::npos && mn.find("###tabTrack") != std::string::npos, "c1 ui-1: the only tabs are LIVE and TRACK");
+        check(mn.find("toolButton(\"MIX LAB\", \"M\"") != std::string::npos && mn.find("toolButton(\"CHORD LAB\", \"C\"") != std::string::npos && mn.find("toolButton(\"MASTER FX\", \"F\"") != std::string::npos, "c1 ui-1: three tool buttons with their keys in the tab row");
+        check(mn.find("drawTool(availY - headerH - sp)") != std::string::npos && mn.find("BeginPopup(\"MasterFxPopover\")") == std::string::npos && head.find("MasterFxPopover") == std::string::npos, "c1 ui-1: every tool opens under the header (MASTER FX is no popover)");
+        check(keys.find("ImGuiKey_M") != std::string::npos && keys.find("ImGuiKey_F, false)) { app.ToggleTool(AppState::Tool::MasterFx)") != std::string::npos && keys.find("if (app.tool != AppState::Tool::None) { app.OpenTool(AppState::Tool::None); return; }") != std::string::npos, "c1 ui-1: M / C / F toggle the tools, Esc closes the open one");
+        check(menu.find("\"MIX LAB\", \"M\"") != std::string::npos && menu.find("\"CHORD LAB\", \"C\"") != std::string::npos && menu.find("\"MASTER FX\", \"F\"") != std::string::npos, "c1 ui-1: View lists the tools with their keys");
+        check(keys.find("ImGuiKey_P") == std::string::npos && keys.find("app.PitchSet(0.0f); app.SetStatus(\"PITCH 0.0%\")") == std::string::npos && keys.find("const bool opt = io.KeyAlt && !cmd;") != std::string::npos, "c1 ui-4: PITCH has no hidden keyboard mode (Option+arrows; Return always plays from the brick)");
+        check(head.find("ToggleButton(\"MASTER\"") == std::string::npos && head.find("if (app.ShownTab() != 1) {") != std::string::npos, "c1 ui-9: no MASTER button in the header, LAUNCH only on LIVE");
+        AppState a;
+        check(a.tool == AppState::Tool::None, "c1: no tool is open at start");
+        a.ToggleTool(AppState::Tool::MixLab); a.ToggleTool(AppState::Tool::ChordLab);
+        check(a.ChordLabOpen() && !a.ToolOpen(AppState::Tool::MixLab), "c1: one tool at a time (opening another replaces it)");
+        a.ToggleTool(AppState::Tool::ChordLab);
+        check(a.tool == AppState::Tool::None, "c1: the same key closes the tool");
+    }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;
 }

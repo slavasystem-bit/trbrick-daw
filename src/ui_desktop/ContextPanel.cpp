@@ -1267,7 +1267,7 @@ void ContextPanel::DrawChords(AppState& app, int ti) {
     BlockBegin("CHORDS");
     const float blockW = 330.0f;
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.14f, 0.40f, 0.34f, 1.0f));
-    if (ImGui::Button("OPEN CHORD LAB", ImVec2(blockW, 0))) app.chordLabOpen = true;
+    if (ImGui::Button("OPEN CHORD LAB", ImVec2(blockW, 0))) app.OpenTool(AppState::Tool::ChordLab);
     ImGui::PopStyleColor();
     if (ImGui::IsItemHovered()) Hint("Build a progression: the palette of the key, START FROM a typical progression, a loop of blocks. Esc closes it.");
     ImGui::TextDisabled("in %s %s  (change in the header)", kKeyNames[std::clamp(app.project.randomizerKeyRoot, 0, kNumKeys - 1)],
