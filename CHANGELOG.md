@@ -7,6 +7,12 @@ Newest first. Older entries (v22-v24) were moved here from the README.
 - When the program opened the last project at start, a synth or the chord on ENGINE > SAMPLE played the default synth (and the sampler track had no sample) until the scene's sound was touched. The start-up code handed the scene's sound over before the sequencer knew the audio engine, so the hand-over was silently skipped.
 - New `AppState::StartSound()` (sequencer first, then the scene's patches, samples, kits and mixer), used by `main.cpp`; covered by a "program start" check in `t8_selftest` that fails with the old order.
 
+## Fix: "Duplicate as new scene" no longer starts the copy
+
+- The scene pad menu's **Duplicate as new scene** copied the scene and switched playback to the copy at once, off the launch grid. Now the copy only opens in the editor (held apart: "OPEN 05 - PLAYING 04 - GO launches 05"); the music keeps playing the scene it played. GO or a click on the pad launches the copy on the grid as usual. Stopped or in song mode nothing changes.
+- The undo step now belongs to the new slot, so Cmd+Z empties it again (before, it saved the open scene instead).
+- `AppState::DuplicateSceneAsNew` (takes the scene lock) + `t8_selftest` checks for LAUNCH = BAR and NOW and for undo.
+
 ## Mac launcher: a pull request can be tried while its GitHub checks are still running
 
 - The TR-Brick button now starts a pull request whose checks are still running (or not started yet) after a clear `WARNING: ... is NOT fully checked yet`, so an urgent fix can be tried on the Mac without waiting 15-30 minutes. Failed checks are still refused, and the self-check on the Mac still runs first.
