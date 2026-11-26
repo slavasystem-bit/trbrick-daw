@@ -13,7 +13,7 @@ class HeaderPanel {
 public:
     void Draw(AppState& app);
     // The MASTER FX button + its popover; call inside the main tab bar, after the LIVE tab.
-    void DrawMenus(AppState& app);
+    void DrawMasterFx(AppState& app);   // C1: the MASTER FX tool body (main draws it under the header)
     // The PITCH strip (v44.57), right-aligned at screen x `rightX`; call just before the main tab bar and put the cursor back.
     // Returns the screen x where the strip starts (N1: the dropout readout goes left of it).
     float DrawPitch(AppState& app, float rightX);

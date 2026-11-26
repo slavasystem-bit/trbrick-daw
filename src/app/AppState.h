@@ -1156,7 +1156,6 @@ struct AppState {
     int trackEditMode = 0;  // v44.24: the bottom of TRACK: 0 = NOTES, 1 = SOUND, 2 = MIX
     int activeTab = 2;      // v44.22: the tab that is shown (1 = TRACK, 2 = LIVE); main sets it every frame. TRACK edits the notes of a brick, LIVE those of a live scene
     int tabBeforeLab = 2;   // v44.41: the tab MIX LAB (3) was opened from, so LIVE / TRACK treat the way back like a normal change
-    bool masterFxRequest = false;   // v44.45: View > MASTER FX opens the same popover as the button next to the tabs
     int uiTabRequest = 2;   // v44.12: the program opens on LIVE (jam first; THROW ONTO THE TRACK moves you to TRACK)
     // Moves brick `from` so it ends up at index `to` (the others shift); one undo step.
     bool MoveChainStep(int from, int to) {
@@ -2377,7 +2376,15 @@ struct AppState {
     Groove stagedGroove;
     float stagedAmount = 1.0f;
     bool helpOpen = false;             // the "?" screen with all gestures (U2)
-    bool chordLabOpen = false;         // v44.43: the CHORD LAB panel replaces the instrument block and RANDOM / KIT on the LIVE screen
+    // C1 (UI-1): the three tools MIX LAB, CHORD LAB and MASTER FX open the same way: in the room under the header of LIVE or TRACK,
+    // one at a time, keys M / C / F, the same key or Esc closes. The tab under them stays what it was (LIVE or TRACK).
+    enum class Tool { None, MixLab, ChordLab, MasterFx };
+    Tool tool = Tool::None;
+    bool ToolOpen(Tool t) const { return tool == t; }
+    bool ChordLabOpen() const { return tool == Tool::ChordLab; }
+    void OpenTool(Tool t) { tool = t; }
+    void CloseTool(Tool t) { if (tool == t) tool = Tool::None; }
+    void ToggleTool(Tool t) { tool = tool == t ? Tool::None : t; }
     bool grooveViewOpen = false;       // the groove window is shown instead of the mixer / piano roll / lanes
     void StageGroove(const Groove& g) { stagedGroove = g; if (stagedAmount <= 0.0f) stagedAmount = 1.0f; }
     // Writes the staged groove (at the staged amount) into the steps of the tracks that follow it. Returns false when there is

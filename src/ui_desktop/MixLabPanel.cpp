@@ -197,11 +197,9 @@ void MixLabPanel::Draw(AppState& app, float width, float /*height*/) {
     ImGui::PushFont(nullptr, 14.0f);
 
     // ---- top row
+    // C1: the name and "where instruments fight for the same frequencies" are on the tool strip above (main)
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(ImVec4(0.93f, 0.93f, 0.95f, 1), "MIX LAB");
-    ImGui::SameLine(0, 10);
-    ImGui::TextColored(ImVec4(0.56f, 0.57f, 0.64f, 1), "where instruments fight for the same frequencies");
-    if (ImGui::IsItemHovered()) Hint("MIX LAB renders the played scene once, off to the side, and measures every instrument after its fader and pan. Nothing is saved unless you press KEEP FIXES.");
+    ImGui::Dummy(ImVec2(1.0f, ImGui::GetFrameHeight()));
     ImGui::SameLine(width - 560.0f);
     char sc[64];
     {   // v44.45: a brick lives in a hidden slot (18, 19 ...); the person knows it as BRICK n
@@ -209,6 +207,7 @@ void MixLabPanel::Draw(AppState& app, float width, float /*height*/) {
         if (b >= 0) std::snprintf(sc, sizeof sc, "BRICK %d", b + 1); else std::snprintf(sc, sizeof sc, "SCENE %02d", lab_.Scene() + 1);
     }
     ImGui::TextColored(ImVec4(0.56f, 0.57f, 0.64f, 1), "%s", lab_.Busy() ? "ANALYSING ..." : sc);
+    if (ImGui::IsItemHovered()) Hint("MIX LAB renders the played scene once, off to the side, and measures every instrument after its fader and pan. Nothing is saved unless you press KEEP FIXES.");
     ImGui::SameLine(0, 12);
     if (ToggleButton("ANALYSE AGAIN", false, ImVec2(118, 0)) && !lab_.Busy()) { ReleaseSolo(app); StartAnalysis(app); }
     if (ImGui::IsItemHovered()) Hint("Listen to the scene again with the sound as it is now (the played scene, or the edited one when stopped).");

@@ -53,11 +53,13 @@ inline void DrawHelpScreen(AppState& app) {
             {"Cmd + C / V", "copy / paste the selected track  (+ Shift: the whole scene)"},
             {"[  and  ]", "previous / next scene"},
             {"1 ... 0   and   Cmd + left / right", "select an instrument"},
-            {"P", "PITCH on / off: arrows = pitch fader (up / down 0.1%, Shift 1%, left / right = push, Return = 0%, R = range)"},
+            {"Tab", "LIVE <-> TRACK"},
+            {"M   C   F", "MIX LAB   CHORD LAB   MASTER FX (the same key or Esc closes)"},
+            {"Option + up / down", "PITCH faster / slower 0.1% (Shift 1%); Option + left / right = push while held"},
             {"?   or   F1", "this screen"}};
         table("NUMBERS AND FADERS", numbers, 6);
         table("EDITING", editing, 7);
-        table("KEYS", keys, 9);
+        table("KEYS", keys, 11);
         ImGui::TextDisabled("Point at anything: the line at the bottom of the window says what it does.");
     }
     ImGui::End();
