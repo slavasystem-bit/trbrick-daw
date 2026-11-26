@@ -8,6 +8,8 @@
 #include "Visual.h"
 #include "core/SampleLibrary.h"
 #include "core/UserDirs.h"
+#include <ctime>
+#include <unordered_map>
 #include "core/WavFile.h"
 #include <algorithm>
 #include <cctype>
@@ -34,8 +36,17 @@ const char* SourceName(SampleBrowser::Source s, AppState::LibTarget t) {
         case SampleBrowser::Source::BuiltIn: return "BUILT-IN";
         case SampleBrowser::Source::Favorites: return "FAVORITES";
         case SampleBrowser::Source::Recent: return "RECENT";
+        case SampleBrowser::Source::Set: return "SET";
     }
     return "";
+}
+// "Set 26 Nov": the default name of a new performance set (C4b v3)
+std::string TodaySetName() {
+    static const char* const kMon[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    localtime_r(&t, &tm);
+    return "Set " + std::to_string(tm.tm_mday) + " " + kMon[std::clamp(tm.tm_mon, 0, 11)];
 }
 // the library's own key ("lib:<rel>") is the plain rel, so the favourites saved by the old MY SAMPLES browser keep working
 std::string LibFavKey(const std::string& rel) { return rel; }
@@ -193,6 +204,16 @@ void SampleBrowser::Rebuild(AppState& app) {
             for (const std::string& k : recent_) for (auto& it : all) if (it.favKey == k) { items_.push_back(it); break; }
             break;
         }
+        case Source::Set: {   // C4b v3: a performance set keeps the order the files were added in (sortable like FAVORITES)
+            const SampleSetList* sets = app.SampleSetsIfReady();
+            if (!sets) { waitLib_ = true; break; }
+            if (set_ < 0 || set_ >= static_cast<int>(sets->size())) break;
+            std::vector<Item> all; everything(all);
+            std::unordered_map<std::string, size_t> at; at.reserve(all.size());
+            for (size_t i = 0; i < all.size(); ++i) at.emplace(all[i].favKey, i);
+            for (const std::string& k : (*sets)[static_cast<size_t>(set_)].keys) if (auto f = at.find(k); f != at.end()) items_.push_back(all[f->second]);
+            break;
+        }
     }
     vis_.clear();
     for (size_t i = 0; i < items_.size(); ++i) if (Visible(items_[i])) vis_.push_back(static_cast<int>(i));
@@ -215,7 +236,7 @@ void SampleBrowser::Rebuild(AppState& app) {
 
 bool SampleBrowser::Visible(const Item& it) const {
     if (src_ == Source::Library && !folder_.empty() && it.key.compare(0, folder_.size() + 1, folder_ + "/") != 0) return false;
-    const bool typed = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
+    const bool typed = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent || src_ == Source::Set;
     if (type_ >= 0 && typed && it.type != kLibCategories[type_]) return false;
     if (genre_ >= 0 && typed && it.genre != kSampleGenres[genre_]) return false;
     if (tagMask_ && typed && (it.tags & tagMask_) != tagMask_) return false;
@@ -418,7 +439,7 @@ void SampleBrowser::Draw(AppState& app) {
     const bool searchActive = ImGui::IsItemActive();
     // C4b part 6 (review): a number typed into a BPM field belongs to that field: no search capture, no browse / take / close keys.
     // The field is drawn further down, so last frame's state is used (ImGui sets WantTextInput while a text field is being edited).
-    const bool tagsBusy = !tagsKey_.empty() || !tagsWant_.empty();   // the GENRE / TAGS window owns the keys
+    const bool tagsBusy = !tagsKey_.empty() || !tagsWant_.empty() || menuWant_ || menuOpen_ || setMenuOpen_;   // a window or menu owns the keys
     const bool fieldTyping = (io.WantTextInput && !searchActive) || bpmTyping_ || tagsBusy;
     bpmTyping_ = false;   // set again below while a BPM field is being typed into
     if ((io.KeySuper || io.KeyCtrl) && ImGui::IsKeyPressed(ImGuiKey_F, false)) focusSearch_ = true;
@@ -471,7 +492,7 @@ void SampleBrowser::Draw(AppState& app) {
                                                    : "Move the copies nothing uses to the Trash (asks first). Kept: what this project, its Undo,\nits saved versions or another project in the same folder still uses.");
     }
     // ---- TYPE chips (library and the collections; the drums and transitions open on their own type) ----
-    const bool typed = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
+    const bool typed = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent || src_ == Source::Set;
     if (!copies) {
     ImGui::BeginDisabled(!typed);
     ImGui::AlignTextToFramePadding();
@@ -612,6 +633,40 @@ void SampleBrowser::Draw(AppState& app) {
     if (ImGui::IsItemHovered()) Hint("Files you starred (click the star in a row).");
     if (row("col1", "RECENT", src_ == Source::Recent, static_cast<int>(recent_.size()), 0, false, false)) setSrc(Source::Recent);
     if (ImGui::IsItemHovered()) Hint("The last 20 files you took, newest first.");
+    if (const SampleSetList* sets = app.SampleSetsIfReady()) {   // C4b v3: performance sets
+        for (int si = 0; si < static_cast<int>(sets->size()); ++si) {
+            const SampleSet& st = (*sets)[static_cast<size_t>(si)];
+            char id[16]; std::snprintf(id, sizeof id, "set%d", si);
+            if (row(id, st.name, src_ == Source::Set && set_ == si, static_cast<int>(st.keys.size()), 0, false, false)) { if (src_ != Source::Set || set_ != si) { set_ = si; setSrc(Source::Set); dirty_ = true; sel_ = 0; } }
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) { setMenu_ = si; std::snprintf(renameBuf_, sizeof renameBuf_, "%s", st.name.c_str()); ImGui::OpenPopup("##sbSetMenu"); }
+            if (ImGui::IsItemHovered()) Hint("A set you gathered (right-click a file > ADD TO SET).\nRight-click here: rename or delete the set (the files stay).");
+        }
+        if (sets->empty()) { ImGui::TextDisabled("  sets: right-click a file"); if (ImGui::IsItemHovered()) Hint("Right-click a file > ADD TO SET > NEW SET gathers files for a gig."); }
+        setMenuOpen_ = false;
+        if (ImGui::BeginPopup("##sbSetMenu")) {
+            setMenuOpen_ = true;
+            const bool valid = setMenu_ >= 0 && setMenu_ < static_cast<int>(sets->size());
+            if (!valid) ImGui::CloseCurrentPopup();
+            else {
+                ImGui::TextDisabled("RENAME (Return)");
+                ImGui::SetNextItemWidth(200.0f);
+                if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+                if (ImGui::InputText("##sbSetName", renameBuf_, sizeof renameBuf_, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    if (!app.RenameSampleSet(setMenu_, renameBuf_)) app.SetStatus("THAT NAME IS TAKEN OR EMPTY");
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("DELETE THIS SET (the files stay)")) {
+                    if (app.DeleteSampleSet(setMenu_)) {
+                        if (src_ == Source::Set) { if (set_ == setMenu_) { src_ = Source::Favorites; set_ = -1; } else if (set_ > setMenu_) --set_; }
+                        dirty_ = true; sel_ = 0;
+                    }
+                }
+                if (interaction::KeyCancel()) ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
     ImGui::EndChild();
     ImGui::SameLine(0, 10);
 
@@ -658,11 +713,11 @@ void SampleBrowser::Draw(AppState& app) {
         if (onStar) { if (!favs_.erase(it.favKey)) favs_.insert(it.favKey); favToggled = true; return; }
         sel_ = i; if (autoHear_) wantHear = true;
     };
-    auto editTags = [&](int i, const Item& it) {   // right-click: GENRE / TAGS of a library file
+    auto editTags = [&](int i, const Item& it) {   // right-click: the menu of this file (GENRE / TAGS, ADD TO SET, SHOW IN FINDER)
         sel_ = i;
-        if (it.src == Source::Library) { tagsWant_ = it.key; tagsName_ = it.name; }
+        menuItem_ = it; menuWant_ = true;
     };
-    const bool showBpm = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
+    const bool showBpm = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent || src_ == Source::Set;
     // THIS PROJECT copies have no type or tempo: WHERE IT PLAYS gets the rest of the row (the whole text is in the info line too)
     // Columns, left to right: NAME, FOLDER (THIS PROJECT copies: WHERE IT PLAYS), TYPE, GENRE · TAGS, BPM. The library and the
     // collections show all five; THIS PROJECT copies have no type or tempo, so WHERE IT PLAYS gets the rest of the row (the whole
@@ -737,7 +792,7 @@ void SampleBrowser::Draw(AppState& app) {
                     cell(xType, xGenre, it.type, vis::kTextDim);
                     if (showBpm) cell(xGenre, xBpm, GenreTagsText(it), vis::kTextDim);
                     if (showBpm && it.bpm > 0.0) { char b[16]; std::snprintf(b, sizeof b, "%.0f", it.bpm); cell(xBpm, fullW, b, vis::kTextDim); }
-                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s%s", it.name.c_str(), it.folder.c_str(), who.c_str(), it.src == Source::Library ? "\nright-click = correct the genre / tags" : "");
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s%s", it.name.c_str(), it.folder.c_str(), who.c_str(), "\nright-click = menu: genre / tags, add to set, show in Finder");
                 } else {
                     const ImVec2 p0(rowO.x + cc * (cardW + gap), rowO.y), p1(p0.x + cardW, p0.y + cardH);
                     ImGui::SetCursorScreenPos(p0);
@@ -753,7 +808,7 @@ void SampleBrowser::Draw(AppState& app) {
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 7), vis::kText, it.name.c_str());
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 27), vis::kTextDim, (it.type.empty() ? it.folder : it.type + "  " + it.folder).c_str());
                     ImGui::PopClipRect();
-                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s%s", it.name.c_str(), it.folder.c_str(), who.c_str(), it.src == Source::Library ? "\nright-click = correct the genre / tags" : "");
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s%s", it.name.c_str(), it.folder.c_str(), who.c_str(), "\nright-click = menu: genre / tags, add to set, show in Finder");
                 }
                 ImGui::PopID();
             }
@@ -764,7 +819,7 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::PopStyleVar();
     if (n == 0) {
         ImGui::Dummy(ImVec2(1, 20));
-        const bool narrowed = search_[0] || ((type_ >= 0 || genre_ >= 0 || tagMask_ || bpmLo_ > 0 || bpmHi_ > 0) && (src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent)) || (src_ == Source::Library && !folder_.empty());
+        const bool narrowed = search_[0] || ((type_ >= 0 || genre_ >= 0 || tagMask_ || bpmLo_ > 0 || bpmHi_ > 0) && (src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent || src_ == Source::Set)) || (src_ == Source::Library && !folder_.empty());
         const char* msg = src_ == Source::Kits && !kitScanDone_ ? "Reading the kit folders ..."
                         : waitKit_ ? "Reading the kit ..."
                         : waitLib_ ? "Reading the library ..."
@@ -774,6 +829,7 @@ void SampleBrowser::Draw(AppState& app) {
                         : copies ? "This project has no samples yet. Take one from MY LIBRARY or FROM FINDER..."
                         : src_ == Source::Favorites && favs_.empty() ? "No favorites yet - click the star in a row."
                         : src_ == Source::Recent && recent_.empty() ? "Nothing taken yet."
+                        : src_ == Source::Set ? "This set is empty (or its files are gone). Right-click a file > ADD TO SET."
                         : src_ == Source::Library && libList && libList->empty() ? "The library is empty. Put .wav / .aif files in the samples folder (Library > Show Samples Folder) and use Library > Rescan Samples."
                         : "Nothing here matches - clear the search, TYPE, GENRE, TAGS or BPM.";
         ImGui::TextWrapped("%s", msg);
@@ -800,7 +856,7 @@ void SampleBrowser::Draw(AppState& app) {
         ImGui::PopTextWrapPos();
         if (cur->src == Source::Library) {
             if (MiniButton("GENRE / TAGS...##sbTagsBtn")) { tagsWant_ = cur->key; tagsName_ = cur->name; }
-            if (ImGui::IsItemHovered()) Hint("Correct the genre and tags of this file (also: right-click the row).\nKept in Library/sample_tags.txt; the file itself is not changed.");
+            if (ImGui::IsItemHovered()) Hint("Correct the genre and tags of this file (also: right-click the row > GENRE / TAGS...).\nKept in Library/sample_tags.txt; the file itself is not changed.");
             ImGui::SameLine(0, 6);
             ImGui::TextDisabled("%s", cur->ownTags ? "your own" : "guessed");
         }
@@ -850,6 +906,44 @@ void SampleBrowser::Draw(AppState& app) {
         }
         ImGui::SameLine();
         if (ImGui::Button("CANCEL", ImVec2(110, 0)) || interaction::KeyCancel() || trashStage_ != 2) { if (trashStage_ == 2) trashStage_ = 0; trashList_.clear(); ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+    // ---- the right-click menu of a file (C4b v3): GENRE / TAGS..., ADD TO SET, REMOVE FROM THIS SET, SHOW IN FINDER ----
+    if (menuWant_ && trashStage_ == 0) ImGui::OpenPopup("##sbRowMenu");
+    menuWant_ = false;
+    menuOpen_ = false;
+    if (ImGui::BeginPopup("##sbRowMenu")) {
+        menuOpen_ = true;
+        const Item& mi = menuItem_;
+        ImGui::TextDisabled("%s", mi.name.c_str());
+        ImGui::Separator();
+        if (mi.src == Source::Library && ImGui::MenuItem("GENRE / TAGS...")) { tagsWant_ = mi.key; tagsName_ = mi.name; }
+        const SampleSetList* sets = app.SampleSetsIfReady();
+        if (ImGui::BeginMenu("ADD TO SET", sets != nullptr && !mi.favKey.empty())) {
+            for (int si = 0; sets && si < static_cast<int>(sets->size()); ++si) {
+                const SampleSet& st = (*sets)[static_cast<size_t>(si)];
+                const bool in = std::find(st.keys.begin(), st.keys.end(), mi.favKey) != st.keys.end();
+                char lab[80]; std::snprintf(lab, sizeof lab, "%s##sbAdd%d", st.name.c_str(), si);
+                if (ImGui::MenuItem(lab, in ? "in it" : nullptr, false, !in) && app.AddToSampleSet(si, mi.favKey)) { if (src_ == Source::Set && set_ == si) dirty_ = true; }
+            }
+            if (sets && !sets->empty()) ImGui::Separator();
+            if (ImGui::MenuItem("NEW SET")) {
+                const int ns = app.NewSampleSet(TodaySetName(), mi.favKey);
+                if (ns < 0) app.SetStatus("CANNOT MAKE A NEW SET (64 AT MOST)");
+                else app.SetStatus("ADDED TO " + (*app.SampleSetsIfReady())[static_cast<size_t>(ns)].name + " (right-click the set to rename it)");
+            }
+            ImGui::EndMenu();
+        }
+        if (src_ == Source::Set && sets && set_ >= 0 && set_ < static_cast<int>(sets->size())) {
+            const std::string lab = "REMOVE FROM " + (*sets)[static_cast<size_t>(set_)].name;
+            if (ImGui::MenuItem(lab.c_str()) && app.RemoveFromSampleSet(set_, mi.favKey)) dirty_ = true;
+        }
+        std::string where;   // the file on disk, when there is one
+        if (mi.src == Source::Library) where = app.LibraryPath(mi.key);
+        else if (mi.src == Source::Kits) where = mi.key;
+        else if (mi.src == Source::Project && mi.riser < 0 && mi.variant < 0) where = app.SamplesDir() + "/" + mi.key;
+        if (ImGui::MenuItem("SHOW IN FINDER", nullptr, false, !where.empty())) { if (!userdirs::Reveal(where)) app.SetStatus("CANNOT OPEN FINDER"); }
+        if (interaction::KeyCancel()) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
     // ---- GENRE / TAGS of one library file (C4b v2): every click is kept at once in Library/sample_tags.txt ----

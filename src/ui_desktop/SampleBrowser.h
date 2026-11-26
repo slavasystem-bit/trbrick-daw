@@ -30,7 +30,7 @@ namespace t8::desktop {
 
 class SampleBrowser {
 public:
-    enum class Source { Project, Library, Kits, BuiltIn, Favorites, Recent };
+    enum class Source { Project, Library, Kits, BuiltIn, Favorites, Recent, Set };   // Set = one performance set (set_)
     struct Item {
         Source src = Source::Library;
         std::string key;      // library: rel path; project: file name in samples/; kits: full path; built-in / project transition: riser index
@@ -161,6 +161,9 @@ private:
     int bpmLo_ = 0, bpmHi_ = 0;                // BPM from / to (0 = open); a file with no tempo is hidden while either is set
     std::map<std::string, std::pair<std::string, unsigned>> guess_;   // library rel -> guessed genre / tags (guessed once per file)
     const std::pair<std::string, unsigned>& Guess(const std::string& rel);
+    int set_ = -1;                                // Source::Set: the index in AppState's sample sets
+    Item menuItem_; bool menuWant_ = false, menuOpen_ = false;   // C4b v3: the right-click menu of a row
+    int setMenu_ = -1; bool setMenuOpen_ = false; char renameBuf_[48] = "";   // the right-click menu of a set
     std::string selKeep_;                         // favKey to select again after the next rebuild (an edit can move the row)
     std::string tagsWant_, tagsKey_, tagsName_;   // C4b v2: GENRE / TAGS of one library file (right-click / the SELECTED button); key = rel
     char search_[48] = "";

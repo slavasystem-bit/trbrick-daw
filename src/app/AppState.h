@@ -36,6 +36,7 @@
 #include "SampleCleanup.h"
 #include "SampleLibrary.h"
 #include "core/SampleTagStore.h"
+#include "core/SampleSetStore.h"
 #include <atomic>
 #include <memory>
 #include "Onsets.h"
@@ -3766,6 +3767,91 @@ struct AppState {
         if (!sampleTagsValid_ || sampleTagsSaved_->load() == sampleTagsGen_) return true;
         if (!WriteSampleTagsFile(SampleTagsPath(), sampletags::SerializeStore(sampleTags_))) return false;
         sampleTagsSaved_->store(sampleTagsGen_);
+        return true;
+    }
+    // ---- C4b (v3): performance sets of the SAMPLES browser (Library/Favorites/sample_sets.txt), the same way as the own tags:
+    // read once on the loader thread, every change written whole on the loader thread in order, the last one again at quit.
+    SampleSetList sampleSets_;
+    bool sampleSetsValid_ = false, sampleSetsLoading_ = false;
+    std::string sampleSetsPathOverride_;   // tests
+    unsigned sampleSetsGen_ = 0;
+    std::shared_ptr<std::atomic<unsigned>> sampleSetsSaved_ = std::make_shared<std::atomic<unsigned>>(0u);
+    std::string SampleSetsPath() const { return sampleSetsPathOverride_.empty() ? userdirs::FavoritesDir() + "/sample_sets.txt" : sampleSetsPathOverride_; }
+    static SampleSetList ReadSampleSets(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return {};
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        return samplesets::ParseStore(text);
+    }
+    const SampleSetList* SampleSetsIfReady() {
+        if (sampleSetsValid_) return &sampleSets_;
+        const std::string path = SampleSetsPath();
+        if (!loader.Running()) { sampleSets_ = ReadSampleSets(path); sampleSetsValid_ = true; return &sampleSets_; }
+        if (!sampleSetsLoading_) {
+            sampleSetsLoading_ = true;
+            auto out = std::make_shared<SampleSetList>();
+            loader.Post([out, path] { *out = ReadSampleSets(path); }, [this, out] { sampleSetsLoading_ = false; if (!sampleSetsValid_) { sampleSets_ = std::move(*out); sampleSetsValid_ = true; } });
+        }
+        return nullptr;
+    }
+    void SaveSampleSets() {
+        const unsigned gen = ++sampleSetsGen_;
+        const std::string text = samplesets::SerializeStore(sampleSets_), path = SampleSetsPath();
+        auto ok = std::make_shared<bool>(false);
+        auto saved = sampleSetsSaved_;
+        loader.Post([ok, text, path, gen, saved] {
+            *ok = WriteSampleTagsFile(path, text);
+            if (*ok) saved->store(gen);
+        }, [this, ok] { if (!*ok) { SetStatus("CANNOT SAVE THE SAMPLE SETS (Library/Favorites/sample_sets.txt)"); statusMessageTimer = 6.0f; } });
+    }
+    // All refused (false) until the file was read, so a slow read is never overwritten.
+    // A new set named `base` (or "base 2" ... when taken) holding `firstKey` (if not empty). Returns its index, -1 when refused.
+    int NewSampleSet(const std::string& base, const std::string& firstKey) {
+        const std::string clean = samplesets::CleanName(base);
+        if (!sampleSetsValid_ || clean.empty() || sampleSets_.size() >= samplesets::kMaxSets) return -1;
+        SampleSet set; set.name = samplesets::CleanName(samplesets::FreeName(sampleSets_, clean));
+        if (set.name.empty() || samplesets::Find(sampleSets_, set.name) >= 0) return -1;
+        if (!firstKey.empty()) set.keys.push_back(firstKey);
+        sampleSets_.push_back(std::move(set));
+        SaveSampleSets();
+        return static_cast<int>(sampleSets_.size()) - 1;
+    }
+    bool AddToSampleSet(int set, const std::string& key) {
+        if (!sampleSetsValid_ || set < 0 || set >= static_cast<int>(sampleSets_.size()) || key.empty() || key.find_first_of("\t\r\n") != std::string::npos) return false;
+        auto& keys = sampleSets_[static_cast<size_t>(set)].keys;
+        if (std::find(keys.begin(), keys.end(), key) != keys.end() || keys.size() >= samplesets::kMaxEntries) return false;
+        keys.push_back(key);
+        SaveSampleSets();
+        return true;
+    }
+    bool RemoveFromSampleSet(int set, const std::string& key) {
+        if (!sampleSetsValid_ || set < 0 || set >= static_cast<int>(sampleSets_.size())) return false;
+        auto& keys = sampleSets_[static_cast<size_t>(set)].keys;
+        const auto it = std::find(keys.begin(), keys.end(), key);
+        if (it == keys.end()) return false;
+        keys.erase(it);
+        SaveSampleSets();
+        return true;
+    }
+    bool RenameSampleSet(int set, const std::string& name) {
+        const std::string clean = samplesets::CleanName(name);
+        if (!sampleSetsValid_ || set < 0 || set >= static_cast<int>(sampleSets_.size()) || clean.empty()) return false;
+        const int other = samplesets::Find(sampleSets_, clean);
+        if (other >= 0) return other == set;   // the same name again: nothing to do; another set's name: refused
+        sampleSets_[static_cast<size_t>(set)].name = clean;
+        SaveSampleSets();
+        return true;
+    }
+    bool DeleteSampleSet(int set) {   // only the list goes; the samples are not touched
+        if (!sampleSetsValid_ || set < 0 || set >= static_cast<int>(sampleSets_.size())) return false;
+        sampleSets_.erase(sampleSets_.begin() + set);
+        SaveSampleSets();
+        return true;
+    }
+    bool FlushSampleSets() {   // at quit, after loader.Stop() (see FlushSampleTags)
+        if (!sampleSetsValid_ || sampleSetsSaved_->load() == sampleSetsGen_) return true;
+        if (!WriteSampleTagsFile(SampleSetsPath(), samplesets::SerializeStore(sampleSets_))) return false;
+        sampleSetsSaved_->store(sampleSetsGen_);
         return true;
     }
     static bool WriteSampleTagsFile(const std::string& path, const std::string& text) {
