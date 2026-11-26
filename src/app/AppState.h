@@ -3933,6 +3933,16 @@ struct AppState {
         for (const std::string& f : files) fs::copy_file(fs::path(from) / f, fs::path(to) / f, fs::copy_options::skip_existing, ec);
     }
 
+    // Program start: hands the engine the sound of the project that was just opened (synth / chord patches, samples of the
+    // sampler and of SAMPLE engines, kits, mixer). The sequencer must know the engine BEFORE RefreshSound: before, main.cpp
+    // refreshed first, ApplySceneSound returned early (no engine yet) and the auto-opened last project played the default synth
+    // instead of its samples until the scene's sound was touched.
+    void StartSound() {
+        sequencer.Init(&engine, &project);
+        RefreshSound();
+        engine.GetMixer().SyncFromPattern(CurrentPattern());
+        engine.GetMixer().SyncFxFromProject(project);
+    }
     void RefreshSound() {
         SyncSceneKits(true);
         SyncSceneSamples(true);
