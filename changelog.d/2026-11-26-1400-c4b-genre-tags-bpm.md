@@ -6,4 +6,3 @@ ROADMAP "Samples in one place" (C4b), item 4 (guessed part); approved mockup `do
 - **Filters** under TYPE: GENRE (one), TAGS (all chosen must be on the file), BPM from - to (the program's number field; "any" = open; files without a tempo hide while a tempo is set). They add up with TYPE, the folder and the search; the search also finds genre and tag words.
 - **Column GENRE · TAGS** (sortable) in the library and the collections; the selected file shows them too.
 - Own corrections of genre / tags (a file beside the library) and performance sets come in later parts; the samples and folders are never changed.
-=======
