@@ -187,7 +187,7 @@ void MixLabPanel::ApplyAll(AppState& app, int onlyTrack) {
     app.SetStatus("MIX LAB: " + names + " (LEVEL, PAN, EQ) COPIED TO " + std::to_string(scenes) + (applyChainOnly_ ? " OTHER SCENE(S) OF THE TRACK" : " OTHER SCENE(S) AND BRICK(S)"));
 }
 
-void MixLabPanel::Draw(AppState& app, float width, float height) {
+void MixLabPanel::Draw(AppState& app, float width, float /*height*/) {
     const int frame = ImGui::GetFrameCount();
     if (lastFrame_ != frame - 1 && lastFrame_ != frame && !lab_.Busy() && lab_.TriedFixes().empty()) StartAnalysis(app);   // opened: look at the scene as it is now
     lastFrame_ = frame;
@@ -282,7 +282,6 @@ void MixLabPanel::DrawMap(AppState& app, float w, float h) {
     const float nameW = 74.0f, padR = 14.0f;
     const float x0 = wp.x + nameW + 6.0f, x1 = wp.x + w - padR;
     const float plotY0 = wp.y + 26.0f;
-    int nPresent = 0; for (int t = 0; t < kNumTracks; ++t) if (sp.present[static_cast<size_t>(t)]) ++nPresent;
     const float rowH = std::clamp((h - 26.0f - 24.0f) * 0.40f / kNumTracks, 11.0f, 20.0f);
     const float stripsH = rowH * kNumTracks;
     const float plotY1 = wp.y + h - stripsH - 44.0f;
@@ -334,7 +333,7 @@ void MixLabPanel::DrawMap(AppState& app, float w, float h) {
     if (masking_) for (size_t i = 0; i < rep.spots.size(); ++i) {
         const MixSpot& s = rep.spots[i];
         const float cx = std::clamp(0.5f * (xOfHz(s.loHz) + xOfHz(s.hiHz)), x0 + 10.0f, x1 - 10.0f), cy = plotY0 + 20.0f;
-        char nb[8]; std::snprintf(nb, sizeof nb, "%d", static_cast<int>(i) + 1);
+        char nb[12]; std::snprintf(nb, sizeof nb, "%d", static_cast<int>(i) + 1);
         dl->AddCircleFilled(ImVec2(cx, cy), 8.5f, IM_COL32(232, 76, 76, 255));
         const ImVec2 ts = ImGui::CalcTextSize(nb);
         dl->AddText(ImVec2(cx - ts.x * 0.5f, cy - ts.y * 0.5f), IM_COL32(255, 255, 255, 255), nb);
@@ -520,7 +519,7 @@ void MixLabPanel::DrawPriority(AppState& app, float w, float h) {
         ImGui::InvisibleButton("##row", ImVec2(w - 16.0f, rowH - 1.0f));
         const bool hov = ImGui::IsItemHovered();
         dl->AddRectFilled(ImVec2(wp.x + 8, ry), ImVec2(wp.x + w - 8, ry + rowH - 1), hov ? vis::kCellHover : vis::kCell, 3.0f);
-        char nb[8]; std::snprintf(nb, sizeof nb, "%d", i + 1);
+        char nb[12]; std::snprintf(nb, sizeof nb, "%d", i + 1);
         dl->AddText(ImVec2(wp.x + 16, ry + (rowH - 14.0f) * 0.5f), vis::kTextDim, nb);
         dl->AddCircleFilled(ImVec2(wp.x + 48, ry + rowH * 0.5f), 4.0f, TrackColor(t));
         dl->AddText(ImVec2(wp.x + 60, ry + (rowH - 14.0f) * 0.5f), vis::kText, MixTrackName(t));

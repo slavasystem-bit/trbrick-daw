@@ -97,7 +97,7 @@ SynthPatch MakeWtPatch(int wavetableBank, float wtPosition,
 
 // v26: wraps a base patch with the THICKEN fields (unison/sub/noise/drive).
 // osc2=true additionally enables a detuned second saw oscillator.
-SynthPatch ThickPatch(SynthPatch p, int unison, float uniDetune, float uniSpread,
+[[maybe_unused]] SynthPatch ThickPatch(SynthPatch p, int unison, float uniDetune, float uniSpread,
                       float subLevel, int subOctave, float noise, float drive,
                       bool osc2 = false) {
     p.unisonVoices = unison;
@@ -124,7 +124,7 @@ SynthPatch Drv(SynthPatch p, float drive) { p.drive = drive; return p; }
 SynthPatch Nz(SynthPatch p, float level) { p.noiseLevel = level; return p; }
 SynthPatch F24(SynthPatch p) { p.filter24 = true; return p; }
 SynthPatch Key(SynthPatch p, float amount) { p.keytrack = amount; return p; }
-SynthPatch Sync(SynthPatch p) { p.phaseSync = true; return p; }
+[[maybe_unused]] SynthPatch Sync(SynthPatch p) { p.phaseSync = true; return p; }
 SynthPatch Lfo(SynthPatch p, LfoTarget t, float rateHz, float depth, Waveform shape = Waveform::Sine) { p.lfoTarget = t; p.lfoRateHz = rateHz; p.lfoDepth = depth; p.lfoShape = shape; return p; }
 SynthPatch ModEnv(SynthPatch p, float amount) { p.fmModEnv = amount; return p; }
 

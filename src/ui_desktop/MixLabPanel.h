@@ -47,8 +47,6 @@ private:
     int soloSpot_ = -1;
     bool soloSaved_ = false;
     std::array<bool, kNumTracks> savedMute_{}, savedSolo_{};
-    int dragFrom_ = -1;
-    float cardScroll_ = 0.0f;
     int chan_ = -1;                  // the instrument shown in CHANNEL
     int eqDrag_ = -1;
     bool applyChainOnly_ = false;    // APPLY TO ALL: false = every scene and brick, true = only the scenes the chain uses

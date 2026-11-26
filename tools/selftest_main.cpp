@@ -6292,7 +6292,7 @@ int main(int argc, char** argv) {
         {
             VariSpeed v1, v2; Src s1, s2;
             std::vector<int> a(100, 441), b; for (int i = 0; i < 90; ++i) b.push_back(i % 2 ? 63 : 1000); int ta = 0, tb = 0; for (int x : a) ta += x; for (int x : b) tb += x;
-            for (int x = 0; tb < ta; ++x) { b.push_back(7); tb += 7; }
+            while (tb < ta) { b.push_back(7); tb += 7; }
             const std::vector<float> o1 = run(v1, s1, {1.0507}, a), o2 = run(v2, s2, {1.0507}, b);
             double worst = 0; for (size_t i = 0; i < std::min(o1.size(), o2.size()); ++i) worst = std::max(worst, std::fabs(static_cast<double>(o1[i] - o2[i])));
             check(worst < 1e-4, "pitch: the same sound whatever the block size (largest difference " + std::to_string(worst) + ")");

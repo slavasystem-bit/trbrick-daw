@@ -32,13 +32,6 @@ ImU32 RoleColor(SceneRole r) {
     }
 }
 
-const FillRule& EffectiveFillRule(const Project& proj, const ChainStep& cs) {
-    static const FillRule kOff;
-    if (cs.fillMode == FillMode::Off) return kOff;
-    if (cs.fillMode == FillMode::Own) return cs.fill;
-    return proj.patterns[std::clamp(cs.patternIndex, 0, kNumPatterns - 1)].fill;
-}
-
 std::string FillSummary(const FillRule& r) {
     if (r.when == FillWhen::Off) return "no fill";
     char b[96];
@@ -147,14 +140,6 @@ void MoveSlot(AppState& app, int from, int to) {
     proj.songChain[to] = tmp;
 }
 
-// v44.5.3: dropping a chain slot on another one swaps the two (like scene pads); Shift inserts instead (MoveSlot).
-void SwapSlots(AppState& app, int a, int b) {
-    Project& proj = app.project;
-    if (a < 0 || b < 0 || a >= proj.songChainLength || b >= proj.songChainLength || a == b) return;
-    app.PushSoundUndo();
-    std::swap(proj.songChain[a], proj.songChain[b]);
-}
-
 // Drag a scene pad onto another one: the two swap places (their content and
 // every chain slot that refers to them). The edited scene follows its content.
 void SwapScenes(AppState& app, int a, int b) {
@@ -181,19 +166,6 @@ void DeleteScene(AppState& app, int i) {
 constexpr ImU32 kTeal = vis::kTeal;
 constexpr ImU32 kAmber = vis::kAccent;
 
-// A small flat button drawn by hand (so the -/+ steppers can be tight).
-bool MiniButton(const char* id, const char* glyph, ImVec2 size) {
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    bool pressed = ImGui::InvisibleButton(id, size);
-    bool hov = ImGui::IsItemHovered();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImVec2 p1(p0.x + size.x, p0.y + size.y);
-    dl->AddRectFilled(p0, p1, hov ? vis::kLine : vis::kCell, 3.0f);
-    ImVec2 ts = ImGui::CalcTextSize(glyph);
-    dl->AddText(ImVec2(p0.x + (size.x - ts.x) * 0.5f, p0.y + (size.y - ts.y) * 0.5f), vis::kText, glyph);
-    return pressed;
-}
-
 } // namespace
 
 void ChainPanel::Draw(AppState& app) {
@@ -202,7 +174,7 @@ void ChainPanel::Draw(AppState& app) {
     ImGui::PushID("ChainPanel");
 
     const float kLabelW = 58.0f, kCtrlW = 176.0f, kGap = 4.0f;
-    const float kPadH = 28.0f, kSlotH = 42.0f;
+    const float kPadH = 28.0f;
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float gridW = avail.x - kLabelW - kCtrlW - 12.0f;
     float cellW = (gridW - kGap * 15) / 16.0f;

@@ -27,7 +27,6 @@ public:
     void DrawEditors(AppState& app);
 
 private:
-    int chainPage_ = 0;
     // Scene-pad right-click menu (same deferred-open trick as before: the
     // popup must be opened from the same ImGui ID scope it is drawn in).
     int padMenuPattern_ = -1;

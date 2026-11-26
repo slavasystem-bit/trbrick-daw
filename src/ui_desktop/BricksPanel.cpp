@@ -84,7 +84,7 @@ void BricksPanel::ZoomTo(float newPpb, float anchorScreenX) {
     ScrollTo(anchorBar * newPpb + 4.0f - (anchorScreenX - childLeftX_));
 }
 
-void BricksPanel::Draw(AppState& app, ChainPanel& chain, bool showDetails) {
+void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
     std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
     Project& proj = app.project;
     ImGuiIO& io = ImGui::GetIO();
@@ -1053,7 +1053,7 @@ void BricksPanel::Draw(AppState& app, ChainPanel& chain, bool showDetails) {
         if (ImGui::BeginPopup("AddScene")) {
             ImGui::TextDisabled("ADD A COPY OF A SCENE TO THE END");
             const int liveShown = AppState::IsBrickSlot(proj.currentPattern) ? proj.liveScene : proj.currentPattern;
-            char cur[40]; std::snprintf(cur, sizeof cur, "THE LIVE SCENE YOU WERE ON (%02d)", liveShown + 1);
+            char cur[48]; std::snprintf(cur, sizeof cur, "THE LIVE SCENE YOU WERE ON (%02d)", liveShown + 1);
             if (ImGui::Button(cur, ImVec2(-1, 0))) { if (app.AddChainStep(liveShown)) selectBrick(proj.songChainLength - 1); ImGui::CloseCurrentPopup(); }
             ImGui::Separator();
             for (int p = 0; p < kNumLiveScenes; ++p) {
