@@ -2,6 +2,12 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Mac launcher: a pull request can be tried while its GitHub checks are still running
+
+- The TR-Brick button now starts a pull request whose checks are still running (or not started yet) after a clear `WARNING: ... is NOT fully checked yet`, so an urgent fix can be tried on the Mac without waiting 15-30 minutes. Failed checks are still refused, and the self-check on the Mac still runs first.
+- A push that lands between the menu and the download is no longer refused either: the newest version starts with a warning.
+- The launcher updates itself the next time the main version is started; nothing to re-download.
+
 ## Fix: the arrow keys move the selected notes in the piano roll again
 
 - After a click in the piano roll (or Cmd+A over it) the arrow keys stay with the selected notes even when the mouse leaves the roll: up / down = a semitone (Shift = an octave), left / right = a step (Shift = a beat). Before, the notes moved only while the mouse was over the roll, so the arrows went to the instrument block instead.
