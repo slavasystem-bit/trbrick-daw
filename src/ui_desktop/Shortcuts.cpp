@@ -40,12 +40,14 @@ void HandleShortcuts(AppState& app) {
     }
     if (app.helpOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { app.helpOpen = false; return; }
     // C1 (UI-1): Esc closes the open tool (MIX LAB, CHORD LAB, MASTER FX), then the PITCH fader strip (popups and text boxes take Esc first)
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+    // A drag in progress (a knob, a fader, a lane point) takes Esc first: it puts the value back (review of C1 part 2)
+    const bool dragging = ImGui::IsAnyItemActive();
+    if (!dragging && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         if (app.tool != AppState::Tool::None) { app.OpenTool(AppState::Tool::None); return; }
         if (app.pitchMode) { app.pitchMode = false; return; }
     }
     // C1 (UI-1): M / C / F open MIX LAB / CHORD LAB / MASTER FX in the room under the header; the same key closes it
-    if (!cmd && !io.KeyAlt && !shift) {
+    if (!cmd && !io.KeyAlt && !shift && !dragging) {
         if (ImGui::IsKeyPressed(ImGuiKey_M, false)) { app.ToggleTool(AppState::Tool::MixLab); return; }
         if (ImGui::IsKeyPressed(ImGuiKey_C, false)) { app.ToggleTool(AppState::Tool::ChordLab); return; }
         if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { app.ToggleTool(AppState::Tool::MasterFx); return; }
