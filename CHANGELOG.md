@@ -2,6 +2,11 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Fix: the last project's samples play from the first note after the program starts
+
+- When the program opened the last project at start, a synth or the chord on ENGINE > SAMPLE played the default synth (and the sampler track had no sample) until the scene's sound was touched. The start-up code handed the scene's sound over before the sequencer knew the audio engine, so the hand-over was silently skipped.
+- New `AppState::StartSound()` (sequencer first, then the scene's patches, samples, kits and mixer), used by `main.cpp`; covered by a "program start" check in `t8_selftest` that fails with the old order.
+
 ## Fix: the arrow keys move the selected notes in the piano roll again
 
 - After a click in the piano roll (or Cmd+A over it) the arrow keys stay with the selected notes even when the mouse leaves the roll: up / down = a semitone (Shift = an octave), left / right = a step (Shift = a beat). Before, the notes moved only while the mouse was over the roll, so the arrows went to the instrument block instead.

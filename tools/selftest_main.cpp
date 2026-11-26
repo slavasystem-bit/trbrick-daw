@@ -6187,6 +6187,39 @@ int main(int argc, char** argv) {
             check(std::string(PatchParamName(SynthEngineType::Sample, 1)) == "CUTOFF" && NumPatchParams(SynthEngineType::Sample) == 1 + 6 + 19, "sample engine: the rows are the filter and the shared rows");
             AdjustPatchParam(p, 0, 1); check(p.engineType == SynthEngineType::Subtractive, "sample engine: ENGINE wraps round to SUBTRACTIVE");
         }
+        {   // program start: the last project opens with a SAMPLE synth; its sample plays from the first note (not the default synth)
+            fs::remove_all("selftest_boot"); fs::create_directories("selftest_boot/src");
+            { std::vector<float> w(44100); for (size_t i = 0; i < w.size(); ++i) w[i] = static_cast<float>(0.6 * std::sin(2.0 * 3.14159265358979 * 220.0 * static_cast<double>(i) / 44100.0)); WriteWavPCM16("selftest_boot/src/boot.wav", w, 1, 44100); }
+            {
+                auto wp = std::make_unique<AppState>(); AppState& w = *wp;
+                w.engine.Init(kSampleRate); w.sequencer.Init(&w.engine, &w.project);
+                w.projectPath = "selftest_boot/p.t8proj";
+                std::lock_guard<SceneMutex> lk(w.sequencer.PatternMutex());
+                w.project.currentPattern = 0;
+                for (auto& t : w.CurrentPattern().tracks) for (auto& st : t.steps) st = Step{};
+                w.CurrentPattern().synthPatches[0] = patchFor();
+                w.AssignSampleToSampler("selftest_boot/src/boot.wav", 0);
+                w.CurrentPattern().synthPatches[0].sample.root = 57;
+                w.CurrentPattern().tracks[kNumDrumTracks].steps[0].active = true; w.CurrentPattern().tracks[kNumDrumTracks].steps[0].note = 60; w.CurrentPattern().tracks[kNumDrumTracks].steps[0].lengthSteps = 16;
+                w.CurrentPattern().bpm = 120.0f; w.CurrentPattern().masterLength = 16;
+                check(SaveProject(w.project, w.projectPath), "program start: the project with a SAMPLE synth is saved");
+            }
+            auto bp = std::make_unique<AppState>(); AppState& b = *bp;   // the order of main.cpp: engine, project file, then StartSound
+            b.engine.Init(kSampleRate);
+            check(LoadProject(b.project, "selftest_boot/p.t8proj"), "program start: the last project opens");
+            b.projectPath = "selftest_boot/p.t8proj";
+            b.StartSound();
+            check(b.engine.Synth(0).Patch().engineType == SynthEngineType::Sample, "program start: the synth gets the project's SAMPLE patch at once (not the default synth)");
+            check(b.engine.SynthSampleCurrent(0) && b.engine.SynthSampleCurrent(0)->name == "boot.wav", "program start: the project's sample is in the voice before the first note");
+            b.engine.GetMixer().masterVolume = 1.0f;
+            b.sequencer.Play();
+            std::vector<float> buf(44100 * 2, 0.0f);
+            for (int r = 0; r < 22050; r += 256) b.sequencer.RenderAndAdvance(buf.data() + static_cast<size_t>(r) * 2, std::min(256, 22050 - r), kSampleRate);
+            float pk = 0; for (float v : buf) pk = std::max(pk, std::fabs(v));
+            check(pk > 0.1f, "program start: the first note plays the sample (audible)");
+            b.sequencer.Stop();
+            fs::remove_all("selftest_boot");
+        }
         {   // the whole way: a file in samples/, the scene's patch, the sequencer plays it; two scenes with different samples
             fs::remove_all("selftest_smp53"); fs::create_directories("selftest_smp53/src");
             auto wav = [&](const std::string& path, double hz, double sec) { std::vector<float> w(static_cast<size_t>(sec * 44100)); for (size_t i = 0; i < w.size(); ++i) w[i] = static_cast<float>(0.6 * std::sin(2.0 * 3.14159265358979 * hz * static_cast<double>(i) / 44100.0)); WriteWavPCM16(path, w, 1, 44100); };
