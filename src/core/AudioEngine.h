@@ -62,6 +62,13 @@ public:
     // v44.51: listen to a sample of the library without touching any track (plays into the master bus, one voice, a new one replaces it).
     void AuditionSample(const SamplePtr& sample, float gain = 0.8f, double speed = 1.0);   // v44.52.1: speed = project tempo / the loop's tempo
     void AuditionStop();
+    // C4b: the SAMPLE fill voice (one, into the master bus like the risers). Starts at once at `startFrame` of the sample (> 0 when the
+    // window was entered late), plays at `rate` (STRETCH = the sample's length / the window's length) and ends with a short fade so
+    // that it is silent exactly `lengthFrames` output frames later. A new start replaces it; Stop fades it out in about 10 ms.
+    // Called from the sequencer on the audio thread; the sample must stay referenced elsewhere (AppState's cache).
+    void FillSampleStart(const SamplePtr& sample, double startFrame, double rate, float gain, int lengthFrames);
+    void FillSampleStop();
+    bool FillSamplePlaying() { std::lock_guard<std::mutex> lock(mutex_); return fillSample_ != nullptr; }
     SamplerPatch SamplerCurrentPatch();
     SamplePtr SamplerCurrentSample();
 
@@ -151,6 +158,12 @@ private:
     double audPos_ = 0.0;
     float audGain_ = 0.8f;
     double audSpeed_ = 1.0;
+    SamplePtr fillSample_;          // C4b: the SAMPLE fill voice
+    double fillPos_ = 0.0, fillRate_ = 1.0;
+    float fillGain_ = 1.0f;
+    int fillLeft_ = 0;              // output frames until it must be silent
+    int fillFade_ = 0;              // > 0: fading out (Stop), frames left of the fade
+    int fillEndFade_ = 1;           // length of the ramp before fillLeft_ reaches 0
     int audFade_ = 0;               // frames left of a stop ramp (0 = none)
     ChordVoice auditionVoice_;
     Mixer mixer_;

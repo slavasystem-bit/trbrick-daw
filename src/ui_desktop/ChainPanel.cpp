@@ -4,6 +4,7 @@
 #include "InstrumentMenu.h"
 #include "LiveWidgets.h"
 #include "ValueField.h"
+#include "FillSampleRow.h"
 #include "DynPresets.h"
 #include "ChordEditor.h"
 #include "core/ArrangeEnergy.h"
@@ -600,7 +601,9 @@ void ChainPanel::DrawSceneFillEditor(AppState& app) {
     ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "SCENE %02d  -  FILL", i + 1);
     ImGui::TextDisabled("A drum fill over the last beats; the steps of the scene are not touched.\nA brick can switch it off or use a rule of its own.");
     FillRule r = pat.fill;
-    if (DrawFillRuleEditor(r)) { app.PushUndo(); pat.fill = NormalizeFill(r); }
+    bool fch = DrawFillRuleEditor(r);
+    if (r.when != FillWhen::Off && r.kind == FillKind::Sample && FillSampleControls(app, r, -1 - i, 300.0f)) fch = true;   // C4b
+    if (fch) { app.PushUndo(); pat.fill = NormalizeFill(r); }
     ImGui::Separator();
     ImGui::TextDisabled("%s", FillSummary(pat.fill).c_str());
     if (ImGui::Button("CLOSE")) ImGui::CloseCurrentPopup();
