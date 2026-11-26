@@ -97,6 +97,7 @@ void SampleBrowser::Open(AppState& app, AppState::LibTarget target, int brick) {
     folder_.clear();
     folderCountsOf_ = static_cast<size_t>(-1);   // the library may have been rescanned
     inUseOnly_ = true;                           // THIS PROJECT always opens on IN USE
+    ++trashToken_; trashStage_ = 0; trashList_.clear();
     wantOpen_ = true;
 }
 
@@ -384,8 +385,8 @@ void SampleBrowser::Draw(AppState& app) {
     if (ImGui::InputTextWithHint("##sbSearch", "search name, folder, type ...", search_, sizeof(search_))) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
     const bool searchActive = ImGui::IsItemActive();
     if ((io.KeySuper || io.KeyCtrl) && ImGui::IsKeyPressed(ImGuiKey_F, false)) focusSearch_ = true;
-    bool wantHear = browser::HearKey(searchActive, search_);
-    if (browser::CaptureTyping(search_, sizeof(search_), searchActive)) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
+    bool wantHear = trashStage_ == 0 && browser::HearKey(searchActive, search_);
+    if (trashStage_ == 0 && browser::CaptureTyping(search_, sizeof(search_), searchActive)) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
     ImGui::SameLine(ImGui::GetWindowWidth() - 14.0f - 22.0f - 8.0f - 2 * 52.0f - 4.0f);
     if (ToggleButton("LIST##sbList", list_, ImVec2(52, 0), ToggleTab())) { list_ = true; scrollToSel_ = true; }
     if (ImGui::IsItemHovered()) Hint("One file per row: name, folder, type, tempo. A click on a column title sorts.");
@@ -409,6 +410,25 @@ void SampleBrowser::Draw(AppState& app) {
         std::snprintf(lab, sizeof lab, "ALL COPIED  %d##sbAllCopied", copiedCount_);
         if (ToggleButton(lab, !inUseOnly_, ImVec2(0, 0), ToggleTab())) { inUseOnly_ = false; dirty_ = true; sel_ = 0; scrollToSel_ = true; }
         if (ImGui::IsItemHovered()) Hint("Every file ever copied into samples/ beside the project, also the ones nothing plays any more.");
+        const char* trashLab = trashStage_ == 1 ? "LOOKING ...##sbTrash" : trashStage_ == 3 ? "MOVING ...##sbTrash" : "MOVE UNUSED TO TRASH...##sbTrash";
+        ImGui::SameLine(0, 18);
+        ImGui::BeginDisabled(trashStage_ != 0 || copiedCount_ <= inUseCount_);
+        if (ImGui::Button(trashLab)) {
+            trashStage_ = 1;
+            const unsigned tok = trashToken_;
+            AppState* ap = &app;
+            app.PlanTrashUnusedSamples([this, tok, ap](std::vector<std::string> list, int kept, std::string err) {
+                if (tok != trashToken_) return;   // the browser was closed or opened again meanwhile
+                trashStage_ = 0;
+                if (!err.empty()) { ap->SetStatus("NOTHING MOVED: " + err); return; }
+                if (list.empty()) { ap->SetStatus(kept > 0 ? "NOTHING TO MOVE: a saved version or another project still uses every copy" : "NOTHING TO MOVE: every copy is used"); return; }
+                trashList_ = std::move(list); trashKept_ = kept; trashStage_ = 2;
+            });
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            Hint("%s", copiedCount_ <= inUseCount_ ? "Every copy plays somewhere: nothing to move."
+                                                   : "Move the copies nothing uses to the Trash (asks first). Kept: what this project, its Undo,\nits saved versions or another project in the same folder still uses.");
     }
     // ---- TYPE chips (library and the collections; the drums and transitions open on their own type) ----
     const bool typed = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
@@ -697,12 +717,44 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::EndChild();
     if (favToggled) { SaveFavorites(); if (src_ == Source::Favorites) dirty_ = true; }
 
+    // ---- MOVE UNUSED TO TRASH: the question (Esc = cancel; Return does nothing, a move to the Trash is never one key away) ----
+    if (trashStage_ == 2 && !ImGui::IsPopupOpen("##sbTrashAsk")) ImGui::OpenPopup("##sbTrashAsk");
+    if (ImGui::BeginPopupModal("##sbTrashAsk", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
+        const int nT = static_cast<int>(trashList_.size());
+        ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "Move %d unused cop%s to the Trash?", nT, nT == 1 ? "y" : "ies");
+        ImGui::TextDisabled("Nothing in this project, its Undo, its saved versions or the other projects in its folder uses %s.", nT == 1 ? "it" : "them");
+        ImGui::TextDisabled("You can take %s back out of the Trash.", nT == 1 ? "it" : "them");
+        ImGui::Spacing();
+        for (int i = 0; i < std::min(nT, 10); ++i) ImGui::Text("  %s", trashList_[static_cast<size_t>(i)].c_str());
+        if (nT > 10) ImGui::TextDisabled("  ... and %d more", nT - 10);
+        if (trashKept_ > 0) { ImGui::Spacing(); ImGui::TextDisabled("%d more %s kept: a saved version or another project uses %s.", trashKept_, trashKept_ == 1 ? "is" : "are", trashKept_ == 1 ? "it" : "them"); }
+        ImGui::Spacing();
+        if (ImGui::Button("MOVE TO TRASH", ImVec2(150, 0))) {
+            trashStage_ = 3;
+            const unsigned tok = trashToken_;
+            AppState* ap = &app;
+            app.TrashSampleFiles(trashList_, [this, tok, ap](int moved, std::string err) {
+                ap->SetStatus(err.empty() ? "MOVED " + std::to_string(moved) + " UNUSED SAMPLE" + (moved == 1 ? "" : "S") + " TO THE TRASH"
+                                          : "MOVED " + std::to_string(moved) + " TO THE TRASH; NOT MOVED: " + err);
+                if (tok != trashToken_) return;
+                trashStage_ = 0; dirty_ = true; sel_ = 0;
+            });
+            trashList_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("CANCEL", ImVec2(110, 0)) || interaction::KeyCancel()) { trashStage_ = 0; trashList_.clear(); ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+    const bool trashBusy = trashStage_ != 0;   // the question (or its answer) owns the keys
+
     // ---- footer ----
     ImGui::TextDisabled("%d shown   |   click = select   Space / HEAR = listen   Up / Down = browse   Left / Right = folders   Return / double-click = take   Esc = %s",
                         n, search_[0] ? "clear search" : "close without a change");
 
+    if (trashBusy) { wantHear = false; pick = false; }
     if (wantHear && cur) Hear(app, *cur);
-    {
+    if (!trashBusy) {
         const bool hadSearch = search_[0] != '\0';
         if (browser::EscapeClosesOrClears(search_, &sel_, &scrollToSel_)) keepOpen = false;
         if (hadSearch && search_[0] == '\0') dirty_ = true;

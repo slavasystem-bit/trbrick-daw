@@ -32,6 +32,7 @@
 #include <set>
 #include "FilePicker.h"
 #include "AsyncLoader.h"
+#include "SampleCleanup.h"
 #include "SampleLibrary.h"
 #include "Onsets.h"
 #include <functional>
@@ -3310,6 +3311,61 @@ struct AppState {
         const Pattern& pt = project.patterns[static_cast<size_t>(i)];
         const SynthPatch& sp = k < kNumSynthTracks ? pt.synthPatches[static_cast<size_t>(k)] : pt.chordPatch;
         return sp.engineType == SynthEngineType::Sample ? sp.sample.File() : std::string();
+    }
+    // C4b (g2): every sample file name anything in memory holds: each scene and brick slot (in use or not) and every Undo / Redo
+    // step, whatever the engine type. MOVE UNUSED TO TRASH never touches these.
+    std::set<std::string> SampleFilesNamedInMemory() const {
+        std::set<std::string> out;
+        auto patch = [&](const SynthPatch& sp) { const std::string f = sp.sample.File(); if (!f.empty()) out.insert(f); };
+        auto pattern = [&](const Pattern& pt) {
+            if (!pt.samplerPatch.file.empty()) out.insert(pt.samplerPatch.file);
+            for (const SynthPatch& sp : pt.synthPatches) patch(sp);
+            patch(pt.chordPatch);
+        };
+        for (const Pattern& pt : project.patterns) pattern(pt);
+        pattern(patternClipboard);   // a copied scene can be pasted back
+        for (const auto* st : {&undoStack, &redoStack}) for (const UndoEntry& e : *st) {
+            pattern(e.pattern); pattern(e.trackSound);
+            for (const auto& b : e.bulk) pattern(b.second);
+            for (const SynthPatch& sp : e.synthPatches) patch(sp);
+            patch(e.chordPatch);
+        }
+        return out;
+    }
+    // C4b (g2) MOVE UNUSED TO TRASH, step 1: which copies in samples/ nothing names (memory, then the saved files on the loader
+    // thread). done(list, kept, error) runs on the UI thread: `list` may go to the Trash, `kept` are named only by a saved file.
+    // A saved file that cannot be read stops it (error), so nothing is moved on a guess.
+    void PlanTrashUnusedSamples(std::function<void(std::vector<std::string>, int, std::string)> done) {
+        const std::set<std::string> mem = SampleFilesNamedInMemory();
+        std::vector<std::string> cands;
+        for (const std::string& n : SampleNames()) if (!mem.count(n)) cands.push_back(n);
+        if (cands.empty()) { done({}, 0, std::string()); return; }
+        struct Plan { std::vector<std::string> list; int kept = 0; std::string err; };
+        auto r = std::make_shared<Plan>();
+        const std::string pp = projectPath;
+        loader.Post([r, cands, pp] {
+            bool unreadable = false;
+            const std::set<std::string> named = cleanup::NamedInFiles(cands, cleanup::FilesThatMayNameSamples(pp), &unreadable);
+            if (unreadable) { r->err = "a saved project file could not be read"; return; }
+            for (const std::string& c : cands) if (!named.count(c)) r->list.push_back(c);
+            r->kept = static_cast<int>(named.size());
+        }, [r, done] { done(std::move(r->list), r->kept, r->err); });
+    }
+    // Step 2, after the confirmation: what memory names now is taken out again, the rest is moved to the Trash on the loader thread.
+    // done(moved, error) on the UI thread; the list of samples/ is read again afterwards.
+    void TrashSampleFiles(std::vector<std::string> names, std::function<void(int, std::string)> done) {
+        const std::set<std::string> mem = SampleFilesNamedInMemory();
+        names.erase(std::remove_if(names.begin(), names.end(), [&](const std::string& n) { return mem.count(n) > 0 || n.find('/') != std::string::npos; }), names.end());
+        struct Moved { int n = 0; std::string err; };
+        auto r = std::make_shared<Moved>();
+        const std::string dir = SamplesDir();
+        loader.Post([r, names, dir] {
+            for (const std::string& n : names) {
+                std::string e;
+                if (cleanup::MoveToTrash(dir + "/" + n, e)) ++r->n;
+                else if (r->err.empty()) r->err = n + ": " + e;
+            }
+        }, [this, r, done] { sampleNamesValid_ = false; done(r->n, r->err); });
     }
     // The sampler of the EDITED scene changed (a knob): the engine follows when that scene is the played one.
     void PushEditedSamplerToEngine() { if (EditIsPlaying()) sequencer.ApplySceneSound(project.currentPattern); }

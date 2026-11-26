@@ -1457,6 +1457,8 @@ bool BackupProjectFile(const std::string& path, int keep) {
     return true;
 }
 
+std::string ProjectBackupDir(const std::string& projectPath) { return BackupDirFor(projectPath); }
+
 std::vector<std::string> ListProjectBackups(const std::string& path) {
     const std::string stem = StemOf(path);
     const std::string code = FolderCodeOf(path);

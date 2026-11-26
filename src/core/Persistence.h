@@ -38,6 +38,8 @@ std::string SoundPartText(const Pattern& pattern, int part);
 bool BackupProjectFile(const std::string& path, int keep = 10);
 // All backups/*.t8proj next to `path`, newest first.
 std::vector<std::string> ListProjectBackups(const std::string& path);
+// The folder of the dated copies of `projectPath` (shared by the projects of one service folder; legacy: backups/ beside it).
+std::string ProjectBackupDir(const std::string& projectPath);
 // "2026-11-25  14:03:12" for a backup file name (what the Versions list shows).
 std::string BackupLabel(const std::string& backupPath);
 

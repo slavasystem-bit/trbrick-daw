@@ -2,6 +2,15 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage C4b (part 4): MOVE UNUSED TO TRASH
+
+ROADMAP "Samples in one place" (C4b), item 5 (second half); approved mockup `docs/mockups/v45_samples_unified.png`, section 2a.
+
+- **MOVE UNUSED TO TRASH...** on THIS PROJECT (sampler / synth / chord) moves the copies in `samples/` that nothing uses to the Trash, after a question that lists them (Esc = cancel; Return does nothing).
+- **Kept:** every file anything in memory names (each scene and brick slot, also unused ones; the copied scene; every Undo / Redo step) and every file named in a saved file that could open it: the project files in the same folder (they share `samples/`) and their `.bak`, the dated copies, the recovery copies, the synth presets. The saved files are searched as text; one that cannot be read stops the move. Memory is checked again when the question is answered.
+- **Trash:** macOS `~/.Trash`; elsewhere the freedesktop Trash with its `.trashinfo` (Restore works). Rename only: a file on another disk than the Trash stays and is named in the message. Names already in the Trash get a number.
+- Reading the saved files and moving run on the loader thread. New `src/app/SampleCleanup.h`; `ProjectBackupDir()` exposed from Persistence.
+
 ## Stage C4b (part 3): THIS PROJECT shows what plays
 
 ROADMAP "Samples in one place" (C4b), item 5 (first half); approved mockup `docs/mockups/v45_samples_unified.png`, section 2a.
