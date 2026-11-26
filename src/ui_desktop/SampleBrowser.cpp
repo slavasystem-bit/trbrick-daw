@@ -161,16 +161,12 @@ void SampleBrowser::Rebuild(AppState& app) {
     };
     auto library = [&](std::vector<Item>& out) {
         const std::vector<LibSample>* lib = app.LibraryListIfReady();   // listed on the loader thread, never here
-        if (!lib) { waitLib_ = true; return; }
+        const SampleTagMap* own = app.SampleTagsIfReady();               // the user's own genre / tags, read on the loader thread too
+        if (!lib || !own) { waitLib_ = true; return; }
         for (const LibSample& ls : *lib) {
             Item it; it.src = Source::Library; it.key = ls.rel; it.name = ls.locked ? ls.name + "  [LOCKED]" : ls.name; it.folder = DirOf(ls.rel); it.type = ls.category; it.bpm = ls.bpm; it.favKey = LibFavKey(ls.rel);
-            auto g = guess_.find(ls.rel);
-            if (g == guess_.end()) {
-                unsigned m = 0;
-                for (const std::string& t : GuessSampleTags(ls.rel)) for (int i = 0; i < kNumSampleTags; ++i) if (t == kSampleTags[i]) m |= 1u << i;
-                g = guess_.emplace(ls.rel, std::make_pair(GuessSampleGenre(ls.rel), m)).first;
-            }
-            it.genre = g->second.first; it.tags = g->second.second;
+            if (auto o = own->find(ls.rel); o != own->end()) { it.genre = o->second.genre; it.tags = o->second.tags; it.ownTags = true; }
+            else { const auto& g = Guess(ls.rel); it.genre = g.first; it.tags = g.second; }
             out.push_back(std::move(it));
         }
     };
@@ -377,6 +373,16 @@ void SampleBrowser::DrawWave(AppState& app, const Item& it, float w, float h) {
     }
 }
 
+const std::pair<std::string, unsigned>& SampleBrowser::Guess(const std::string& rel) {
+    auto g = guess_.find(rel);
+    if (g == guess_.end()) {
+        unsigned m = 0;
+        for (const std::string& t : GuessSampleTags(rel)) for (int i = 0; i < kNumSampleTags; ++i) if (t == kSampleTags[i]) m |= 1u << i;
+        g = guess_.emplace(rel, std::make_pair(GuessSampleGenre(rel), m)).first;
+    }
+    return g->second;
+}
+
 void SampleBrowser::Draw(AppState& app) {
     if (wantOpen_) { ImGui::OpenPopup("##sampleBrowser"); wantOpen_ = false; open_ = true; }
     if (!open_) return;
@@ -408,7 +414,8 @@ void SampleBrowser::Draw(AppState& app) {
     const bool searchActive = ImGui::IsItemActive();
     // C4b part 6 (review): a number typed into a BPM field belongs to that field: no search capture, no browse / take / close keys.
     // The field is drawn further down, so last frame's state is used (ImGui sets WantTextInput while a text field is being edited).
-    const bool fieldTyping = (io.WantTextInput && !searchActive) || bpmTyping_;
+    const bool tagsBusy = !tagsKey_.empty() || !tagsWant_.empty();   // the GENRE / TAGS window owns the keys
+    const bool fieldTyping = (io.WantTextInput && !searchActive) || bpmTyping_ || tagsBusy;
     bpmTyping_ = false;   // set again below while a BPM field is being typed into
     if ((io.KeySuper || io.KeyCtrl) && ImGui::IsKeyPressed(ImGuiKey_F, false)) focusSearch_ = true;
     bool wantHear = trashStage_ == 0 && !fieldTyping && browser::HearKey(searchActive, search_);
@@ -647,6 +654,10 @@ void SampleBrowser::Draw(AppState& app) {
         if (onStar) { if (!favs_.erase(it.favKey)) favs_.insert(it.favKey); favToggled = true; return; }
         sel_ = i; if (autoHear_) wantHear = true;
     };
+    auto editTags = [&](int i, const Item& it) {   // right-click: GENRE / TAGS of a library file
+        sel_ = i;
+        if (it.src == Source::Library) { tagsWant_ = it.key; tagsName_ = it.name; }
+    };
     const bool showBpm = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
     // THIS PROJECT copies have no type or tempo: WHERE IT PLAYS gets the rest of the row (the whole text is in the info line too)
     // Columns, left to right: NAME, FOLDER (THIS PROJECT copies: WHERE IT PLAYS), TYPE, GENRE · TAGS, BPM. The library and the
@@ -710,6 +721,7 @@ void SampleBrowser::Draw(AppState& app) {
                     else if (hov) dl->AddRectFilled(p0, p1, vis::kCellHover, 3.0f);
                     const bool onStar = drawStar(it, ImVec2(p0.x + 10.0f, p0.y + rowH * 0.5f), hov);
                     if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) clickItem(i, it, onStar);
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) editTags(i, it);
                     if (hov && !onStar && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { sel_ = i; pick = true; }
                     auto cell = [&](float x0, float x1, const std::string& s, ImU32 col) {
                         ImGui::PushClipRect(ImVec2(p0.x + x0, p0.y), ImVec2(p0.x + x1 - 6.0f, p1.y), true);
@@ -721,7 +733,7 @@ void SampleBrowser::Draw(AppState& app) {
                     cell(xType, xGenre, it.type, vis::kTextDim);
                     if (showBpm) cell(xGenre, xBpm, GenreTagsText(it), vis::kTextDim);
                     if (showBpm && it.bpm > 0.0) { char b[16]; std::snprintf(b, sizeof b, "%.0f", it.bpm); cell(xBpm, fullW, b, vis::kTextDim); }
-                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), it.folder.c_str(), who.c_str());
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s%s", it.name.c_str(), it.folder.c_str(), who.c_str(), it.src == Source::Library ? "\nright-click = correct the genre / tags" : "");
                 } else {
                     const ImVec2 p0(rowO.x + cc * (cardW + gap), rowO.y), p1(p0.x + cardW, p0.y + cardH);
                     ImGui::SetCursorScreenPos(p0);
@@ -731,12 +743,13 @@ void SampleBrowser::Draw(AppState& app) {
                     dl->AddRect(p0, p1, i == sel_ ? vis::kAccent : vis::kLine, 6.0f, 0, i == sel_ ? 2.0f : 1.0f);
                     const bool onStar = drawStar(it, ImVec2(p1.x - 14.0f, p0.y + 14.0f), hov);
                     if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) clickItem(i, it, onStar);
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) editTags(i, it);
                     if (hov && !onStar && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { sel_ = i; pick = true; }
                     ImGui::PushClipRect(ImVec2(p0.x + 8, p0.y), ImVec2(p1.x - 26, p1.y), true);
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 7), vis::kText, it.name.c_str());
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 27), vis::kTextDim, (it.type.empty() ? it.folder : it.type + "  " + it.folder).c_str());
                     ImGui::PopClipRect();
-                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), it.folder.c_str(), who.c_str());
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s%s", it.name.c_str(), it.folder.c_str(), who.c_str(), it.src == Source::Library ? "\nright-click = correct the genre / tags" : "");
                 }
                 ImGui::PopID();
             }
@@ -781,6 +794,12 @@ void SampleBrowser::Draw(AppState& app) {
         if (!meta.empty()) ImGui::TextDisabled("%s", meta.c_str());
         ImGui::TextDisabled("%s", (cur->src == Source::Library ? "My library / " + cur->folder : cur->folder).c_str());
         ImGui::PopTextWrapPos();
+        if (cur->src == Source::Library) {
+            if (MiniButton("GENRE / TAGS...##sbTagsBtn")) { tagsWant_ = cur->key; tagsName_ = cur->name; }
+            if (ImGui::IsItemHovered()) Hint("Correct the genre and tags of this file (also: right-click the row).\nKept in Library/sample_tags.txt; the file itself is not changed.");
+            ImGui::SameLine(0, 6);
+            ImGui::TextDisabled("%s", cur->ownTags ? "your own" : "guessed");
+        }
         ImGui::Dummy(ImVec2(1, 6));
         if (ImGui::Button("HEAR##sbHear", ImVec2(60, 0))) wantHear = true;
         if (ImGui::IsItemHovered()) Hint("Listen without taking it (Space)");
@@ -829,7 +848,46 @@ void SampleBrowser::Draw(AppState& app) {
         if (ImGui::Button("CANCEL", ImVec2(110, 0)) || interaction::KeyCancel() || trashStage_ != 2) { if (trashStage_ == 2) trashStage_ = 0; trashList_.clear(); ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
-    const bool trashBusy = trashStage_ != 0;   // the question (or its answer) owns the keys
+    // ---- GENRE / TAGS of one library file (C4b v2): every click is kept at once in Library/sample_tags.txt ----
+    if (!tagsWant_.empty() && trashStage_ == 0) { tagsKey_ = tagsWant_; tagsWant_.clear(); ImGui::OpenPopup("##sbTags"); }
+    else tagsWant_.clear();
+    if (ImGui::BeginPopupModal("##sbTags", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
+        const SampleTagMap* own = app.SampleTagsIfReady();
+        const auto& g = Guess(tagsKey_);
+        const auto o = own ? own->find(tagsKey_) : SampleTagMap::const_iterator();
+        const bool mine = own && o != own->end();
+        SampleTagOverride now = mine ? o->second : SampleTagOverride{g.first, g.second};
+        bool changed = false;
+        ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "GENRE / TAGS");
+        ImGui::SameLine(0, 10);
+        ImGui::TextUnformatted(tagsName_.c_str());
+        ImGui::TextDisabled("%s", mine ? "Your own choice (kept in Library/sample_tags.txt; the file is not changed)." : "Guessed from the folder and file names. A click makes it your own.");
+        ImGui::Dummy(ImVec2(1, 4));
+        ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("GENRE"); ImGui::SameLine(64.0f);
+        if (ToggleButton("NONE##sbtgN", now.genre.empty(), ImVec2(0, 0), ToggleTab())) { now.genre.clear(); changed = true; }
+        for (int i = 0; i < kNumSampleGenres; ++i) {
+            if (i == 5) { ImGui::Dummy(ImVec2(1, 0)); ImGui::SameLine(64.0f); } else ImGui::SameLine(0, 4);
+            char lab[40]; std::snprintf(lab, sizeof lab, "%s##sbtg%d", kSampleGenres[i], i);
+            if (ToggleButton(lab, now.genre == kSampleGenres[i], ImVec2(0, 0), ToggleTab())) { now.genre = kSampleGenres[i]; changed = true; }
+        }
+        ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("TAGS"); ImGui::SameLine(64.0f);
+        for (int t = 0; t < kNumSampleTags; ++t) {
+            if (t) ImGui::SameLine(0, 4);
+            char lab[40]; std::snprintf(lab, sizeof lab, "%s##sbtt%d", kSampleTags[t], t);
+            if (ToggleButton(lab, (now.tags >> t) & 1u, ImVec2(0, 0), ToggleTab())) { now.tags ^= 1u << t; changed = true; }
+        }
+        if (ImGui::IsItemHovered()) Hint("Tags add up: click again to take one off.");
+        ImGui::Dummy(ImVec2(1, 6));
+        if (changed && app.SetSampleTagOverride(tagsKey_, &now)) dirty_ = true;
+        ImGui::BeginDisabled(!mine);
+        if (ImGui::Button("BACK TO THE GUESS", ImVec2(170, 0)) && app.SetSampleTagOverride(tagsKey_, nullptr)) dirty_ = true;
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("Forget your own choice for this file: the guess is shown again.");
+        ImGui::SameLine();
+        if (ImGui::Button("DONE", ImVec2(110, 0)) || interaction::KeyCancel() || interaction::KeyConfirm() || trashStage_ != 0) { tagsKey_.clear(); ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    } else tagsKey_.clear();
+    const bool trashBusy = trashStage_ != 0 || tagsBusy;   // a question (or its answer) owns the keys
 
     // ---- footer ----
     ImGui::TextDisabled("%d shown   |   click = select   Space / HEAR = listen   Up / Down = browse   Left / Right = folders   Return / double-click = take   Esc = %s",
