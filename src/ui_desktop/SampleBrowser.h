@@ -144,6 +144,7 @@ private:
     void DrawWave(AppState& app, const Item& it, float w, float h);
 
     AppState::LibTarget target_ = AppState::LibTarget::None;
+    bool bpmTyping_ = false;   // a BPM field is being typed into (last frame): the keys are its own
     bool SampleFiles() const { return target_ == AppState::LibTarget::Sampler || target_ == AppState::LibTarget::Fill; }   // THIS PROJECT = the copies in samples/
     int brick_ = -1, sampleTarget_ = AppState::kTargetSampler, drumTrack_ = 0, scene_ = 0;
     bool wantOpen_ = false, open_ = false;

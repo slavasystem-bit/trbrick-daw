@@ -6956,6 +6956,12 @@ int main(int argc, char** argv) {
             check(SB::GenreTagsText(x) == "BREAKS \xC2\xB7 DUSTY" && SB::GenreTagsText(y).empty(), "c4b: the GENRE \xC2\xB7 TAGS column text");
             std::vector<SB::Item> gv{x, y}; SB::SortItems(gv, 4, false);
             check(gv[0].name == "b" && gv[1].name == "a", "c4b: GENRE \xC2\xB7 TAGS sorts (no genre first)");
+            {   // review of part 6: a number typed into a BPM field is not taken by the search, the browse keys, Return or Esc
+                std::ifstream in("src/ui_desktop/SampleBrowser.cpp"); const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                check(src.find("!fieldTyping && browser::CaptureTyping") != std::string::npos && src.find("!fieldTyping && browser::HearKey") != std::string::npos
+                      && src.find("n > 0 && !fieldTyping") != std::string::npos && src.find("!trashBusy && !fieldTyping") != std::string::npos
+                      && src.find("bpmTyping_ = true") != std::string::npos, "c4b: typing a tempo into a BPM field keeps the keys in that field");
+            }
         }
         {   // C4b (g): THIS PROJECT shows where each copied file plays
             AppState a;

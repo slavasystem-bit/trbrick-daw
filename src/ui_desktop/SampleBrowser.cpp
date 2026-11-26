@@ -406,9 +406,13 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::SetNextItemWidth(260.0f);
     if (ImGui::InputTextWithHint("##sbSearch", "search name, folder, type, genre, tag ...", search_, sizeof(search_))) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
     const bool searchActive = ImGui::IsItemActive();
+    // C4b part 6 (review): a number typed into a BPM field belongs to that field: no search capture, no browse / take / close keys.
+    // The field is drawn further down, so last frame's state is used (ImGui sets WantTextInput while a text field is being edited).
+    const bool fieldTyping = (io.WantTextInput && !searchActive) || bpmTyping_;
+    bpmTyping_ = false;   // set again below while a BPM field is being typed into
     if ((io.KeySuper || io.KeyCtrl) && ImGui::IsKeyPressed(ImGuiKey_F, false)) focusSearch_ = true;
-    bool wantHear = trashStage_ == 0 && browser::HearKey(searchActive, search_);
-    if (trashStage_ == 0 && browser::CaptureTyping(search_, sizeof(search_), searchActive)) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
+    bool wantHear = trashStage_ == 0 && !fieldTyping && browser::HearKey(searchActive, search_);
+    if (trashStage_ == 0 && !fieldTyping && browser::CaptureTyping(search_, sizeof(search_), searchActive)) { dirty_ = true; sel_ = 0; scrollToSel_ = true; }
     ImGui::SameLine(ImGui::GetWindowWidth() - 14.0f - 22.0f - 8.0f - 2 * 52.0f - 4.0f);
     if (ToggleButton("LIST##sbList", list_, ImVec2(52, 0), ToggleTab())) { list_ = true; scrollToSel_ = true; }
     if (ImGui::IsItemHovered()) Hint("One file per row: name, folder, type, tempo. A click on a column title sorts.");
@@ -500,6 +504,8 @@ void SampleBrowser::Draw(AppState& app) {
         ValueSpec sp; sp.lo = 0.0f; sp.hi = 300.0f; sp.step = 0.5f; sp.wheel = 1.0f; sp.def = 0.0f; sp.integer = true; sp.offText = "any";
         if (ValueField(id, &f, sp, 48.0f).changed) { *v = static_cast<int>(f); dirty_ = true; sel_ = 0; }
         if (ImGui::IsItemHovered()) Hint("%s", hint);
+        ImGui::PushID(id); const ImGuiID wid = ImGui::GetID("##vf"); ImGui::PopID();   // the same id ValueField uses
+        if (valuefield_detail::E().id == wid) bpmTyping_ = true;   // double-clicked: the number is being typed
     };
     bpmField("##sbBpmLo", &bpmLo_, "Lowest tempo (any = no limit). Files without a tempo in the name are hidden while a tempo is set.");
     ImGui::SameLine(0, 4);
@@ -606,7 +612,7 @@ void SampleBrowser::Draw(AppState& app) {
     const float cardW = 176.0f, cardH = 52.0f, gap = 8.0f;
     const int cols = list_ ? 1 : std::max(1, static_cast<int>((fullW + gap) / (cardW + gap)));
     bool pick = false, moved = false, favToggled = false;
-    if (n > 0 && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+    if (n > 0 && !fieldTyping && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
         int d = 0;
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) d = cols;
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) d = -cols;
@@ -619,7 +625,7 @@ void SampleBrowser::Draw(AppState& app) {
         if (interaction::KeyConfirm()) pick = true;
     }
     {   // Left / Right in LIST: close / open the folder of the library (Left also goes up to the parent folder)
-        const bool lr = list_ && src_ == Source::Library && (!searchActive || search_[0] == '\0') && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const bool lr = list_ && src_ == Source::Library && !fieldTyping && (!searchActive || search_[0] == '\0') && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
         if (lr && ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
             if (!folder_.empty()) openFolders_.insert(folder_);
             else if (sel_ >= 0 && sel_ < n) { const std::string d0 = DirOf(items_[static_cast<size_t>(vis_[static_cast<size_t>(sel_)])].key); if (!d0.empty()) { folder_ = d0; for (const auto& f : FolderChain(d0 + "/x")) openFolders_.insert(f); dirty_ = true; sel_ = 0; } }
@@ -831,7 +837,7 @@ void SampleBrowser::Draw(AppState& app) {
 
     if (trashBusy) { wantHear = false; pick = false; }
     if (wantHear && cur) Hear(app, *cur);
-    if (!trashBusy) {
+    if (!trashBusy && !fieldTyping) {
         const bool hadSearch = search_[0] != '\0';
         if (browser::EscapeClosesOrClears(search_, &sel_, &scrollToSel_)) keepOpen = false;
         if (hadSearch && search_[0] == '\0') dirty_ = true;
