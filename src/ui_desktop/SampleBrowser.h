@@ -145,9 +145,14 @@ private:
     std::vector<int> vis_;                     // indices into items_ shown, in order
     int sel_ = -1;
     bool scrollToSel_ = false, focusSearch_ = false, autoHear_ = false, dirty_ = true;
-    bool waitKit_ = false, waitLib_ = false;
+    bool waitKit_ = false, waitLib_ = false;   // the last rebuild found the kit / the library still being read
     bool inUseOnly_ = true;                    // THIS PROJECT (sampler / synth): only the files that play (IN USE) or every copy (ALL COPIED)
-    int inUseCount_ = 0, copiedCount_ = 0;   // the last rebuild found the kit / the library still being read
+    int inUseCount_ = 0, copiedCount_ = 0;
+    // MOVE UNUSED TO TRASH (C4b g2): 0 = idle, 1 = looking through the saved files, 2 = asking, 3 = moving
+    int trashStage_ = 0;
+    unsigned trashToken_ = 0;                  // a late answer for an earlier opening of the browser is dropped
+    std::vector<std::string> trashList_;
+    int trashKept_ = 0;
     std::set<std::string> favs_;
     std::vector<std::string> recent_;          // newest first, at most 20
     // KITS: the files of the target drum in every kit folder, listed on the loader thread
