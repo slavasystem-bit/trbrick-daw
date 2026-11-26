@@ -13,6 +13,12 @@ ROADMAP "Samples in one place" (C4b), the approved exception "FILL: SAMPLE"; the
 - **Not yet:** the 1/2-beat fill length of the proposal (lengths stay 1, 2, 4, 8 beats); it comes with the fill length rework.
 - **Project format 9:** `fillSample=fit,drums,file` (scene) and `fsmN=fit,drums,file` (brick); written only when used, so older files load unchanged (no sample, STRETCH, DRUMS MUTE). A path instead of a name in `samples/` is dropped on load.
 
+## Fix: the arrow keys move the selected notes in the piano roll again
+
+- After a click in the piano roll (or Cmd+A over it) the arrow keys stay with the selected notes even when the mouse leaves the roll: up / down = a semitone (Shift = an octave), left / right = a step (Shift = a beat). Before, the notes moved only while the mouse was over the roll, so the arrows went to the instrument block instead.
+- A click anywhere else gives the arrows back to the instrument block. Cmd+A, Delete, Cmd+D and Esc still act only with the mouse over the roll (the bricks strip uses them too); a window on top keeps its own keys.
+- `RollOwnsKeys` (pure, tested) + source ratchets in `t8_selftest`.
+
 ## Stage C4b (part 4): MOVE UNUSED TO TRASH
 
 ROADMAP "Samples in one place" (C4b), item 5 (second half); approved mockup `docs/mockups/v45_samples_unified.png`, section 2a.

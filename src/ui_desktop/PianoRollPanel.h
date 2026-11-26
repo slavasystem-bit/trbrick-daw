@@ -62,6 +62,7 @@ private:
     int moveCol0_ = 0, movePitch0_ = 0;
     std::vector<NoteRef> moveSel0_;
     bool marquee_ = false; ImVec2 marqueeP0_{0, 0}; std::vector<NoteRef> marqueeBase_, marqueeNew_;
+    bool keysFocus_ = false;   // the last click was in the roll: the arrow keys stay with the selected notes when the mouse leaves it
     NoteRef shiftNote_{-1, -1}; bool shiftOnNote_ = false;   // a Shift / Cmd press: a click toggles the note, a drag is a band
     bool resizeGroup_ = false; int resizeOrig_ = 1;
     bool SelHas(int col, int pitch) const { return std::find(sel_.begin(), sel_.end(), NoteRef{col, pitch}) != sel_.end(); }

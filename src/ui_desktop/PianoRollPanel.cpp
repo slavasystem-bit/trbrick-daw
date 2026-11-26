@@ -329,13 +329,18 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
     ImVec2 win = ImGui::GetWindowPos();
 
     // ---- U6: the selection follows the track and the scene; keys act on it ----------------------------------------------------------
-    if (selTrack_ != ti || selPattern_ != app.project.currentPattern) { sel_.clear(); selTrack_ = ti; selPattern_ = app.project.currentPattern; moving_ = marquee_ = false; }
+    if (selTrack_ != ti || selPattern_ != app.project.currentPattern) { sel_.clear(); selTrack_ = ti; selPattern_ = app.project.currentPattern; moving_ = marquee_ = false; keysFocus_ = false; }
     if (!moving_ && !marquee_) PruneNotes(t, sel_);
-    const bool rollHot = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::GetIO().WantTextInput && !moving_ && !marquee_ && !resizing_;
+    // the roll keeps the keys after a click in it (or Cmd+A), not only while the mouse is over it; a click elsewhere gives them back
+    const bool rollHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)) keysFocus_ = rollHovered;
+    const bool popupUp = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);   // a window on top keeps its own keys
+    const bool rollHot = RollOwnsKeys(rollHovered, keysFocus_ && !popupUp, ImGui::GetIO().WantTextInput, moving_ || marquee_ || resizing_);
+    const bool editHot = rollHot && rollHovered;   // Cmd+A / Delete / Cmd+D / Esc stay with the panel under the mouse (the bricks strip has them too)
     if (rollHot && !sel_.empty()) app.rollKeysFrame = ImGui::GetFrameCount();   // the arrow keys are for the selected notes, not for the instrument block
     if (rollHot) {
         const bool cmdKey = interaction::IsCmd(), shiftKey = ImGui::GetIO().KeyShift;
-        if (cmdKey && ImGui::IsKeyPressed(ImGuiKey_A, false)) { sel_ = AllNotes(t, trackLen); app.SetStatus(std::to_string(sel_.size()) + " NOTES SELECTED"); }
+        if (editHot && cmdKey && ImGui::IsKeyPressed(ImGuiKey_A, false)) { sel_ = AllNotes(t, trackLen); keysFocus_ = true; app.SetStatus(std::to_string(sel_.size()) + " NOTES SELECTED"); }
         if (!sel_.empty()) {
             int dc = 0, dp = 0;
             if (!cmdKey) {
@@ -359,7 +364,9 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
                     }
                 }
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
+            if (!editHot) {
+                // only the arrows act while the mouse is away from the roll
+            } else if (ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
                 app.PushUndo(); RemoveNotes(t, sel_); app.SetStatus(std::to_string(sel_.size()) + " NOTES REMOVED"); sel_.clear();
             } else if (cmdKey && ImGui::IsKeyPressed(ImGuiKey_D, false)) {
                 app.PushUndo();
