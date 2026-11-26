@@ -96,6 +96,7 @@ void SampleBrowser::Open(AppState& app, AppState::LibTarget target, int brick) {
     if (target == AppState::LibTarget::Drum) ScanKits(app);
     folder_.clear();
     folderCountsOf_ = static_cast<size_t>(-1);   // the library may have been rescanned
+    inUseOnly_ = true;                           // THIS PROJECT always opens on IN USE
     wantOpen_ = true;
 }
 
@@ -559,13 +560,14 @@ void SampleBrowser::Draw(AppState& app) {
         sel_ = i; if (autoHear_) wantHear = true;
     };
     const bool showBpm = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
-    const float xName = 26.0f, xFolder = fullW * 0.46f, xType = fullW * 0.76f, xBpm = fullW * 0.88f;
+    // THIS PROJECT copies have no type or tempo: WHERE IT PLAYS gets the rest of the row (the whole text is in the info line too)
+    const float xName = 26.0f, xFolder = fullW * (copies ? 0.40f : 0.46f), xType = copies ? fullW : fullW * 0.76f, xBpm = copies ? fullW : fullW * 0.88f;
     if (list_) {   // column titles: a click sorts by that column, a second click turns the order around
         const ImVec2 h0 = ImGui::GetCursorScreenPos();
         const char* const kCols[4] = {"NAME", copies ? "WHERE IT PLAYS" : "FOLDER", "TYPE", "BPM"};
         const float xs[4] = {xName, xFolder, xType, xBpm};
         for (int c = 0; c < 4; ++c) {
-            if (c == 3 && !showBpm) continue;
+            if ((c == 3 && !showBpm) || (c == 2 && copies)) continue;
             const float x1 = c < 3 ? xs[c + 1] : fullW;
             ImGui::SetCursorScreenPos(ImVec2(h0.x + xs[c], h0.y));
             ImGui::PushID(c);
@@ -621,7 +623,7 @@ void SampleBrowser::Draw(AppState& app) {
                     cell(xFolder, xType, it.folder, vis::kTextDim);
                     cell(xType, xBpm, it.type, vis::kTextDim);
                     if (showBpm && it.bpm > 0.0) { char b[16]; std::snprintf(b, sizeof b, "%.0f", it.bpm); cell(xBpm, fullW, b, vis::kTextDim); }
-                    if (hov) Hint("%s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), who.c_str());
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), it.folder.c_str(), who.c_str());
                 } else {
                     const ImVec2 p0(rowO.x + cc * (cardW + gap), rowO.y), p1(p0.x + cardW, p0.y + cardH);
                     ImGui::SetCursorScreenPos(p0);
@@ -636,7 +638,7 @@ void SampleBrowser::Draw(AppState& app) {
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 7), vis::kText, it.name.c_str());
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 27), vis::kTextDim, (it.type.empty() ? it.folder : it.type + "  " + it.folder).c_str());
                     ImGui::PopClipRect();
-                    if (hov) Hint("%s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), who.c_str());
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), it.folder.c_str(), who.c_str());
                 }
                 ImGui::PopID();
             }
