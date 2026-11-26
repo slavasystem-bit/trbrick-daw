@@ -4631,6 +4631,8 @@ int main(int argc, char** argv) {
         check(!RollOwnsKeys(true, true, true, false) && !RollOwnsKeys(true, true, false, true), "roll keys: not while typing or during a mouse drag");
         check(rollSrc.find("RollOwnsKeys(rollHovered, keysFocus_") != std::string::npos && rollSrc.find("keysFocus_ = rollHovered") != std::string::npos,
               "roll keys: the roll keeps the arrows after a click in it (source ratchet)");
+        check(rollSrc.find("sel_ = AllNotes(t, trackLen); keysFocus_ = true;") != std::string::npos,
+              "roll keys: Cmd+A over the roll also keeps the arrows with the notes when the mouse leaves (source ratchet)");
         check(rollSrc.find("ImGuiKey_UpArrow)) dp = shiftKey ? 12 : 1") != std::string::npos && rollSrc.find("ImGuiKey_DownArrow)) dp = shiftKey ? -12 : -1") != std::string::npos
               && rollSrc.find("ImGuiKey_RightArrow)) dc = shiftKey") != std::string::npos && rollSrc.find("ImGuiKey_LeftArrow)) dc = shiftKey") != std::string::npos,
               "roll keys: up / down = a semitone, Shift = an octave; left / right = a step, Shift = a beat (source ratchet)");

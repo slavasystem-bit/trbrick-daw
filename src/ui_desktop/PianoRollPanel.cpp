@@ -340,7 +340,7 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
     if (rollHot && !sel_.empty()) app.rollKeysFrame = ImGui::GetFrameCount();   // the arrow keys are for the selected notes, not for the instrument block
     if (rollHot) {
         const bool cmdKey = interaction::IsCmd(), shiftKey = ImGui::GetIO().KeyShift;
-        if (editHot && cmdKey && ImGui::IsKeyPressed(ImGuiKey_A, false)) { sel_ = AllNotes(t, trackLen); app.SetStatus(std::to_string(sel_.size()) + " NOTES SELECTED"); }
+        if (editHot && cmdKey && ImGui::IsKeyPressed(ImGuiKey_A, false)) { sel_ = AllNotes(t, trackLen); keysFocus_ = true; app.SetStatus(std::to_string(sel_.size()) + " NOTES SELECTED"); }
         if (!sel_.empty()) {
             int dc = 0, dp = 0;
             if (!cmdKey) {
