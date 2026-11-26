@@ -277,6 +277,15 @@ public:
         sceneSynthSamples_ = samples;
         if (project_ && engine_) ApplySceneSound(PlayPatternIndex());
     }
+    // C4b: the samples of the SAMPLE fills, by file name (the files of samples/ that a fill rule names). A fixed table, set by AppState
+    // on the UI thread whenever a fill rule or the project changes; the samples stay referenced by AppState's cache, the audio thread only
+    // compares names and copies a pointer.
+    static constexpr int kMaxFillSamples = 32;
+    struct FillSampleEntry { char name[FillRule::kSampleMax] = {}; SamplePtr sample; };
+    void SetFillSamples(const std::array<FillSampleEntry, kMaxFillSamples>& table) {
+        std::lock_guard<SceneMutex> lock(patternMutex_);
+        fillSamples_ = table;
+    }
     static bool SamePatch(const SynthPatch& a, const SynthPatch& b) { return std::memcmp(&a, &b, sizeof(SynthPatch)) == 0; }
     // Index of the pattern that is actually being PLAYED: the chain's
     // current pattern while song mode is driving, otherwise the one being
@@ -623,6 +632,9 @@ private:
     std::atomic<int> fillKindCur_{0};      // the kind chosen for the fill that plays now (Random is resolved at the start of a window)
     int fillBreakCur_ = 0;                 // the library break chosen for a Break fill
     bool fillWas_ = false;
+    bool fillDrumsMute_ = true;            // C4b: the SAMPLE fill that plays now silences the drums
+    std::array<FillSampleEntry, kMaxFillSamples> fillSamples_{};
+    void StartFillSample(const FillRule& rule, const FillState& fs, float gain);
     std::atomic<bool> fillActiveUi_{false};
     int riserArmedFor_ = -1;               // chain position whose next-step transition was already armed
 };

@@ -4,6 +4,7 @@
 #include "MixerSync.h"
 #include "LiveWidgets.h"
 #include "SampleRow.h"
+#include "FillSampleRow.h"
 #include "ValueField.h"
 #include "BrickGlyphs.h"
 #include "InstrumentSwitches.h"
@@ -441,7 +442,7 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
             }
             auto snapChoice = [](double v, const int (&c)[4]) { int best = c[0]; for (int x : c) if (std::fabs(x - v) < std::fabs(best - v)) best = x; return best; };
             static const int kTransBars[4] = {1, 2, 4, 8};
-            static const char* kKindShort[kNumFillKinds] = {"BREAK", "HATS", "SNARE", "DROP OUT", "RANDOM"};
+            static const char* kKindShort[kNumFillKinds] = {"BREAK", "HATS", "SNARE", "DROP OUT", "RANDOM", "SAMPLE"};
 
             for (int i = 0; i < n; ++i) {
                 ChainStep& cs = proj.songChain[static_cast<size_t>(i)];
@@ -1434,7 +1435,7 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
     } else if (page_ == 1) {
         // FILL: kind, when, length, level, a picture of where it lands
         const auto& brkList = AllDrumBreaks();
-        auto kindText = [&](const FillRule& r) { std::string t = FillKindName(r.kind); if (r.kind == FillKind::Break && r.breakIndex > 0) t = brkList[std::min<size_t>(r.breakIndex - 1, brkList.size() - 1)].name; return t; };
+        auto kindText = [&](const FillRule& r) { std::string t = FillKindName(r.kind); if (r.kind == FillKind::Break && r.breakIndex > 0) t = brkList[std::min<size_t>(r.breakIndex - 1, brkList.size() - 1)].name; if (r.kind == FillKind::Sample && r.sample[0]) t = "SAMPLE: " + r.Sample(); return t; };
         std::string cur = cs.fillMode == FillMode::Off ? "NO FILL" : (cs.fillMode == FillMode::Own ? "OWN: " + kindText(cs.fill) : "SCENE'S: " + kindText(pat.fill));
         if (cs.fillMode == FillMode::Scene && pat.fill.when == FillWhen::Off) cur = "NO FILL (scene)";
         ImGui::SetNextItemWidth(160);
@@ -1499,6 +1500,16 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
                 dl->AddRectFilled(ImVec2(b.x - 2.0f - w, a.y + 3.0f), ImVec2(b.x - 2.0f, b.y - 3.0f), WithAlpha(colors::kFill, 120), 2.0f);
                 dl->AddLine(ImVec2(b.x - 2.0f - w, a.y + 3.0f), ImVec2(b.x - 2.0f - w, b.y - 3.0f), colors::kFill, 2.0f);
             }
+        }
+        // C4b: a SAMPLE fill gets a second row: which sample, how it fits, whether the drums go on
+        if (cs.fillMode == FillMode::Own && cs.fill.kind == FillKind::Sample) {
+            at(px, kRow + fh + 16.0f);   // under the LEVEL caption
+            FillRule nr = cs.fill;
+            if (FillSampleControls(app, nr, i, 250.0f)) { app.PushSoundUndo(); cs.fill = NormalizeFill(nr); refresh(); }
+        } else if (cs.fillMode == FillMode::Scene && pat.fill.when != FillWhen::Off && pat.fill.kind == FillKind::Sample) {
+            at(px, kRow + fh + 16.0f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled("SAMPLE: %s  (the scene's fill: change it in the scene, or choose an own fill here)", pat.fill.sample[0] ? pat.fill.Sample().c_str() : "none chosen");
         }
     } else if (page_ == 2) {
         // TRANSITION: a riser / impact on the border of two bricks. IN = the one that leads into this brick (from the brick before it),

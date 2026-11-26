@@ -46,6 +46,7 @@ std::string SampleBrowser::Who(AppState& app) const {
     else if (target_ == AppState::LibTarget::Sampler)
         who = sampleTarget_ < 0 ? "SAMPLER" : sampleTarget_ >= kNumSynthTracks ? "CHORD"
             : TrackDisplayName(app.project.patterns[static_cast<size_t>(scene_)].tracks[static_cast<size_t>(std::clamp(kNumDrumTracks + sampleTarget_, 0, kNumTracks - 1))]);
+    else if (target_ == AppState::LibTarget::Fill) who = brick_ >= 0 ? "FILL OF BRICK " + std::to_string(brick_ + 1) : "FILL OF SCENE " + std::to_string(-brick_);
     else who = "TRANSITION BEFORE BRICK " + std::to_string(std::max(0, brick_) + 1);
     return Upper(who);
 }
@@ -83,7 +84,7 @@ void SampleBrowser::Open(AppState& app, AppState::LibTarget target, int brick) {
     src_ = it != lastSrc_.end() ? it->second : Source::Project;
     if (src_ == Source::Kits && target != AppState::LibTarget::Drum) src_ = Source::Project;
     if (src_ == Source::BuiltIn && target != AppState::LibTarget::Transition) src_ = Source::Project;
-    if (src_ == Source::Project && target == AppState::LibTarget::Sampler && app.SampleNames().empty()) src_ = Source::Library;
+    if (src_ == Source::Project && (target == AppState::LibTarget::Sampler || target == AppState::LibTarget::Fill) && app.SampleNames().empty()) src_ = Source::Library;
     type_ = -1;
     if (target == AppState::LibTarget::Drum) {
         static const int kSlotCat[6] = {0, 1, 2, 3, 3, 4};   // KICK SNARE CLAP HAT HAT PERC
@@ -131,7 +132,7 @@ void SampleBrowser::ScanKits(AppState& app) {
 void SampleBrowser::Rebuild(AppState& app) {
     bool collecting = false;   // FAVORITES / RECENT look through every copy, not only IN USE
     auto project = [&](std::vector<Item>& out) {
-        if (target_ == AppState::LibTarget::Sampler) {
+        if (SampleFiles()) {
             const std::map<std::string, std::string> usage = SampleUsage(app);   // C4b (g): IN USE = plays somewhere; ALL COPIED = every copy
             inUseCount_ = copiedCount_ = 0;
             for (const std::string& nm : app.SampleNames()) {
@@ -240,7 +241,7 @@ void SampleBrowser::Hear(AppState& app, const Item& it) {
     switch (it.src) {
         case Source::Library: app.AuditionLibrary(it.key); return;
         case Source::Project:
-            if (target_ == AppState::LibTarget::Sampler) {
+            if (SampleFiles()) {
                 const SamplePtr s = app.SampleFor(it.key);
                 if (s) play(s); else app.SetStatus("READING " + it.name + " ...");
             } else if (target_ == AppState::LibTarget::Drum) {
@@ -304,6 +305,11 @@ void SampleBrowser::Take(AppState& app, const Item& it) {
         app.AssignSampleToSlot(it.src == Source::Library ? app.LibraryPath(it.key) : it.key);
         return;
     }
+    if (target_ == AppState::LibTarget::Fill) {   // C4b: the SAMPLE fill of a brick / a scene (a library file is copied into samples/ first)
+        if (it.src == Source::Project) app.SetFillSample(brick_, it.key);
+        else app.AssignSampleToFill(it.src == Source::Library ? app.LibraryPath(it.key) : it.key, brick_);
+        return;
+    }
     // the sampler, or a synth / the chord on ENGINE > SAMPLE
     if (it.src == Source::Project) { app.SetSamplerFile(it.key, sampleTarget_); return; }
     const std::string path = it.src == Source::Library ? app.LibraryPath(it.key) : it.key;
@@ -317,7 +323,7 @@ void SampleBrowser::Take(AppState& app, const Item& it) {
 void SampleBrowser::DrawWave(AppState& app, const Item& it, float w, float h) {
     const float* data = nullptr; int frames = 0, ch = 1;
     SamplePtr s; std::shared_ptr<const SampleBuffer> b;
-    if (it.src == Source::Project && target_ == AppState::LibTarget::Sampler) s = app.SampleFor(it.key);
+    if (it.src == Source::Project && SampleFiles()) s = app.SampleFor(it.key);
     else if (it.src == Source::Project && target_ == AppState::LibTarget::Drum) {
         const DrumKit::BankPtr bank = app.KitBank(app.TrackKitFolder(scene_, drumTrack_));
         if (bank && it.variant >= 0 && it.variant < static_cast<int>(bank->variants[static_cast<size_t>(drumTrack_)].size())) b = bank->variants[static_cast<size_t>(drumTrack_)][static_cast<size_t>(it.variant)];
@@ -378,7 +384,7 @@ void SampleBrowser::Draw(AppState& app) {
 
     // ---- top bar: title, search, LIST / GRID, close ----
     ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "SAMPLE FOR: %s", who.c_str());
-    if (target_ != AppState::LibTarget::Transition) { ImGui::SameLine(0, 6); ImGui::TextDisabled("(scene %d)", scene_ + 1); }
+    if (target_ != AppState::LibTarget::Transition && target_ != AppState::LibTarget::Fill) { ImGui::SameLine(0, 6); ImGui::TextDisabled("(scene %d)", scene_ + 1); }
     ImGui::SameLine(0, 18);
     if (focusSearch_) { ImGui::SetKeyboardFocusHere(); focusSearch_ = false; }
     ImGui::SetNextItemWidth(260.0f);
@@ -397,7 +403,7 @@ void SampleBrowser::Draw(AppState& app) {
     if (ImGui::Button("X##sbClose", ImVec2(22, 0))) keepOpen = false;
     if (ImGui::IsItemHovered()) Hint("Close without a change (Esc)");
 
-    const bool copies = src_ == Source::Project && target_ == AppState::LibTarget::Sampler;
+    const bool copies = src_ == Source::Project && SampleFiles();
     if (copies) {   // ---- THIS PROJECT (sampler / synth): IN USE / ALL COPIED (mockup section 2a) ----
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("SHOW");

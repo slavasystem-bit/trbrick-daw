@@ -3231,6 +3231,7 @@ struct AppState {
     std::array<std::string, kNumPatterns> sampleSyncedFile_{};
     std::array<std::array<std::string, kNumSynthTracks + 1>, kNumPatterns> synthSampleSyncedFile_{};   // v44.53: the SAMPLE engines of the synths (0..2) and the chord (3), as last handed over
     std::string sampleSyncedDir_;
+    std::vector<std::string> fillSampleSynced_;   // C4b: the SAMPLE fill files as last handed over
     bool samplesDirty_ = true;
     std::vector<std::string> sampleNamesCache_;
     bool sampleNamesValid_ = false;
@@ -3280,6 +3281,8 @@ struct AppState {
             for (int k = 0; k <= kNumSynthTracks && !changed; ++k)
                 if (SynthSampleWanted(i, k) != synthSampleSyncedFile_[static_cast<size_t>(i)][static_cast<size_t>(k)]) changed = true;
         }
+        const std::vector<std::string> fillWanted = FillSamplesWanted();   // C4b
+        if (fillWanted != fillSampleSynced_) changed = true;
         if (!changed) return;
         if (force || !loader.Running())   // retry what was missing (N1: with the loader only on a forced sync, or a missing file would be read again every frame)
             for (auto it = sampleCache_.begin(); it != sampleCache_.end();) it = it->second ? std::next(it) : sampleCache_.erase(it);
@@ -3289,6 +3292,7 @@ struct AppState {
                 if (SlotInUse(i)) { const std::string& f = project.patterns[static_cast<size_t>(i)].samplerPatch.file; if (!SampleFor(f) && SamplePending(f)) waiting = true; }
                 for (int k = 0; k <= kNumSynthTracks; ++k) { const std::string f = SynthSampleWanted(i, k); if (!SampleFor(f) && SamplePending(f)) waiting = true; }
             }
+            for (const std::string& f : fillWanted) if (!SampleFor(f) && SamplePending(f)) waiting = true;
             if (waiting) { samplesDirty_ = true; return; }
         }
         std::array<SamplePtr, kNumPatterns> ptrs{};
@@ -3304,6 +3308,26 @@ struct AppState {
         sampleSyncedDir_ = dir; samplesDirty_ = false;
         sequencer.SetSceneSynthSamples(sptrs);
         sequencer.SetSceneSamples(ptrs);
+        std::array<Sequencer::FillSampleEntry, Sequencer::kMaxFillSamples> fills{};   // C4b: the samples of the SAMPLE fills
+        for (size_t j = 0; j < fillWanted.size() && j < fills.size(); ++j) {
+            std::memcpy(fills[j].name, fillWanted[j].data(), std::min<size_t>(fillWanted[j].size(), FillRule::kSampleMax - 1));
+            fills[j].sample = SampleFor(fillWanted[j]);
+        }
+        fillSampleSynced_ = fillWanted;
+        sequencer.SetFillSamples(fills);
+    }
+    // C4b: the files the SAMPLE fills can play: the fill rule of every scene in use and the own fill rule of every chain step
+    // (sorted, no repeats, at most Sequencer::kMaxFillSamples).
+    std::vector<std::string> FillSamplesWanted() const {
+        std::vector<std::string> v;
+        auto add = [&v](const FillRule& r) { if (r.kind == FillKind::Sample && r.when != FillWhen::Off && r.sample[0]) v.push_back(r.Sample()); };
+        for (int i = 0; i < kNumPatterns; ++i) if (SlotInUse(i)) add(project.patterns[static_cast<size_t>(i)].fill);
+        const int n = std::clamp(project.songChainLength, 0, kMaxChainSteps);
+        for (int i = 0; i < n; ++i) { const ChainStep& cs = project.songChain[static_cast<size_t>(i)]; if (cs.fillMode == FillMode::Own) add(cs.fill); }
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+        if (v.size() > static_cast<size_t>(Sequencer::kMaxFillSamples)) v.resize(static_cast<size_t>(Sequencer::kMaxFillSamples));
+        return v;
     }
     // v44.53: the file the SAMPLE engine of synth slot k (0..2, 3 = the chord) of scene i needs; empty when the scene is not in use or the slot is not on the SAMPLE engine.
     std::string SynthSampleWanted(int i, int k) const {
@@ -3321,8 +3345,11 @@ struct AppState {
             if (!pt.samplerPatch.file.empty()) out.insert(pt.samplerPatch.file);
             for (const SynthPatch& sp : pt.synthPatches) patch(sp);
             patch(pt.chordPatch);
+            if (pt.fill.sample[0]) out.insert(pt.fill.Sample());   // C4b: the SAMPLE fill of the scene
         };
+        auto chain = [&](const std::array<ChainStep, kMaxChainSteps>& ch) { for (const ChainStep& cs : ch) if (cs.fill.sample[0]) out.insert(cs.fill.Sample()); };
         for (const Pattern& pt : project.patterns) pattern(pt);
+        chain(project.songChain);
         for (const SynthPatch& sp : project.baseSynthPatches) patch(sp);   // the sound a loaded file started with
         patch(project.baseChordPatch);
         pattern(patternClipboard);   // a copied scene can be pasted back
@@ -3331,6 +3358,7 @@ struct AppState {
             for (const auto& b : e.bulk) pattern(b.second);
             for (const SynthPatch& sp : e.synthPatches) patch(sp);
             patch(e.chordPatch);
+            chain(e.songChain);
         }
         return out;
     }
@@ -3598,10 +3626,53 @@ struct AppState {
         if (loader.Running()) { SetStatus("READING " + std::filesystem::path(wavPath).filename().string() + "..."); return true; }
         return res->ok;   // no loader: both parts have run already
     }
+    // ---- C4b: the SAMPLE fill ----------------------------------------------------------------------------------------------------
+    // `where` >= 0: the own fill of that brick; < 0: the fill of scene (-1 - where). Null when out of range.
+    FillRule* FillRuleAt(int where) {
+        if (where >= 0) return where < std::clamp(project.songChainLength, 0, kMaxChainSteps) ? &project.songChain[static_cast<size_t>(where)].fill : nullptr;
+        const int sc = -1 - where;
+        return sc >= 0 && sc < kNumSlotsTotal ? &project.patterns[static_cast<size_t>(sc)].fill : nullptr;
+    }
+    // A file already in samples/ becomes the sample of that fill (its kind turns to SAMPLE; one Undo step).
+    bool SetFillSample(int where, const std::string& file) {
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        FillRule* r = FillRuleAt(where);
+        if (!r || file.empty() || file.size() >= static_cast<size_t>(FillRule::kSampleMax) || file.find('/') != std::string::npos) { SetStatus("THAT SAMPLE CANNOT BE USED FOR A FILL"); return false; }
+        if (where >= 0) PushSoundUndo(); else PushUndoForScene(-1 - where);
+        r = FillRuleAt(where);
+        if (where >= 0) { ChainStep& cs = project.songChain[static_cast<size_t>(where)]; if (cs.fillMode != FillMode::Own) { cs.fillMode = FillMode::Own; if (r->when == FillWhen::Off) r->when = FillWhen::LastLoop; } }
+        else if (r->when == FillWhen::Off) r->when = FillWhen::LastLoop;
+        r->kind = FillKind::Sample; r->SetSample(file);
+        *r = NormalizeFill(*r);
+        engine.AuditionStop();
+        SyncSceneSamples(true);
+        sequencer.RefreshArrangement();
+        SetStatus("FILL SAMPLE: " + file);
+        return true;
+    }
+    // A file from the library (or Finder) is copied into samples/ first, on the loader thread, then set as above.
+    bool AssignSampleToFill(const std::string& wavPath, int where) {
+        auto res = std::make_shared<SamplerCopy>();
+        const std::string dir = SamplesDir();
+        const int rate = engine.SampleRate();
+        const unsigned gen = docGen_;
+        loader.Post([res, wavPath, dir, rate] { *res = CopySamplerFile(wavPath, dir, rate); }, [this, res, dir, where, gen] {
+            if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
+            if (gen != docGen_ || dir != SamplesDir()) { SetStatus("FILL NOT SET: ANOTHER PROJECT IS OPEN NOW"); return; }
+            {
+                std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+                if (res->sound) sampleCache_[dir + "/" + res->name] = res->sound;
+                sampleNamesValid_ = false; samplesDirty_ = true;
+            }
+            SetFillSample(where, res->name);
+        });
+        if (loader.Running()) { SetStatus("READING " + std::filesystem::path(wavPath).filename().string() + "..."); return true; }
+        return res->ok;
+    }
     // ---- SAMPLE LIBRARY (v44.51) -----------------------------------------------------------------------------------------------
     // The user's own folder of samples (see core/SampleLibrary.h). Only listed and auditioned here; a chosen file is COPIED into the
     // project (the sampler's samples/, or the kit of the drum scene) by the same code that handles a dropped WAV.
-    enum class LibTarget { None, Drum, Sampler, Transition };
+    enum class LibTarget { None, Drum, Sampler, Transition, Fill };   // Fill (C4b): libraryBrowserBrick = the brick, or -1 - scene for a scene's fill
     LibTarget libraryBrowserRequest = LibTarget::None;   // set by a button, taken by BottomPanel::DrawBrowsers
     int libraryBrowserBrick = -1;                        // Transition: the brick whose transition is chosen
     std::vector<LibSample> libSamples_;

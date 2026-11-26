@@ -106,6 +106,15 @@ void AudioEngine::AuditionSample(const SamplePtr& sample, float gain, double spe
     std::lock_guard<std::mutex> lock(mutex_);
     audSample_ = sample; audPos_ = 0.0; audGain_ = std::clamp(gain, 0.0f, 1.0f); audFade_ = 0; audSpeed_ = std::clamp(speed, 0.25, 4.0);
 }
+void AudioEngine::FillSampleStart(const SamplePtr& sample, double startFrame, double rate, float gain, int lengthFrames) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!sample || sample->frames() < 2 || lengthFrames <= 0) { if (fillSample_) fillFade_ = std::max(1, sampleRate_ / 100); return; }
+    fillSample_ = sample; fillPos_ = std::max(0.0, startFrame); fillRate_ = std::clamp(rate, 0.05, 16.0);
+    fillGain_ = std::clamp(gain, 0.0f, 2.0f); fillLeft_ = lengthFrames; fillFade_ = 0;
+    fillEndFade_ = std::max(1, std::min(sampleRate_ / 200, lengthFrames / 2));   // the last 5 ms ramp down to silence
+}
+void AudioEngine::FillSampleStop() { std::lock_guard<std::mutex> lock(mutex_); if (fillSample_ && fillFade_ == 0) fillFade_ = std::max(1, sampleRate_ / 100); }
+
 void AudioEngine::AuditionStop() { std::lock_guard<std::mutex> lock(mutex_); if (audSample_) audFade_ = std::max(1, sampleRate_ / 100); }
 
 void AudioEngine::SamplerFadeOut() { std::lock_guard<std::mutex> lock(mutex_); sampler_.FadeOutAll(sampleRate_); }
@@ -328,6 +337,32 @@ void AudioEngine::Render(float* out, int numFrames, double samplesPerStep) {
     // master volume/filter/repeater/drive below exactly like everything
     // else (no separate riser volume knob to keep in sync).
     risers_.Render(out, numFrames, sampleRate_);
+
+    // C4b: the SAMPLE fill voice. Silent exactly at the end of its window: the last few ms before it fade to zero (AS IS cuts a
+    // longer sample there; STRETCH reaches the end of the sample there anyway), a Stop fades in 10 ms, and a sample that ends early
+    // gets the same short tail as the audition.
+    if (fillSample_) {
+        const SampleData& sb = *fillSample_;
+        const int ch = std::max(1, sb.channels), frames = sb.frames();
+        const int endFade = fillEndFade_;
+        const int stopFade = std::max(1, sampleRate_ / 100);
+        const int tail = std::max(1, static_cast<int>(sampleRate_ / 200 * fillRate_));
+        for (int i = 0; i < numFrames; ++i) {
+            const int f = static_cast<int>(fillPos_);
+            if (f >= frames - 1 || fillLeft_ <= 0) { fillSample_.reset(); break; }
+            float g = fillGain_;
+            if (fillLeft_ < endFade) g *= static_cast<float>(fillLeft_) / static_cast<float>(endFade);
+            if (fillFade_ > 0) { g *= static_cast<float>(fillFade_) / static_cast<float>(stopFade); if (--fillFade_ == 0) { fillSample_.reset(); break; } }
+            if (frames - f < tail) g *= static_cast<float>(frames - f) / static_cast<float>(tail);
+            const float fr = static_cast<float>(fillPos_ - f);   // linear interpolation between two source frames
+            const size_t a = static_cast<size_t>(f) * static_cast<size_t>(ch), b = a + static_cast<size_t>(ch);
+            const float l = sb.data[a] + (sb.data[b] - sb.data[a]) * fr;
+            const float rr = ch > 1 ? sb.data[a + 1] + (sb.data[b + 1] - sb.data[a + 1]) * fr : l;
+            out[static_cast<size_t>(i) * 2] += l * g; out[static_cast<size_t>(i) * 2 + 1] += rr * g;
+            fillPos_ += fillRate_;
+            --fillLeft_;
+        }
+    }
 
     // v44.51: the library audition (one voice, the sample's own speed at the engine rate, a short ramp when stopped or at the end)
     if (audSample_) {
