@@ -935,6 +935,7 @@ int main(int argc, char** argv) {
     app.engine.Multitrack().Shutdown();
     app.loader.Stop();
     app.FlushSampleTags();                 // a sample-tags write still waiting in the loader was dropped by Stop(): write it now
+    app.FlushSampleSets();                 // the same for the performance sets of the SAMPLES browser
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();

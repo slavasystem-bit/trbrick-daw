@@ -7025,6 +7025,58 @@ int main(int argc, char** argv) {
                       && src.find("n > 0 && !fieldTyping") != std::string::npos && src.find("!trashBusy && !fieldTyping") != std::string::npos
                       && src.find("bpmTyping_ = true") != std::string::npos, "c4b: typing a tempo into a BPM field keeps the keys in that field");
             }
+            {   // C4b (v3): performance sets (Library/Favorites/sample_sets.txt)
+                namespace ss = samplesets;
+                SampleSetList l{{"Set 26 Nov", {"Solid Sounds/Drum Loops/funk_95.wav", "kit:kits/909/kick_2.wav", "[KB] Loops/x.wav"}}, {"Gig", {}}};
+                const std::string txt = ss::SerializeStore(l);
+                check(txt.rfind(ss::kStoreHeader, 0) == 0 && txt.find("[Set 26 Nov]\n- Solid Sounds/Drum Loops/funk_95.wav\n- kit:kits/909/kick_2.wav\n- [KB] Loops/x.wav\n[Gig]\n") != std::string::npos,
+                      "c4b v3: a set is written as [name] and one '- key' line per file (a folder in brackets is fine)");
+                int bad = -1;
+                check(ss::ParseStore(txt, &bad) == l && bad == 0, "c4b v3: sets read back exactly, in order");
+                const std::string damaged = "- orphan.wav\n[A]\n- a.wav\n- a.wav\nno dash\n[A]\n- swallowed.wav\n[]\n- gone.wav\n[B\n[  C  ]\r\n- c.wav\r\n- t\tab.wav\n- cr\rinside.wav\n";
+                const SampleSetList d = ss::ParseStore(damaged, &bad);
+                check(d.size() == 2 && d[0].name == "A" && d[0].keys == std::vector<std::string>{"a.wav"} && d[1].name == "C" && d[1].keys == std::vector<std::string>{"c.wav"} && bad == 10,
+                      "c4b v3: a damaged file: orphans, repeats, a second set of the same name, bad headers, tabs and inner CRs are skipped, the rest is kept");
+                check(ss::ParseStore("").empty() && ss::ParseStore("\xff\xfe\0garbage\n").empty(), "c4b v3: an empty or binary file = no sets");
+                check(ss::CleanName("  My [gig]\n ") == "My gig" && ss::CleanName(std::string(60, 'x')).size() == ss::kNameMax
+                      && ss::CleanName(std::string(39, 'x') + "\xD0\x96").size() == 39, "c4b v3: set names are trimmed, lose brackets / breaks, and are cut on a letter boundary");
+                check(ss::FreeName(l, "Gig") == "Gig 2" && ss::FreeName(l, "New") == "New", "c4b v3: a new set never takes a used name");
+                const std::string dir = "selftest_tmp_c4b_sets";
+                std::filesystem::remove_all(dir);
+                {
+                    auto ap = std::make_unique<AppState>(); AppState& a = *ap;
+                    a.sampleSetsPathOverride_ = dir + "/fav/sample_sets.txt";
+                    check(a.NewSampleSet("Gig", "a.wav") < 0 && !a.AddToSampleSet(0, "a.wav"), "c4b v3: nothing changes before the file was read");
+                    check(a.SampleSetsIfReady() && a.SampleSetsIfReady()->empty(), "c4b v3: no file = no sets");
+                    const int g = a.NewSampleSet("Gig", "a.wav"), g2 = a.NewSampleSet("Gig", "");
+                    check(g == 0 && g2 == 1 && (*a.SampleSetsIfReady())[1].name == "Gig 2" && std::filesystem::exists(dir + "/fav/sample_sets.txt"), "c4b v3: NEW SET makes a free name and is written at once");
+                    check(a.AddToSampleSet(0, "kit:k.wav") && !a.AddToSampleSet(0, "a.wav") && !a.AddToSampleSet(0, "t\tab") && !a.AddToSampleSet(5, "x"), "c4b v3: ADD TO SET: no repeats, no bad keys, no missing set");
+                    check(a.RemoveFromSampleSet(0, "a.wav") && !a.RemoveFromSampleSet(0, "a.wav"), "c4b v3: REMOVE FROM a set");
+                    check(!a.RenameSampleSet(1, "Gig") && a.RenameSampleSet(1, "  Friday  ") && a.RenameSampleSet(1, "Friday") && (*a.SampleSetsIfReady())[1].name == "Friday", "c4b v3: rename: trimmed, never onto another set's name");
+                    check(a.DeleteSampleSet(1) && a.SampleSetsIfReady()->size() == 1, "c4b v3: delete a set (only the list)");
+                }
+                {   // read again on the loader thread; a write left in the queue at quit is flushed
+                    auto ap = std::make_unique<AppState>(); AppState& a = *ap;
+                    a.sampleSetsPathOverride_ = dir + "/fav/sample_sets.txt";
+                    a.loader.Start();
+                    check(a.SampleSetsIfReady() == nullptr, "c4b v3: with the loader running the sets are read off the UI thread");
+                    a.loader.FinishAllForTest();
+                    const SampleSetList* sl = a.SampleSetsIfReady();
+                    check(sl && sl->size() == 1 && (*sl)[0].name == "Gig" && (*sl)[0].keys == std::vector<std::string>{"kit:k.wav"}, "c4b v3: sets survive a restart");
+                    a.loader.Post([] { std::this_thread::sleep_for(std::chrono::milliseconds(80)); }, nullptr);
+                    a.AddToSampleSet(0, "late.wav");
+                    a.loader.Stop();
+                    auto fileText = [&] { std::ifstream in(dir + "/fav/sample_sets.txt"); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+                    check(fileText().find("late.wav") == std::string::npos, "c4b v3: (setup) the queued write was dropped by Stop()");
+                    check(a.FlushSampleSets() && fileText().find("- late.wav") != std::string::npos, "c4b v3: the last change is written at quit even when the loader was busy");
+                }
+                std::filesystem::remove_all(dir);
+                std::ifstream in("src/ui_desktop/SampleBrowser.cpp"); const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                std::ifstream mi("src/main.cpp"); const std::string msrc((std::istreambuf_iterator<char>(mi)), std::istreambuf_iterator<char>());
+                check(src.find("menuWant_ || menuOpen_ || setMenuOpen_") != std::string::npos && src.find("##sbRowMenu") != std::string::npos && src.find("case Source::Set:") != std::string::npos
+                      && msrc.find("app.FlushSampleSets();") != std::string::npos
+                      && src.find("if (set_ == setMenu_) { set_ = -1;") != std::string::npos && src.find("a set that is gone (deleted meanwhile)") != std::string::npos, "c4b v3: the menus own the keys, sets are a source, flushed at quit");
+            }
             {   // C4b (v2): the user's own genre / tags, in Library/sample_tags.txt
                 namespace st = sampletags;
                 SampleTagMap m;
