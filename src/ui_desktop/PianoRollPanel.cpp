@@ -125,7 +125,7 @@ std::vector<int> UsedPitches(const Track& t, int trackLen) {
 } // namespace
 
 void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "PIANO ROLL");
 
     int ti = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
     Pattern& pat = app.CurrentPattern();

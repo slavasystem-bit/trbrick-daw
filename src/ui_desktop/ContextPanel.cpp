@@ -1346,7 +1346,7 @@ void ContextPanel::DrawChords(AppState& app, int ti) {
 // ===========================================================================
 
 void ContextPanel::Draw(AppState& app, const DpadKeys& keys) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "INSTRUMENT PANEL");
     int ti = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
     Track& t = app.CurrentPattern().tracks[ti];
 

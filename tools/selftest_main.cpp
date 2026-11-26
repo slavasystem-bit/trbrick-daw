@@ -7230,6 +7230,30 @@ int main(int argc, char** argv) {
         a.sequencer.UnlockForAudio();
         check(!a.sequencer.PatternMutex().HeldByThisThread(), "lock-5: the lock is free afterwards");
     }
+    {   // N1 (LIVE-5): every hold of the scene lock by the screen is timed and named, so the XRUN hint can say which panel held it
+        SceneMutex m;
+        auto hold = [&](const char* who, int ms) { SceneLock lk(m, who); std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
+        check(m.MaxHoldWho()[0] == '\0' && m.HeldTotalUs() == 0, "lock-5 names: nothing held yet");
+        hold("MIXER", 2); hold("CONTEXT", 40); hold("HEADER", 1);   // 40 ms: far above any sleep overshoot of the short ones
+        check(std::string(m.MaxHoldWho()) == "CONTEXT" && m.MaxHoldUs() >= 40000, "lock-5 names: the longest hold is named");
+        check(m.HeldTotalUs() >= 43000, "lock-5 names: all holds add up to the total held time");
+        m.ResetMaxHold();
+        {   // nested: the outer name covers the whole hold (a panel calling into the app, which locks again)
+            SceneLock outer(m, "BRICKS");
+            { SceneLock inner(m, "MENU"); std::this_thread::sleep_for(std::chrono::milliseconds(12)); }
+            { std::lock_guard<SceneMutex> plain(m); }
+        }
+        check(std::string(m.MaxHoldWho()) == "BRICKS" && m.MaxHoldUs() >= 12000, "lock-5 names: a nested lock keeps the outer name");
+        m.ResetMaxHold();   // sleeps overshoot on busy CI machines: compare the unnamed hold only with itself
+        { std::lock_guard<SceneMutex> plain(m); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        check(std::string(m.MaxHoldWho()) == "OTHER", "lock-5 names: a hold without a name is called OTHER");
+        m.ResetMaxHold();
+        check(m.MaxHoldUs() == 0 && m.MaxHoldWho()[0] == '\0', "lock-5 names: a click on the readout resets the longest hold and its name");
+        const unsigned long long before = m.HeldTotalUs();
+        std::thread audio([&] { m.MarkAudioThread(); SceneLock lk(m, "AUDIO?"); std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
+        audio.join();
+        check(m.MaxHoldUs() == 0 && m.HeldTotalUs() == before, "lock-5 names: the audio thread's own render is not counted as the screen holding the sound");
+    }
     {   // N1 (LIVE-5 / LIVE-6): Settings > Audio rules
         using namespace t8::audiosettings;
         check(ValidBuffer(256) == 256 && ValidBuffer(512) == 512 && ValidBuffer(128) == 128, "audio-set: the three offered buffer sizes are kept");

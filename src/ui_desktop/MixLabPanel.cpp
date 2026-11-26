@@ -100,7 +100,7 @@ void MixLabPanel::ShowSpot(AppState& app, int spot) {
 }
 
 void MixLabPanel::ApplySnaps(AppState& app, bool after) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "MIX LAB");
     const int sc = std::clamp(lab_.Scene(), 0, kNumPatterns - 1);
     Pattern& pat = app.project.patterns[static_cast<size_t>(sc)];
     auto& tr = lab_.TriedFixes();
@@ -128,7 +128,7 @@ void MixLabPanel::TryFix(AppState& app, int spot) {
     if (tr.empty()) app.PushUndoForScene(sc);   // one undo step for everything tried (and kept)
     chan_ = sp.fix.track;
     {
-        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+        SceneLock lock(app.sequencer.PatternMutex(), "MIX LAB");
         Pattern& pat = app.project.patterns[static_cast<size_t>(sc)];
         Track& t = pat.tracks[static_cast<size_t>(sp.fix.track)];
         MixLab::Tried e; e.track = sp.fix.track; e.spot = spot; e.before = MixLab::Snap::Of(t);
@@ -156,7 +156,7 @@ void MixLabPanel::EditStrip(AppState& app, int t, const std::function<void(Track
     ReleaseSolo(app);
     const int sc = std::clamp(lab_.Scene(), 0, kNumPatterns - 1);
     auto& tr = lab_.TriedFixes();
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "MIX LAB");
     Pattern& pat = app.project.patterns[static_cast<size_t>(sc)];
     Track& tk = pat.tracks[static_cast<size_t>(t)];
     MixLab::Tried* e = nullptr;

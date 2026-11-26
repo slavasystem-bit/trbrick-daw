@@ -49,7 +49,7 @@ inline void DrawChordEditor(AppState& app) {
     using namespace chordeditor_detail;
     ChordEditorState& st = ChordEditor();
     if (!st.open) return;
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD EDITOR");
     LabSetSpelling(app.project.randomizerKeyRoot, app.project.randomizerScale);   // v44.46: the same chord is spelled the same way everywhere
     Pattern& pat = app.CurrentPattern();
     Track& tr = app.StepTrack(pat, kChordTrackIndex);

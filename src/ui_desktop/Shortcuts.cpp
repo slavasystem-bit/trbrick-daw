@@ -70,12 +70,12 @@ void HandleShortcuts(AppState& app) {
         return;
     }
     if (cmd && (ImGui::IsKeyPressed(ImGuiKey_Y, false) || (shift && ImGui::IsKeyPressed(ImGuiKey_Z, false)))) {   // v44.15: Shift+Cmd+Z (Mac) / Cmd+Y
-        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+        SceneLock lock(app.sequencer.PatternMutex(), "KEYS");
         app.SetStatus(app.Redo() ? app.lastUndoLabel : "NOTHING TO REDO");
         return;
     }
     if (cmd && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+        SceneLock lock(app.sequencer.PatternMutex(), "KEYS");
         app.SetStatus(app.Undo() ? app.lastUndoLabel : "NOTHING TO UNDO");
         return;
     }
@@ -93,14 +93,14 @@ void HandleShortcuts(AppState& app) {
         return;
     }
     if (cmd && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
-        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+        SceneLock lock(app.sequencer.PatternMutex(), "KEYS");
         if (shift) app.SetStatus(app.PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
         else app.PasteTrack(std::clamp(app.seqCursorTrack, 0, kNumTracks - 1));
         return;
     }
     if (!cmd && (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, false))) {
         const int dir = ImGui::IsKeyPressed(ImGuiKey_RightBracket, false) ? 1 : -1;
-        std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+        SceneLock lock(app.sequencer.PatternMutex(), "KEYS");
         StepScene(app, dir, false);
         app.SetStatus(app.activeTab == 1 && app.project.songChainLength > 0 ? "BRICK " + std::to_string(app.selBrick + 1) : "SCENE " + std::to_string(app.project.currentPattern + 1));
         return;

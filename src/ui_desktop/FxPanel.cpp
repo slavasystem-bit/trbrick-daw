@@ -12,7 +12,7 @@
 namespace t8::desktop {
 
 void FxPanel::Draw(AppState& app) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "FX");
     FxSettings& fx = app.project.fx;
     const ImVec2 kKnobSize(58.0f, 58.0f);
 
