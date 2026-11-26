@@ -40,6 +40,7 @@ public:
         double bpm = 0.0;
         std::string genre;    // library: guessed from the folder and file names (HOUSE ... GARAGE), or empty
         unsigned tags = 0;    // library: bit i = kSampleTags[i]
+        bool ownTags = false; // library: genre / tags are the user's own (Library/sample_tags.txt), not the guess
         int riser = -1;       // transitions: the riser index
         int variant = -1;     // drums, THIS PROJECT: the variant of this drum in the kit
         std::string favKey;   // stable key for favourites and recent ("lib:<rel>", "kit:<path>", "prj:<name>", "riser:<name>")
@@ -159,6 +160,9 @@ private:
     unsigned tagMask_ = 0;                     // every chosen tag must be on the file
     int bpmLo_ = 0, bpmHi_ = 0;                // BPM from / to (0 = open); a file with no tempo is hidden while either is set
     std::map<std::string, std::pair<std::string, unsigned>> guess_;   // library rel -> guessed genre / tags (guessed once per file)
+    const std::pair<std::string, unsigned>& Guess(const std::string& rel);
+    std::string selKeep_;                         // favKey to select again after the next rebuild (an edit can move the row)
+    std::string tagsWant_, tagsKey_, tagsName_;   // C4b v2: GENRE / TAGS of one library file (right-click / the SELECTED button); key = rel
     char search_[48] = "";
     bool list_ = true;                         // LIST / GRID
     int sortCol_ = 0; bool sortDesc_ = false;

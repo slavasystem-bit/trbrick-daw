@@ -7025,6 +7025,81 @@ int main(int argc, char** argv) {
                       && src.find("n > 0 && !fieldTyping") != std::string::npos && src.find("!trashBusy && !fieldTyping") != std::string::npos
                       && src.find("bpmTyping_ = true") != std::string::npos, "c4b: typing a tempo into a BPM field keeps the keys in that field");
             }
+            {   // C4b (v2): the user's own genre / tags, in Library/sample_tags.txt
+                namespace st = sampletags;
+                SampleTagMap m;
+                m["Drum Loops/BL_HipHop_95bpm.wav"] = SampleTagOverride{"HOUSE", (1u << 0) | (1u << 4)};
+                m["kick.wav"] = SampleTagOverride{"", 0u};
+                const std::string txt = st::SerializeStore(m);
+                check(txt.rfind(st::kStoreHeader, 0) == 0 && txt.find("Drum Loops/BL_HipHop_95bpm.wav\tHOUSE\tDUSTY,LIVE\n") != std::string::npos
+                      && txt.find("kick.wav\t\t\n") != std::string::npos, "c4b v2: own tags are written one line per file (path, genre, tags)");
+                int bad = -1;
+                check(st::ParseStore(txt, &bad) == m && bad == 0, "c4b v2: own tags read back exactly");
+                const std::string damaged = "# TR-Brick sample tags 1\r\nok.wav\tTECHNO\tDARK\r\nno tabs here\n\tHOUSE\t\n../up.wav\tHOUSE\t\n/abs.wav\tHOUSE\t\n"
+                                            "a/../b.wav\tHOUSE\t\nnew.wav\tJAZZ\tDARK,SHINY\n..hidden/x.wav\tDISCO\t\n";
+                const SampleTagMap d = st::ParseStore(damaged, &bad);
+                check(d.size() == 3 && d.count("ok.wav") && d.at("ok.wav").genre == "TECHNO" && d.at("ok.wav").tags == (1u << 2)
+                      && d.count("new.wav") && d.at("new.wav").genre.empty() && d.at("new.wav").tags == (1u << 2) && d.count("..hidden/x.wav") && bad == 7,
+                      "c4b v2: a damaged or newer file: bad lines, unknown genres / tags and paths out of the library are skipped, the rest is kept");
+                check(st::ParseStore("").empty() && st::ParseStore("\xff\xfe garbage\0\n").empty(), "c4b v2: an empty or binary file = no own tags");
+                const std::string dir = "selftest_tmp_c4b_tags";
+                std::filesystem::remove_all(dir);
+                {   // without the loader (synchronous), and a missing file
+                    auto ap = std::make_unique<AppState>(); AppState& a = *ap;
+                    a.sampleTagsPathOverride_ = dir + "/lib/sample_tags.txt";
+                    check(!a.SetSampleTagOverride("x.wav", &m["kick.wav"]), "c4b v2: nothing is written before the file was read");
+                    const SampleTagMap* own = a.SampleTagsIfReady();
+                    check(own && own->empty(), "c4b v2: no file yet = no own tags");
+                    SampleTagOverride o{"DISCO", 1u << 1};
+                    check(a.SetSampleTagOverride("Loops/a.wav", &o) && std::filesystem::exists(dir + "/lib/sample_tags.txt"), "c4b v2: a change is written at once (the folder is made)");
+                    check(!a.SetSampleTagOverride("bad\tname.wav", &o) && !a.SetSampleTagOverride("", &o), "c4b v2: a path with a tab or an empty path is refused");
+                }
+                {   // read again on the loader thread; back to the guess removes the line
+                    auto ap = std::make_unique<AppState>(); AppState& a = *ap;
+                    a.sampleTagsPathOverride_ = dir + "/lib/sample_tags.txt";
+                    a.loader.Start();
+                    check(a.SampleTagsIfReady() == nullptr, "c4b v2: with the loader running the file is read off the UI thread");
+                    a.loader.FinishAllForTest();
+                    const SampleTagMap* own = a.SampleTagsIfReady();
+                    check(own && own->size() == 1 && own->count("Loops/a.wav") && own->at("Loops/a.wav") == (SampleTagOverride{"DISCO", 1u << 1}), "c4b v2: own tags survive a restart");
+                    SampleTagOverride o2{"", 0u};
+                    a.SetSampleTagOverride("b.wav", &o2);
+                    a.SetSampleTagOverride("Loops/a.wav", nullptr);
+                    a.loader.FinishAllForTest();
+                    a.loader.Stop();
+                    std::ifstream in(dir + "/lib/sample_tags.txt"); const std::string t((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    check(t.find("Loops/a.wav") == std::string::npos && t.find("b.wav\t\t") != std::string::npos, "c4b v2: changes are written in order; BACK TO THE GUESS removes the line");
+                }
+                {   // review of PR 35: a write still queued when the loader stops (quit) is written by FlushSampleTags
+                    auto ap = std::make_unique<AppState>(); AppState& a = *ap;
+                    a.sampleTagsPathOverride_ = dir + "/lib2/sample_tags.txt";
+                    a.SampleTagsIfReady();   // no loader yet: read at once (no file)
+                    a.loader.Start();
+                    a.loader.Post([] { std::this_thread::sleep_for(std::chrono::milliseconds(80)); }, nullptr);   // the loader is busy (a scan)
+                    SampleTagOverride o{"GARAGE", 1u << 3};
+                    a.SetSampleTagOverride("late.wav", &o);
+                    a.loader.Stop();   // as at quit: the queued write is dropped
+                    auto fileText = [&] { std::ifstream in(dir + "/lib2/sample_tags.txt"); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+                    check(fileText().find("late.wav") == std::string::npos, "c4b v2: (setup) the queued write was dropped by Stop()");
+                    check(a.FlushSampleTags() && fileText().find("late.wav\tGARAGE\tLO-FI") != std::string::npos, "c4b v2: the last change is written at quit even when the loader was busy");
+                    const auto t0 = std::filesystem::last_write_time(dir + "/lib2/sample_tags.txt");
+                    check(a.FlushSampleTags() && std::filesystem::last_write_time(dir + "/lib2/sample_tags.txt") == t0, "c4b v2: nothing to flush = no write");
+                }
+                {   // the folder cannot be made: the user is told, the browser goes on
+                    std::filesystem::create_directories(dir); { std::ofstream f(dir + "/file"); f << "x"; }
+                    auto ap = std::make_unique<AppState>(); AppState& a = *ap;
+                    a.sampleTagsPathOverride_ = dir + "/file/sub/sample_tags.txt";
+                    a.SampleTagsIfReady();
+                    SampleTagOverride o{"DNB", 0u};
+                    a.SetSampleTagOverride("z.wav", &o);
+                    check(a.statusMessage.find("CANNOT SAVE THE SAMPLE TAGS") != std::string::npos && a.SampleTagsIfReady()->count("z.wav"), "c4b v2: a failed save is shown; the choice stays for this session");
+                }
+                std::filesystem::remove_all(dir);
+                std::ifstream in("src/ui_desktop/SampleBrowser.cpp"); const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                check(src.find("const bool tagsBusy") != std::string::npos && src.find("|| tagsBusy") != std::string::npos && src.find("it.ownTags = true") != std::string::npos
+                      && src.find("selKeep_ = LibFavKey(tagsKey_)") != std::string::npos && src.find("favKey == selKeep_") != std::string::npos,
+                      "c4b v2: the browser shows own tags, the GENRE / TAGS window owns the keys, the edited file stays selected");
+            }
         }
         {   // C4b (g): THIS PROJECT shows where each copied file plays
             AppState a;

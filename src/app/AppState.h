@@ -29,11 +29,15 @@
 #include "ProjectFiles.h"
 #include "KitFolders.h"
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include "FilePicker.h"
 #include "AsyncLoader.h"
 #include "SampleCleanup.h"
 #include "SampleLibrary.h"
+#include "core/SampleTagStore.h"
+#include <atomic>
+#include <memory>
 #include "Onsets.h"
 #include <functional>
 #include <cstdio>
@@ -3717,6 +3721,58 @@ struct AppState {
     // call starts the scan on the loader thread; a scan older than a RescanLibrary (or a new library folder) is dropped.
     unsigned libScanGen_ = 0;
     bool libScanRunning_ = false;
+    // ---- C4b (v2): the user's own genre / tags of library samples (Library/sample_tags.txt; the samples are never changed) ----
+    // Read once on the loader thread (null until then); every change is written in one go on the loader thread, in order.
+    SampleTagMap sampleTags_;
+    bool sampleTagsValid_ = false, sampleTagsLoading_ = false;
+    std::string sampleTagsPathOverride_;   // tests
+    unsigned sampleTagsGen_ = 0;           // changes made (UI thread)
+    std::shared_ptr<std::atomic<unsigned>> sampleTagsSaved_ = std::make_shared<std::atomic<unsigned>>(0u);   // the last change on disk
+    std::string SampleTagsPath() const { return sampleTagsPathOverride_.empty() ? userdirs::LibraryDir() + "/sample_tags.txt" : sampleTagsPathOverride_; }
+    static SampleTagMap ReadSampleTags(const std::string& path) {   // any thread; a missing file = no corrections
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return {};
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        return sampletags::ParseStore(text);
+    }
+    const SampleTagMap* SampleTagsIfReady() {
+        if (sampleTagsValid_) return &sampleTags_;
+        const std::string path = SampleTagsPath();
+        if (!loader.Running()) { sampleTags_ = ReadSampleTags(path); sampleTagsValid_ = true; return &sampleTags_; }
+        if (!sampleTagsLoading_) {
+            sampleTagsLoading_ = true;
+            auto out = std::make_shared<SampleTagMap>();
+            loader.Post([out, path] { *out = ReadSampleTags(path); }, [this, out] { sampleTagsLoading_ = false; if (!sampleTagsValid_) { sampleTags_ = std::move(*out); sampleTagsValid_ = true; } });
+        }
+        return nullptr;
+    }
+    // `o` = the new genre / tags of library file `rel`; null = back to the guess. Ignored until the file was read.
+    bool SetSampleTagOverride(const std::string& rel, const SampleTagOverride* o) {
+        if (!sampleTagsValid_ || rel.empty() || rel.find('\t') != std::string::npos || rel.find('\n') != std::string::npos) return false;
+        if (o) sampleTags_[rel] = *o; else sampleTags_.erase(rel);
+        const unsigned gen = ++sampleTagsGen_;
+        const std::string text = sampletags::SerializeStore(sampleTags_), path = SampleTagsPath();
+        auto ok = std::make_shared<bool>(false);
+        auto saved = sampleTagsSaved_;
+        loader.Post([ok, text, path, gen, saved] {
+            *ok = WriteSampleTagsFile(path, text);
+            if (*ok) saved->store(gen);   // the loader runs one job at a time, in order, so this only grows
+        }, [this, ok] { if (!*ok) { SetStatus("CANNOT SAVE THE SAMPLE TAGS (Library/sample_tags.txt)"); statusMessageTimer = 6.0f; } });
+        return true;
+    }
+    // Review of PR 35: AsyncLoader::Stop() drops jobs that have not started, so at quit (after loader.Stop()) the last change
+    // is written here if its write never ran. Returns false only when a needed write failed.
+    bool FlushSampleTags() {
+        if (!sampleTagsValid_ || sampleTagsSaved_->load() == sampleTagsGen_) return true;
+        if (!WriteSampleTagsFile(SampleTagsPath(), sampletags::SerializeStore(sampleTags_))) return false;
+        sampleTagsSaved_->store(sampleTagsGen_);
+        return true;
+    }
+    static bool WriteSampleTagsFile(const std::string& path, const std::string& text) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        return WriteFileAtomic(path, text);
+    }
     const std::vector<LibSample>* LibraryListIfReady() {
         if (libValid_) return &libSamples_;
         if (!loader.Running()) return &LibraryList();
