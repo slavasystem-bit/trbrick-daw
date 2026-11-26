@@ -47,6 +47,7 @@ APP="$ROOT/app"
 CLONE="$ROOT/repo"
 STATE="$ROOT/installed.txt"
 TESTED="$ROOT/selftest-passed.txt"   # which installed version last passed the self-check on this Mac
+FAILED_HERE="$ROOT/selftest-failed.txt"   # which version FAILED the self-check on this Mac (GitHub's result never overrides that)
 GOOD="$ROOT/last-good"               # copy of the last program that passed it
 
 pause() { [ -n "${TRB_NO_PAUSE:-}" ] || read -r -p "Press Enter to close..." _; }
@@ -300,20 +301,27 @@ CI_SELFTEST_JOB="macOS build and selftest"
 github_mac_selftest_passed() {
     [ -n "${TRB_GIT_URL:-}${TRB_SOURCE_DIR:-}${TRB_OFFLINE:-}" ] && return 1
     [ -n "$ID" ] && [ "$ID" = "$CUR_ID" ] || return 1     # only for the version downloaded in this run
+    [ "$(cat "$FAILED_HERE" 2>/dev/null)" = "$CUR_ID" ] && return 1   # it failed on THIS Mac: always check here again
     local sha="${ID##*:}"
     case "$sha" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;; *) return 1 ;; esac
     command -v gh >/dev/null 2>&1 || return 1
     local res
+    case "$ID" in *refs/pull/*)
+        # for a pull request GitHub tests the pull request merged with the main version of that moment, not
+        # the pull request alone (which is what this Mac builds). Those are the same only when the pull
+        # request already contains everything that is in main.
+        res="$(gh api "repos/$REPO/compare/main...$sha" --jq .behind_by 2>/dev/null)"
+        [ "$res" = 0 ] || return 1 ;;
+    esac
     res="$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" \
             --jq ".check_runs[] | select(.name == \"$CI_SELFTEST_JOB\") | .conclusion" 2>/dev/null)"
     # every run of that check on this version must have passed (a newer re-run that failed counts)
     [ -n "$res" ] && ! echo "$res" | grep -qvx success
 }
 
-NEED_SELFTEST=""
 CI_SELFTEST_OK=""
 if [ -z "${TRB_SKIP_SELFTEST:-}" ] && ! { [ -n "$CUR_ID" ] && [ "$(cat "$TESTED" 2>/dev/null)" = "$CUR_ID" ]; }; then
-    if github_mac_selftest_passed; then CI_SELFTEST_OK=1; else NEED_SELFTEST=1; fi
+    github_mac_selftest_passed && CI_SELFTEST_OK=1
 fi
 
 mkdir -p build-mac
@@ -328,14 +336,7 @@ if [ ! -f CMakeCache.txt ]; then
     cmake .. -DCMAKE_BUILD_TYPE=Release ${TRB_CMAKE_ARGS:-} || { rm -f CMakeCache.txt; build_failed "cmake configure failed -- see the error above."; }
 fi
 echo "-- Building (only what changed) --"
-if [ -n "$NEED_SELFTEST" ]; then
-    # the self-check is needed too: build it at the same time as the program (its one big file then
-    # compiles beside the program's files instead of after them). If that fails, build the program alone,
-    # so a broken self-check is reported by the self-check step below, not as a broken program.
-    make -j"$JOBS" trbrick_daw t8_selftest || make -j"$JOBS" trbrick_daw || build_failed "Build failed -- see the errors above."
-else
-    make -j"$JOBS" trbrick_daw || build_failed "Build failed -- see the errors above."
-fi
+make -j"$JOBS" trbrick_daw || build_failed "Build failed -- see the errors above."
 cd "$APP" || exit 1
 
 # ---- self-check on this Mac (only when the installed version changed) ---------------------------------------------------
@@ -346,23 +347,22 @@ elif [ -n "$CUR_ID" ] && [ "$(cat "$TESTED" 2>/dev/null)" = "$CUR_ID" ]; then
     echo "-- Self-check: already passed for this version --"
 elif [ -n "$CI_SELFTEST_OK" ]; then
     echo "-- Self-check: already passed on GitHub's Mac for this exact version (skipped here, saves 2-3 minutes) --"
+    # not copied to last-good: the fallback stays a version that passed the self-check on this Mac itself
     printf '%s' "$CUR_ID" > "$TESTED"
-    if [ -z "$IS_TEST" ]; then
-        mkdir -p "$GOOD" && cp -p "$APP_BIN" "$GOOD/trbrick_daw.new" && mv "$GOOD/trbrick_daw.new" "$GOOD/trbrick_daw" \
-            && printf '%s' "$CUR_ID" > "$GOOD/version.txt"
-    fi
 else
     echo "-- Self-check on this Mac (about a minute, only after an update) --"
     LOG="$ROOT/selftest-last.log"
     if ( cd build-mac && make -j"$JOBS" t8_selftest ) > "$LOG" 2>&1 && run_selftest >> "$LOG" 2>&1; then
         echo "   Self-check passed ($(grep -c '^\[ OK \]' "$LOG") checks)."
         printf '%s' "$CUR_ID" > "$TESTED"
+        rm -f "$FAILED_HERE"
         if [ -z "$IS_TEST" ]; then
             mkdir -p "$GOOD" && cp -p "$APP_BIN" "$GOOD/trbrick_daw.new" && mv "$GOOD/trbrick_daw.new" "$GOOD/trbrick_daw" \
                 && printf '%s' "$CUR_ID" > "$GOOD/version.txt"
         fi
     else
         rm -f "$TESTED"
+        printf '%s' "$CUR_ID" > "$FAILED_HERE"
         grep '^\[FAIL\]' "$LOG" 2>/dev/null | head -5
         if [ -n "$PR" ]; then
             fail "The self-check FAILED on this Mac for $LABEL, so it will NOT be started.
