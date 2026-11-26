@@ -12,8 +12,9 @@
 #   5. runs the self-check (t8_selftest) on this Mac whenever the version changed;
 #   6. starts the program.
 # Safety rules (stage N0):
-#   - a pull request starts only when ALL its GitHub checks are green. Red, still running
-#     or not started yet = it refuses and explains why (the main version can be started instead);
+#   - a pull request with FAILED GitHub checks is refused (the main version can be started instead).
+#     Checks still running or not started yet = it starts with a clear warning, so a quick fix can be
+#     tried on the Mac without waiting 15-30 minutes. All green = it starts with no warning;
 #   - if the self-check fails on this Mac, a pull request is not started; for the main version
 #     the last version that passed the self-check is started instead (if there is one).
 # No internet, or GitHub not set up? It starts the version that is already installed.
@@ -33,7 +34,7 @@
 #   TRB_NO_PAUSE=1  never wait for Enter
 #   TRB_CMAKE_ARGS  extra cmake arguments
 #   TRB_SKIP_SELFTEST=1    do not run the self-check after the build (emergency only)
-#   TRB_ALLOW_UNCHECKED=1  start a pull request even if its GitHub checks are not green (for developers)
+#   TRB_ALLOW_UNCHECKED=1  start a pull request even if its GitHub checks failed or are unknown (for developers)
 
 set -u
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -113,7 +114,7 @@ choose_version() {   # sets REF (git ref to fetch) and LABEL (what to show)
     fi
 }
 
-# ---- the gate: a pull request starts only when all its GitHub checks are green -------------------------------------
+# ---- the gate: failed checks = refused; still running / not started = started with a warning ------------------------
 pr_checks_state() {  # prints green | running | red | none | unknown
     local b
     b="$(gh pr checks "$1" --repo "$REPO" --json bucket --jq '.[].bucket' 2>/dev/null)"
@@ -139,13 +140,19 @@ gate_pr() {          # on refusal: explains, then either switches to the main ve
     if [ -n "${TRB_ALLOW_UNCHECKED:-}" ]; then
         warn "Pull request #$n: $(pr_checks_word "$st"). Starting anyway because TRB_ALLOW_UNCHECKED is set."; return 0
     fi
+    case "$st" in
+        running|none)
+            local how="are still running"; [ "$st" = none ] && how="have not started yet"
+            warn "WARNING: pull request #$n is NOT fully checked yet.
+   Its automatic checks on GitHub $how (they take about 15-30 minutes).
+   Starting it anyway so you can try it now. If something looks wrong, tell Claude in the project.
+   The self-check on this Mac still runs first and stops it if it finds a problem."
+            return 0 ;;
+    esac
     local why
     case "$st" in
         red)     why="Its automatic checks FAILED on GitHub: something in this change is broken.
    Do not test or merge it. Tell Claude in the project, it will look at the failure." ;;
-        running) why="Its automatic checks are still running on GitHub (they take about 15-30 minutes).
-   Try again a bit later." ;;
-        none)    why="Its automatic checks have not started yet on GitHub. Try again in a few minutes." ;;
         *)       why="Could not ask GitHub about its checks (internet?). Try again later." ;;
     esac
     warn "Pull request #$n will NOT be started.
@@ -171,11 +178,10 @@ fetch_version() {    # sets SRC and ID on success
     G -C "$CLONE" fetch -q --depth 1 "$url" "$REF" || return 1
     G -C "$CLONE" checkout -q --force --detach FETCH_HEAD || return 1
     if [ -n "${PR_SHA:-}" ] && [ "$(G -C "$CLONE" rev-parse HEAD)" != "$PR_SHA" ]; then
-        warn "Pull request #$PR changed on GitHub a moment ago; its new checks have not finished.
-   It will NOT be started. Try again later."
-        refuse_pr
-        G -C "$CLONE" fetch -q --depth 1 "$url" "$REF" || return 1
-        G -C "$CLONE" checkout -q --force --detach FETCH_HEAD || return 1
+        # a new push a moment ago: its checks have only just started, which is allowed (with a warning)
+        warn "WARNING: pull request #$PR changed on GitHub a moment ago; its new checks have not finished.
+   Starting the newest version anyway. If something looks wrong, tell Claude in the project."
+        PR_SHA="$(G -C "$CLONE" rev-parse HEAD)"
     fi
     G -C "$CLONE" clean -q -fdx
     local sha; sha="$(G -C "$CLONE" rev-parse --short HEAD)"

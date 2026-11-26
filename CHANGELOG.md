@@ -8,6 +8,12 @@ Newest first. Older entries (v22-v24) were moved here from the README.
 - The undo step now belongs to the new slot, so Cmd+Z empties it again (before, it saved the open scene instead).
 - `AppState::DuplicateSceneAsNew` (takes the scene lock) + `t8_selftest` checks for LAUNCH = BAR and NOW and for undo.
 
+## Mac launcher: a pull request can be tried while its GitHub checks are still running
+
+- The TR-Brick button now starts a pull request whose checks are still running (or not started yet) after a clear `WARNING: ... is NOT fully checked yet`, so an urgent fix can be tried on the Mac without waiting 15-30 minutes. Failed checks are still refused, and the self-check on the Mac still runs first.
+- A push that lands between the menu and the download is no longer refused either: the newest version starts with a warning.
+- The launcher updates itself the next time the main version is started; nothing to re-download.
+
 ## Stage C4b (part 5): FILL: SAMPLE
 
 ROADMAP "Samples in one place" (C4b), the approved exception "FILL: SAMPLE"; the brick's FILL page of the approved inspector.
