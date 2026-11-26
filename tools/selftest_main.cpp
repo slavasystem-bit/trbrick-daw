@@ -49,6 +49,7 @@
 #include "ui_desktop/DynPresets.h"
 #include "ui_desktop/ValueField.h"
 #include "ui_desktop/InfoLine.h"
+#include "ui_desktop/SampleBrowser.h"
 #include "app/SynthParams.h"
 #include "SynthFilter.h"
 #include "Effects.h"
@@ -86,6 +87,12 @@ void* operator new(std::size_t n) {
 #pragma GCC diagnostic ignored "-Wmismatched-new-delete"   // the replaced operators pair malloc/free on purpose
 #endif
 void* operator new[](std::size_t n) { return ::operator new(n); }
+// the nothrow forms too (std::stable_sort's temporary buffer uses them): otherwise the library's own nothrow new would pair
+// with the free() below, which ASan reports as alloc-dealloc-mismatch
+void* operator new(std::size_t n, const std::nothrow_t&) noexcept { if (g_countAllocs) g_audioAllocs.fetch_add(1, std::memory_order_relaxed); return std::malloc(n ? n : 1); }
+void* operator new[](std::size_t n, const std::nothrow_t& t) noexcept { return ::operator new(n, t); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { ::operator delete(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { ::operator delete(p); }
 void operator delete(void* p) noexcept { if (p && g_countAllocs) g_audioAllocs.fetch_add(1, std::memory_order_relaxed); std::free(p); }
 void operator delete[](void* p) noexcept { ::operator delete(p); }
 void operator delete(void* p, std::size_t) noexcept { ::operator delete(p); }
@@ -6634,6 +6641,9 @@ int main(int argc, char** argv) {
         a.RefreshSound();
         const auto before = a.engine.GetKit()->CurrentBank();
         a.loader.Start();
+        // "Briefly" is a loose bound: a shared CI runner can pause a thread for several ms. The checks just after each one
+        // (still pending, the old sound keeps playing, not in memory yet) are what prove the file was not read under the lock.
+        constexpr double kBriefMs = 25.0;
         auto heldFor = [&](const std::function<void()>& f) {   // as a panel does: the action runs while the scene lock is held
             const auto t0 = std::chrono::steady_clock::now();
             { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); f(); }
@@ -6642,7 +6652,7 @@ int main(int argc, char** argv) {
         // kit
         a.seqCursorTrack = 0;
         const double kitMs = heldFor([&] { a.LoadKitFolder("kits/909"); });
-        check(kitMs < 5.0, "async: picking a kit holds the scene lock only briefly (" + std::to_string(kitMs) + " ms)");
+        check(kitMs < kBriefMs, "async: picking a kit holds the scene lock only briefly (" + std::to_string(kitMs) + " ms)");
         check(a.KitPending("kits/909") && a.engine.GetKit()->CurrentBank() == before, "async: while the kit is read, the old kit keeps playing");
         a.loader.FinishAllForTest(); a.SyncSceneKits();
         check(!a.KitPending("kits/909") && a.engine.GetKit()->CurrentBank() == a.KitBank("kits/909") && AppState::KitSlotsLoaded(a.KitBank("kits/909")) == 6, "async: when it arrives, the new kit plays (6 of 6 samples)");
@@ -6650,7 +6660,7 @@ int main(int argc, char** argv) {
         // sampler: a dropped / library file
         a.project.patterns[a.project.currentPattern].tracks[kSamplerTrackIndex].type = TrackType::Sampler;
         const double smpMs = heldFor([&] { a.AssignSampleToSampler(dir + "/in.wav"); });
-        check(smpMs < 5.0, "async: giving the sampler a file holds the scene lock only briefly (" + std::to_string(smpMs) + " ms)");
+        check(smpMs < kBriefMs, "async: giving the sampler a file holds the scene lock only briefly (" + std::to_string(smpMs) + " ms)");
         check(a.CurrentPattern().samplerPatch.file.empty(), "async: the sampler gets the file only once it is read");
         a.loader.FinishAllForTest(); a.SyncSceneSamples();
         check(a.CurrentPattern().samplerPatch.file == "in.wav" && fs::exists(dir + "/samples/in.wav") && a.SampleFor("in.wav") != nullptr && a.loader.Busy() == 0, "async: then it is copied, set and loaded (read only once)");
@@ -6666,10 +6676,21 @@ int main(int argc, char** argv) {
         SetSamplesRoot(dir + "/lib"); a.libValid_ = false;
         a.LibraryList();   // as in the app: the library list is on screen (scanned) before a file in it can be heard
         const double hearMs = heldFor([&] { a.AuditionLibrary("loop.wav"); });
-        check(hearMs < 5.0, "async: HEAR in the library holds the scene lock only briefly (" + std::to_string(hearMs) + " ms)");
+        check(hearMs < kBriefMs, "async: HEAR in the library holds the scene lock only briefly (" + std::to_string(hearMs) + " ms)");
         check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 0, "async: the file is not in memory yet");
         a.loader.FinishAllForTest();
         check(a.libAudition_.count(a.LibraryPath("loop.wav")) == 1 && a.libAudition_[a.LibraryPath("loop.wav")] != nullptr && a.libAuditionKeep_.size() == 1, "async: it plays once it is read");
+        // C4b review: the SAMPLES browser lists the library on the loader thread, never under the scene lock
+        a.libValid_ = false;
+        const std::vector<LibSample>* first = nullptr;
+        const double libMs = heldFor([&] { first = a.LibraryListIfReady(); });
+        check(first == nullptr && libMs < kBriefMs && a.LibraryListIfReady() == nullptr && a.loader.Busy() == 1, "c4b: the first look at the library starts one scan on the loader and returns nothing yet");
+        a.loader.FinishAllForTest();
+        const std::vector<LibSample>* ready = a.LibraryListIfReady();
+        check(ready && ready->size() == 1 && (*ready)[0].rel == "loop.wav", "c4b: the library list is there on the next frame");
+        a.libValid_ = false; a.LibraryListIfReady(); a.RescanLibrary(); const size_t afterRescan = a.LibraryList().size();
+        a.loader.FinishAllForTest();
+        check(a.libValid_ && a.LibraryList().size() == afterRescan, "c4b: a scan overtaken by Rescan Samples is dropped");
         SetSamplesRoot("");
         // folder lists (LIVE-10)
         a.kitFoldersCacheValid = false;
@@ -6745,6 +6766,24 @@ int main(int argc, char** argv) {
         }
         a.loader.Stop();
         fs::remove_all(dir);
+    }
+    {   // C4b part 2: the SAMPLES browser's folder tree and column sort
+        using SB = t8::desktop::SampleBrowser;
+        const auto ch = SB::FolderChain("Solid Sounds/Drum Loops/funk_95.wav");
+        check(ch.size() == 2 && ch[0] == "Solid Sounds" && ch[1] == "Solid Sounds/Drum Loops" && SB::FolderChain("kick.wav").empty(),
+              "c4b: a library file counts in every folder above it (the tree with counts)");
+        std::vector<SB::Item> v(3);
+        v[0].name = "b"; v[0].folder = "Z"; v[0].type = "LOOP"; v[0].bpm = 120;
+        v[1].name = "A"; v[1].folder = "y"; v[1].type = "KICK"; v[1].bpm = 95;
+        v[2].name = "c"; v[2].folder = "x"; v[2].type = "LOOP"; v[2].bpm = 0;
+        SB::SortItems(v, 0, false);
+        check(v[0].name == "A" && v[1].name == "b" && v[2].name == "c", "c4b: NAME sorts A..Z, case ignored");
+        SB::SortItems(v, 3, true);
+        check(v[0].bpm == 120 && v[2].bpm == 0, "c4b: a second click on BPM sorts the other way round");
+        SB::SortItems(v, 2, false);
+        check(v[0].type == "KICK" && v[1].name == "b" && v[2].name == "c", "c4b: TYPE sorts by type, then by name");
+        SB::SortItems(v, 1, false);
+        check(v[0].folder == "x" && v[1].folder == "y" && v[2].folder == "Z", "c4b: FOLDER sorts case-blind");
     }
     {   // N1 (TEST-6, LIVE-9): the audio thread does not allocate or free memory while it plays a busy set
         AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);

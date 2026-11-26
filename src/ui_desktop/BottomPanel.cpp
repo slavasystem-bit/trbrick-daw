@@ -66,7 +66,7 @@ void BottomPanel::DrawBrowsers(AppState& app) {
     ImGui::PushID("BottomPanelBrowsers");
     if (app.kitBrowserRequest) { app.kitBrowserRequest = false; OpenKitBrowser(app); }
     if (app.libraryBrowserRequest != AppState::LibTarget::None) { const auto t = app.libraryBrowserRequest; app.libraryBrowserRequest = AppState::LibTarget::None; OpenLibraryBrowser(app, t, app.libraryBrowserBrick); }
-    if (app.kitAuditionRequest) { app.kitAuditionRequest = false; ScheduleKitAudition(); }
+    if (app.kitAuditionRequest) { app.kitAuditionRequest = false; auditionKit_.clear(); ScheduleKitAudition(); }
     RunKitAudition(app);
     {   // the two big browser windows (they are modal popups, so they are drawn once per frame outside any group)
         const auto& kits = app.KitFolders();
@@ -74,37 +74,20 @@ void BottomPanel::DrawBrowsers(AppState& app) {
         int curKit = -1;
         for (size_t i = 0; i < kits.size(); ++i) if (kits[i] == curFolder) curKit = static_cast<int>(i);
         kitBrowser_.Draw(curKit,
-            [&](const ListBrowser::Item& it) { if (it.id >= 0 && it.id < static_cast<int>(kits.size())) LoadKit(app, kits[static_cast<size_t>(it.id)]); },
-            [&](const ListBrowser::Item&) {},
-            [&](const ListBrowser::Item& it) {   // HEAR: make sure the selected kit is the loaded one, then play the short phrase
-                if (it.id >= 0 && it.id < static_cast<int>(kits.size())) {
-                    if (kits[static_cast<size_t>(it.id)] != app.TrackKitFolder(app.project.currentPattern, app.seqCursorTrack)) LoadKit(app, kits[static_cast<size_t>(it.id)]);
-                    ScheduleKitAudition();
-                }
+            [&](const ListBrowser::Item&) {},   // C4b: a click only selects (try kits while it plays with < > in the KIT row)
+            [&](const ListBrowser::Item& it) { if (it.id >= 0 && it.id < static_cast<int>(kits.size())) LoadKit(app, kits[static_cast<size_t>(it.id)]); },   // Return / double-click = take
+            [&](const ListBrowser::Item& it) {   // HEAR: the short phrase from the SELECTED kit, without loading it
+                if (it.id < 0 || it.id >= static_cast<int>(kits.size())) return;
+                const std::string& k = kits[static_cast<size_t>(it.id)];
+                auditionKit_ = k == app.TrackKitFolder(app.project.currentPattern, app.seqCursorTrack) ? std::string() : k;
+                auditionKitAsked_ = ImGui::GetTime();
+                if (!auditionKit_.empty()) (void)app.KitBank(auditionKit_);   // starts reading it (loader thread)
+                ScheduleKitAudition();
             });
         beatBrowser_.Draw(app.rndGenreIndex,
             [&](const ListBrowser::Item& it) { app.rndGenreIndex = it.id; },
             [&](const ListBrowser::Item& it) { app.rndGenreIndex = it.id; ApplyBeat(app, it.id); });
-        libBrowser_.Draw(-1,
-            [&](const ListBrowser::Item&) {},
-            [&](const ListBrowser::Item& it) {   // Enter / double-click: the file goes where the browser was opened for
-                const auto& lib = app.LibraryList();
-                if (it.id < 0 || it.id >= static_cast<int>(lib.size())) return;
-                app.CancelLibraryAudition(); app.engine.AuditionStop();   // v44.52.1: the file that was being auditioned stops when it is chosen
-                const std::string path = app.LibraryPath(lib[static_cast<size_t>(it.id)].rel);
-                if (libTarget_ == AppState::LibTarget::Drum) app.AssignSampleToSlot(path);
-                else if (libTarget_ == AppState::LibTarget::Sampler) {   // N1: the file is read off the scene lock; a LOOP gets loop mode once it is in place
-                    const LibSample ls = lib[static_cast<size_t>(it.id)];
-                    const int tgt = app.libSampleTarget;
-                    AppState* ap = &app;
-                    app.AssignSampleToSampler(path, tgt, ls.category == "LOOP" ? std::function<void(int)>([ap, ls, tgt](int scene) { ap->SetSamplerLoopFromLibraryInScene(ls, tgt, scene); }) : std::function<void(int)>());
-                }
-                else if (libTarget_ == AppState::LibTarget::Transition) app.AssignLibraryTransition(libBrick_, lib[static_cast<size_t>(it.id)].rel);
-            },
-            [&](const ListBrowser::Item& it) {   // HEAR / Space
-                const auto& lib = app.LibraryList();
-                if (it.id >= 0 && it.id < static_cast<int>(lib.size())) app.AuditionLibrary(lib[static_cast<size_t>(it.id)].rel);
-            });
+        sampleBrowser_.Draw(app);
         styleBrowser_.Draw(app.styleIndex,
             [&](const ListBrowser::Item& it) { app.styleIndex = it.id; },
             [&](const ListBrowser::Item& it) { app.styleIndex = it.id; app.ApplyStyle(it.id); });
@@ -128,10 +111,31 @@ void BottomPanel::ScheduleKitAudition() {
 void BottomPanel::RunKitAudition(AppState& app) {
     if (audition_.empty()) return;
     const double now = ImGui::GetTime();
+    DrumKit::BankPtr bank;
+    if (!auditionKit_.empty()) {   // C4b: another kit than the sounding one: wait for its bank (at most 3 s), then play from it
+        bank = app.KitBank(auditionKit_);
+        if (!bank) {
+            if (now - auditionKitAsked_ > 3.0) { audition_.clear(); app.SetStatus("COULD NOT READ THAT KIT IN TIME"); return; }
+            const double shift = ImGui::GetIO().DeltaTime;
+            for (auto& h : audition_) h.at += shift;   // the phrase starts when the kit is there
+            return;
+        }
+    }
     for (size_t i = 0; i < audition_.size();) {
         if (audition_[i].at <= now) {
-            DrumVoiceParams p;
-            app.engine.TriggerDrum(static_cast<DrumSlot>(audition_[i].slot), audition_[i].vel, 0, p);
+            if (bank) {
+                const auto& v = bank->variants[static_cast<size_t>(std::clamp(audition_[i].slot, 0, kNumDrumTracks - 1))];
+                if (!v.empty() && v[0] && v[0]->frames() >= 2) {
+                    auto sd = std::make_shared<SampleData>();
+                    sd->data = v[0]->data; sd->channels = std::clamp(v[0]->channels, 1, 2); sd->sampleRate = v[0]->sampleRate;
+                    auditionKeep_.push_back(sd);
+                    while (auditionKeep_.size() > 16) auditionKeep_.erase(auditionKeep_.begin());
+                    app.engine.AuditionSample(sd, 0.8f * audition_[i].vel);
+                }
+            } else {
+                DrumVoiceParams p;
+                app.engine.TriggerDrum(static_cast<DrumSlot>(audition_[i].slot), audition_[i].vel, 0, p);
+            }
             audition_.erase(audition_.begin() + static_cast<long>(i));
         } else ++i;
     }
@@ -143,8 +147,8 @@ void BottomPanel::OpenKitBrowser(AppState& app) {
     cfg.categories = {"CLASSIC", "ELECTRONIC", "HARD", "GROOVE", "MY KITS"};
     cfg.tags = {"SUB", "PUNCHY", "DRIVEN", "DISTORTED", "LONG", "SHORT", "CRUSHED"};
     cfg.favFile = userdirs::FavoritesDir() + "/favorites_kits.txt";
-    cfg.footer = "click = load (silent)   HEAR / Space = listen   arrows = browse   Enter / double-click = keep";
-    cfg.liveSelect = true;
+    cfg.footer = "click = select   HEAR / Space = listen   arrows = browse   Enter / double-click = load";
+    cfg.liveSelect = false;   // C4b: the same keys as every browser (try kits while it plays with < > in the KIT row)
     std::vector<ListBrowser::Item> items;
     const auto& kits = app.KitFolders();
     int cur = -1;
@@ -162,37 +166,7 @@ void BottomPanel::OpenKitBrowser(AppState& app) {
 }
 
 void BottomPanel::OpenLibraryBrowser(AppState& app, AppState::LibTarget target, int brick) {
-    libTarget_ = target; libBrick_ = brick;
-    const auto& lib = app.LibraryList();
-    ListBrowser::Config cfg;
-    std::string who;
-    if (target == AppState::LibTarget::Drum) {
-        const Track& tr = app.CurrentPattern().tracks[static_cast<size_t>(std::clamp(app.seqCursorTrack, 0, kNumTracks - 1))];
-        who = TrackDisplayName(tr);
-        static const char* const kSlotCat[6] = {"KICK", "SNARE", "CLAP", "HAT", "HAT", "PERC"};
-        if (tr.type == TrackType::Drum && tr.slotIndex >= 0 && tr.slotIndex < 6) cfg.startCategory = kSlotCat[tr.slotIndex];
-    } else if (target == AppState::LibTarget::Sampler) {
-        // C4b: say where the file goes: the sampler, or the synth / chord whose ENGINE is SAMPLE
-        const int st = app.libSampleTarget;
-        who = st < 0 ? "SAMPLER" : st >= kNumSynthTracks ? "CHORD" : TrackDisplayName(app.CurrentPattern().tracks[static_cast<size_t>(std::clamp(kNumDrumTracks + st, 0, kNumTracks - 1))]);
-    }
-    else { who = "TRANSITION BEFORE BRICK " + std::to_string(std::max(0, brick) + 1); cfg.startCategory = "FX"; }
-    for (char& c : who) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    cfg.title = "SAMPLE FOR: " + who;   // C4b: one browser, its title says where the file goes
-    cfg.categories.assign(kLibCategories, kLibCategories + kNumLibCategories);
-    cfg.favFile = userdirs::FavoritesDir() + "/favorites_samples.txt";
-    cfg.liveSelect = false;
-    cfg.footer = lib.empty() ? "The library is empty. Put your .wav or .aif files in  " + app.LibraryRoot() + "  (sub-folders by instrument: Kicks, Snares, Hats, Fills ...) and use Library > Rescan Samples."
-                             : "click = select   HEAR / Space = listen   Enter / double-click = use for " + who;
-    std::vector<ListBrowser::Item> items;
-    items.reserve(lib.size());
-    for (size_t i = 0; i < lib.size(); ++i) {
-        ListBrowser::Item it; it.id = static_cast<int>(i); it.name = lib[i].bpm > 0.0 ? lib[i].name + "  " + std::to_string(static_cast<int>(lib[i].bpm + 0.5)) + " BPM" : lib[i].name; it.category = lib[i].category; it.favKey = lib[i].rel;
-        if (!lib[i].folder.empty()) it.tags.push_back(lib[i].folder);
-        if (lib[i].locked) { it.name += "  [LOCKED]"; it.tags.push_back("LOCKED"); }   // v44.56: a protected Ableton pack sample
-        items.push_back(std::move(it));
-    }
-    libBrowser_.Open(cfg, std::move(items), -1);
+    sampleBrowser_.Open(app, target, brick);   // C4b: the one SAMPLES browser
 }
 
 void BottomPanel::OpenBeatBrowser(AppState& app) {

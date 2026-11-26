@@ -1528,8 +1528,8 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
             std::string cur = tc.riser < 0 ? std::string("NONE") : (rp.NameAt(tc.riser).empty() ? std::string("?") : rp.NameAt(tc.riser));
             std::vector<int> valid;   // the transitions that exist (a missing stock file or an empty user slot is skipped)
             for (int r = 0; r < rp.Count(); ++r) if (!rp.NameAt(r).empty()) valid.push_back(r);
-            char rowHint[160];
-            std::snprintf(rowHint, sizeof rowHint, "A riser or impact on the border between brick %d and brick %d; its peak lands on the first beat of brick %d. Click = the list.", target, target + 1, target + 1);
+            char rowHint[256];
+            std::snprintf(rowHint, sizeof rowHint, "A riser or impact on the border between brick %d and brick %d; its peak lands on the first beat of brick %d. Click = the SAMPLES browser, right-click = No transition.", target, target + 1, target + 1);
             SampleRowSpec ts;
             ts.id = "##transRow"; ts.width = 262.0f; ts.label = cur; ts.dot = colors::kTrans;
             ts.canStep = valid.size() >= 2 || (valid.size() == 1 && tc.riser != valid[0]);
@@ -1548,18 +1548,10 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
                 app.SetStatus("TRANSITION BEFORE BRICK " + std::to_string(target + 1) + ": " + rp.NameAt(tc.riser));
             }
             if (th.hear && ts.canHear) app.engine.Risers().TriggerAligned(tc.riser, 0.0, 0.0, 1.0, LevelDbToGain(tc.levels.transitionDb));   // under the scene lock, like the sequencer
-            if (th.open) ImGui::OpenPopup("##transList");
-            if (ImGui::BeginPopup("##transList")) {
-                if (ImGui::Selectable("MY LIBRARY...")) app.OpenLibrary(AppState::LibTarget::Transition, target);   // v44.51
-                if (ImGui::IsItemHovered()) Hint("Your own samples (Library > Show Samples Folder). The file you choose is copied into this project.");
-                ImGui::Separator();
-                if (ImGui::Selectable("NONE", tc.riser < 0)) { app.PushSoundUndo(); tc.riser = -1; refresh(); }
-                ImGui::TextDisabled("BUILT-IN AND THIS PROJECT");
-                for (int r : valid) {
-                    ImGui::PushID(r);
-                    if (ImGui::Selectable(rp.NameAt(r).c_str(), tc.riser == r)) { app.PushSoundUndo(); tc.riser = static_cast<int8_t>(r); refresh(); }
-                    ImGui::PopID();
-                }
+            if (th.open) app.OpenLibrary(AppState::LibTarget::Transition, target);   // C4b: the SAMPLES browser (this project, built-in, your library)
+            if (th.menu) ImGui::OpenPopup("##transMenu");   // right-click on the name = menu
+            if (ImGui::BeginPopup("##transMenu")) {
+                if (ImGui::Selectable("No transition", false, tc.riser < 0 ? ImGuiSelectableFlags_Disabled : 0)) { app.PushSoundUndo(); tc.riser = -1; refresh(); app.SetStatus("NO TRANSITION BEFORE BRICK " + std::to_string(target + 1)); }
                 ImGui::EndPopup();
             }
             if (tc.riser >= 0) {

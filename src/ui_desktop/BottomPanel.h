@@ -14,6 +14,7 @@
 // Mouse front-end onto the AppState generators / live-break / riser calls.
 #include "app/AppState.h"
 #include "ListBrowser.h"
+#include "SampleBrowser.h"
 #include <vector>
 
 namespace t8::desktop {
@@ -37,12 +38,15 @@ private:
     void RunKitAudition(AppState& app);
     void ScheduleKitAudition();
 
-    ListBrowser kitBrowser_, beatBrowser_, styleBrowser_, libBrowser_;
-    AppState::LibTarget libTarget_ = AppState::LibTarget::None;   // what Enter / double-click in the library browser does
-    int libBrick_ = -1;
-    std::vector<int> libIds_;   // browser item id -> index into AppState::LibraryList()
+    ListBrowser kitBrowser_, beatBrowser_, styleBrowser_;
+    SampleBrowser sampleBrowser_;   // C4b: the one SAMPLES browser (was the MY SAMPLES card browser)
     struct AuditionHit { double at; int slot; float vel; };
     std::vector<AuditionHit> audition_;
+    // C4b: HEAR in the kit browser plays the selected kit without loading it (a click only selects): its bank is read on the
+    // loader thread, then the short phrase is played from its buffers.
+    std::string auditionKit_;      // the kit the phrase is waiting for / playing from ("" = the sounding kit through the drum voices)
+    double auditionKitAsked_ = 0.0;
+    std::vector<SamplePtr> auditionKeep_;
 };
 
 } // namespace t8::desktop

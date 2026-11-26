@@ -3536,7 +3536,28 @@ struct AppState {
         return libSamples_;
     }
     const std::string& LibraryRoot() { LibraryList(); return libRoot_; }
+    // C4b: the listing for the SAMPLES browser without reading the disk under the scene lock: null until it is there. The first
+    // call starts the scan on the loader thread; a scan older than a RescanLibrary (or a new library folder) is dropped.
+    unsigned libScanGen_ = 0;
+    bool libScanRunning_ = false;
+    const std::vector<LibSample>* LibraryListIfReady() {
+        if (libValid_) return &libSamples_;
+        if (!loader.Running()) return &LibraryList();
+        if (!libScanRunning_) {
+            libScanRunning_ = true;
+            const unsigned gen = libScanGen_;
+            struct Scan { std::string root; std::vector<LibSample> list; bool truncated = false; };
+            auto out = std::make_shared<Scan>();
+            loader.Post([out] { out->root = SamplesRoot(); out->list = ScanSampleLibrary(out->root, &out->truncated); }, [this, out, gen] {
+                libScanRunning_ = false;
+                if (gen != libScanGen_ || libValid_) return;
+                libRoot_ = std::move(out->root); libSamples_ = std::move(out->list); libTruncated_ = out->truncated; libValid_ = true;
+            });
+        }
+        return nullptr;
+    }
     void RescanLibrary() {
+        ++libScanGen_;
         libValid_ = false; libAudition_.clear();
         const int kits = SyncLibraryKits(SamplesRoot(), "kits");
         if (kits > 0) InvalidateFolderCaches();
