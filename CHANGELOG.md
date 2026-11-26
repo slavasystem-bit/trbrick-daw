@@ -8,6 +8,17 @@ Newest first. Older entries (v22-v24) were moved here from the README.
 - A push that lands between the menu and the download is no longer refused either: the newest version starts with a warning.
 - The launcher updates itself the next time the main version is started; nothing to re-download.
 
+## Stage C4b (part 5): FILL: SAMPLE
+
+ROADMAP "Samples in one place" (C4b), the approved exception "FILL: SAMPLE"; the brick's FILL page of the approved inspector.
+
+- **New fill kind SAMPLE:** the fill plays a sample of the project's `samples/` over its window. It starts on the first step of the window and is silent exactly on the step after it (the next brick's beat 1), with a 5 ms ramp. **FIT: STRETCH** fits the whole sample to the window (speed and pitch together); **AS IS** plays it at its own speed and cuts it at the end. Entering the window late starts proportionally further in. **DRUMS: MUTE** (default) silences the drums for the window like DROP OUT; **PLAY ON** keeps them. The fill LEVEL of the brick applies. RANDOM never picks SAMPLE.
+- **Where:** the brick's FILL page gets a second row when its own fill is SAMPLE: `SAMPLE [<] [name v] [>] [HEAR]  FIT [STRETCH] [AS IS]  [DRUMS: MUTE]` (click = PLAY ON). The name opens the SAMPLES browser (`SAMPLE FOR: FILL OF BRICK n`): THIS PROJECT (IN USE / ALL COPIED) or MY LIBRARY (copied into `samples/` on the loader thread). The scene's fill window has the same row. WHERE IT PLAYS shows "FILL - scene 2" / "FILL - brick 4"; MOVE UNUSED TO TRASH keeps fill samples (memory, Undo and saved files).
+- **Engine:** one fill voice in the master bus (`AudioEngine::FillSampleStart/Stop`), started from `Sequencer::FireTick` at the window start with a pointer from a fixed table (`Sequencer::SetFillSamples`, filled by `AppState::SyncSceneSamples` on the UI thread; no allocation or file access on the audio thread). STOP and leaving the window early (another scene / brick) fade it in 10 ms.
+- **Review fixes:** a window that follows the previous one without a gap (a fill as long as the pass, or the next brick's fill straight after this one) starts again, for every kind (RANDOM picks again); a live break stops the SAMPLE fill; a library file copied for a fill is set only if it is still wanted (same project, no newer choice for that fill, the fill and the brick unchanged; otherwise "FILL NOT SET: ..."); more than 32 different fill samples say "TOO MANY FILL SAMPLES".
+- **Not yet:** the 1/2-beat fill length of the proposal (lengths stay 1, 2, 4, 8 beats); it comes with the fill length rework.
+- **Project format 9:** `fillSample=fit,drums,file` (scene) and `fsmN=fit,drums,file` (brick); written only when used, so older files load unchanged (no sample, STRETCH, DRUMS MUTE). A path instead of a name in `samples/` is dropped on load.
+
 ## Fix: the arrow keys move the selected notes in the piano roll again
 
 - After a click in the piano roll (or Cmd+A over it) the arrow keys stay with the selected notes even when the mouse leaves the roll: up / down = a semitone (Shift = an octave), left / right = a step (Shift = a beat). Before, the notes moved only while the mouse was over the roll, so the arrows went to the instrument block instead.

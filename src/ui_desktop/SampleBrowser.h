@@ -87,6 +87,11 @@ public:
                 const int ti = k < kNumSynthTracks ? kNumDrumTracks + k : kChordTrackIndex;
                 add(app.SynthSampleWanted(i, k), TrackDisplayName(pt.tracks[static_cast<size_t>(ti)]) + " (SAMPLE)", i);
             }
+            if (pt.fill.kind == FillKind::Sample && pt.fill.when != FillWhen::Off) add(pt.fill.Sample(), "FILL", i);   // C4b: the scene's SAMPLE fill
+        }
+        for (int i = 0; i < std::clamp(app.project.songChainLength, 0, kMaxChainSteps); ++i) {   // a brick's own SAMPLE fill
+            const ChainStep& cs = app.project.songChain[static_cast<size_t>(i)];
+            if (cs.fillMode == FillMode::Own && cs.fill.kind == FillKind::Sample && cs.fill.when != FillWhen::Off && cs.fill.sample[0]) use[cs.fill.Sample()]["FILL"].second.push_back(i + 1);
         }
         auto runs = [](std::vector<int> v) {
             std::sort(v.begin(), v.end()); v.erase(std::unique(v.begin(), v.end()), v.end());
@@ -129,6 +134,7 @@ private:
     void DrawWave(AppState& app, const Item& it, float w, float h);
 
     AppState::LibTarget target_ = AppState::LibTarget::None;
+    bool SampleFiles() const { return target_ == AppState::LibTarget::Sampler || target_ == AppState::LibTarget::Fill; }   // THIS PROJECT = the copies in samples/
     int brick_ = -1, sampleTarget_ = AppState::kTargetSampler, drumTrack_ = 0, scene_ = 0;
     bool wantOpen_ = false, open_ = false;
     Source src_ = Source::Project;
