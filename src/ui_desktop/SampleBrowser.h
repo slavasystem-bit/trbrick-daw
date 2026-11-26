@@ -161,6 +161,7 @@ private:
     int bpmLo_ = 0, bpmHi_ = 0;                // BPM from / to (0 = open); a file with no tempo is hidden while either is set
     std::map<std::string, std::pair<std::string, unsigned>> guess_;   // library rel -> guessed genre / tags (guessed once per file)
     const std::pair<std::string, unsigned>& Guess(const std::string& rel);
+    std::string selKeep_;                         // favKey to select again after the next rebuild (an edit can move the row)
     std::string tagsWant_, tagsKey_, tagsName_;   // C4b v2: GENRE / TAGS of one library file (right-click / the SELECTED button); key = rel
     char search_[48] = "";
     bool list_ = true;                         // LIST / GRID

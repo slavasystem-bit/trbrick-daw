@@ -36,6 +36,8 @@
 #include "SampleCleanup.h"
 #include "SampleLibrary.h"
 #include "core/SampleTagStore.h"
+#include <atomic>
+#include <memory>
 #include "Onsets.h"
 #include <functional>
 #include <cstdio>
@@ -3724,6 +3726,8 @@ struct AppState {
     SampleTagMap sampleTags_;
     bool sampleTagsValid_ = false, sampleTagsLoading_ = false;
     std::string sampleTagsPathOverride_;   // tests
+    unsigned sampleTagsGen_ = 0;           // changes made (UI thread)
+    std::shared_ptr<std::atomic<unsigned>> sampleTagsSaved_ = std::make_shared<std::atomic<unsigned>>(0u);   // the last change on disk
     std::string SampleTagsPath() const { return sampleTagsPathOverride_.empty() ? userdirs::LibraryDir() + "/sample_tags.txt" : sampleTagsPathOverride_; }
     static SampleTagMap ReadSampleTags(const std::string& path) {   // any thread; a missing file = no corrections
         std::ifstream in(path, std::ios::binary);
@@ -3746,14 +3750,28 @@ struct AppState {
     bool SetSampleTagOverride(const std::string& rel, const SampleTagOverride* o) {
         if (!sampleTagsValid_ || rel.empty() || rel.find('\t') != std::string::npos || rel.find('\n') != std::string::npos) return false;
         if (o) sampleTags_[rel] = *o; else sampleTags_.erase(rel);
+        const unsigned gen = ++sampleTagsGen_;
         const std::string text = sampletags::SerializeStore(sampleTags_), path = SampleTagsPath();
         auto ok = std::make_shared<bool>(false);
-        loader.Post([ok, text, path] {
-            std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-            *ok = WriteFileAtomic(path, text);
+        auto saved = sampleTagsSaved_;
+        loader.Post([ok, text, path, gen, saved] {
+            *ok = WriteSampleTagsFile(path, text);
+            if (*ok) saved->store(gen);   // the loader runs one job at a time, in order, so this only grows
         }, [this, ok] { if (!*ok) { SetStatus("CANNOT SAVE THE SAMPLE TAGS (Library/sample_tags.txt)"); statusMessageTimer = 6.0f; } });
         return true;
+    }
+    // Review of PR 35: AsyncLoader::Stop() drops jobs that have not started, so at quit (after loader.Stop()) the last change
+    // is written here if its write never ran. Returns false only when a needed write failed.
+    bool FlushSampleTags() {
+        if (!sampleTagsValid_ || sampleTagsSaved_->load() == sampleTagsGen_) return true;
+        if (!WriteSampleTagsFile(SampleTagsPath(), sampletags::SerializeStore(sampleTags_))) return false;
+        sampleTagsSaved_->store(sampleTagsGen_);
+        return true;
+    }
+    static bool WriteSampleTagsFile(const std::string& path, const std::string& text) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+        return WriteFileAtomic(path, text);
     }
     const std::vector<LibSample>* LibraryListIfReady() {
         if (libValid_) return &libSamples_;

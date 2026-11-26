@@ -205,6 +205,10 @@ void SampleBrowser::Rebuild(AppState& app) {
         for (size_t i = 0; i < vis_.size(); ++i) vis_[i] = static_cast<int>(i);
     }
     const int n = static_cast<int>(vis_.size());
+    if (!selKeep_.empty()) {   // review of PR 35: after a GENRE / TAGS edit the sorted / filtered row can move: keep the same file
+        for (int i = 0; i < n; ++i) if (items_[static_cast<size_t>(vis_[static_cast<size_t>(i)])].favKey == selKeep_) { sel_ = i; scrollToSel_ = true; break; }
+        selKeep_.clear();
+    }
     sel_ = n == 0 ? -1 : std::clamp(sel_, 0, n - 1);
     dirty_ = false;
 }
@@ -878,9 +882,9 @@ void SampleBrowser::Draw(AppState& app) {
         }
         if (ImGui::IsItemHovered()) Hint("Tags add up: click again to take one off.");
         ImGui::Dummy(ImVec2(1, 6));
-        if (changed && app.SetSampleTagOverride(tagsKey_, &now)) dirty_ = true;
+        if (changed && app.SetSampleTagOverride(tagsKey_, &now)) { dirty_ = true; selKeep_ = LibFavKey(tagsKey_); }
         ImGui::BeginDisabled(!mine);
-        if (ImGui::Button("BACK TO THE GUESS", ImVec2(170, 0)) && app.SetSampleTagOverride(tagsKey_, nullptr)) dirty_ = true;
+        if (ImGui::Button("BACK TO THE GUESS", ImVec2(170, 0)) && app.SetSampleTagOverride(tagsKey_, nullptr)) { dirty_ = true; selKeep_ = LibFavKey(tagsKey_); }
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("Forget your own choice for this file: the guess is shown again.");
         ImGui::SameLine();

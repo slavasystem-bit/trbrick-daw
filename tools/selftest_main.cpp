@@ -7070,6 +7070,21 @@ int main(int argc, char** argv) {
                     std::ifstream in(dir + "/lib/sample_tags.txt"); const std::string t((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
                     check(t.find("Loops/a.wav") == std::string::npos && t.find("b.wav\t\t") != std::string::npos, "c4b v2: changes are written in order; BACK TO THE GUESS removes the line");
                 }
+                {   // review of PR 35: a write still queued when the loader stops (quit) is written by FlushSampleTags
+                    auto ap = std::make_unique<AppState>(); AppState& a = *ap;
+                    a.sampleTagsPathOverride_ = dir + "/lib2/sample_tags.txt";
+                    a.SampleTagsIfReady();   // no loader yet: read at once (no file)
+                    a.loader.Start();
+                    a.loader.Post([] { std::this_thread::sleep_for(std::chrono::milliseconds(80)); }, nullptr);   // the loader is busy (a scan)
+                    SampleTagOverride o{"GARAGE", 1u << 3};
+                    a.SetSampleTagOverride("late.wav", &o);
+                    a.loader.Stop();   // as at quit: the queued write is dropped
+                    auto fileText = [&] { std::ifstream in(dir + "/lib2/sample_tags.txt"); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+                    check(fileText().find("late.wav") == std::string::npos, "c4b v2: (setup) the queued write was dropped by Stop()");
+                    check(a.FlushSampleTags() && fileText().find("late.wav\tGARAGE\tLO-FI") != std::string::npos, "c4b v2: the last change is written at quit even when the loader was busy");
+                    const auto t0 = std::filesystem::last_write_time(dir + "/lib2/sample_tags.txt");
+                    check(a.FlushSampleTags() && std::filesystem::last_write_time(dir + "/lib2/sample_tags.txt") == t0, "c4b v2: nothing to flush = no write");
+                }
                 {   // the folder cannot be made: the user is told, the browser goes on
                     std::filesystem::create_directories(dir); { std::ofstream f(dir + "/file"); f << "x"; }
                     auto ap = std::make_unique<AppState>(); AppState& a = *ap;
@@ -7081,8 +7096,9 @@ int main(int argc, char** argv) {
                 }
                 std::filesystem::remove_all(dir);
                 std::ifstream in("src/ui_desktop/SampleBrowser.cpp"); const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-                check(src.find("const bool tagsBusy") != std::string::npos && src.find("|| tagsBusy") != std::string::npos && src.find("it.ownTags = true") != std::string::npos,
-                      "c4b v2: the browser shows own tags and the GENRE / TAGS window owns the keys");
+                check(src.find("const bool tagsBusy") != std::string::npos && src.find("|| tagsBusy") != std::string::npos && src.find("it.ownTags = true") != std::string::npos
+                      && src.find("selKeep_ = LibFavKey(tagsKey_)") != std::string::npos && src.find("favKey == selKeep_") != std::string::npos,
+                      "c4b v2: the browser shows own tags, the GENRE / TAGS window owns the keys, the edited file stays selected");
             }
         }
         {   // C4b (g): THIS PROJECT shows where each copied file plays

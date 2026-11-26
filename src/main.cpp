@@ -891,6 +891,7 @@ int main(int argc, char** argv) {
     app.recorder.Shutdown();               // N1: a take still running at quit is closed properly (the file is already on disk)
     app.engine.Multitrack().Shutdown();
     app.loader.Stop();
+    app.FlushSampleTags();                 // a sample-tags write still waiting in the loader was dropped by Stop(): write it now
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
