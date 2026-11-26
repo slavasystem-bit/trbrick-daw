@@ -96,6 +96,7 @@ void SampleBrowser::Open(AppState& app, AppState::LibTarget target, int brick) {
     if (target == AppState::LibTarget::Drum) ScanKits(app);
     folder_.clear();
     folderCountsOf_ = static_cast<size_t>(-1);   // the library may have been rescanned
+    inUseOnly_ = true;                           // THIS PROJECT always opens on IN USE
     wantOpen_ = true;
 }
 
@@ -127,9 +128,17 @@ void SampleBrowser::ScanKits(AppState& app) {
 }
 
 void SampleBrowser::Rebuild(AppState& app) {
+    bool collecting = false;   // FAVORITES / RECENT look through every copy, not only IN USE
     auto project = [&](std::vector<Item>& out) {
         if (target_ == AppState::LibTarget::Sampler) {
-            for (const std::string& nm : app.SampleNames()) { Item it; it.src = Source::Project; it.key = nm; it.name = nm; it.folder = "samples"; it.favKey = "prj:" + nm; out.push_back(std::move(it)); }
+            const std::map<std::string, std::string> usage = SampleUsage(app);   // C4b (g): IN USE = plays somewhere; ALL COPIED = every copy
+            inUseCount_ = copiedCount_ = 0;
+            for (const std::string& nm : app.SampleNames()) {
+                const auto u = usage.find(nm);
+                ++copiedCount_; if (u != usage.end()) ++inUseCount_;
+                if (inUseOnly_ && u == usage.end() && !collecting) continue;
+                Item it; it.src = Source::Project; it.key = nm; it.name = nm; it.folder = u != usage.end() ? u->second : "not used"; it.favKey = "prj:" + nm; out.push_back(std::move(it));
+            }
         } else if (target_ == AppState::LibTarget::Drum) {
             const std::string kit = app.TrackKitFolder(scene_, drumTrack_);
             const DrumKit::BankPtr b = app.KitBank(kit);
@@ -160,6 +169,7 @@ void SampleBrowser::Rebuild(AppState& app) {
         for (int r = 0; r < std::min(rp.Count(), static_cast<int>(RiserPlayer::kFirstUser)); ++r) if (!rp.NameAt(r).empty()) { Item it; it.src = Source::BuiltIn; it.riser = r; it.key = std::to_string(r); it.name = rp.NameAt(r); it.folder = "built-in"; it.type = "FX"; it.favKey = "riser:" + rp.NameAt(r); out.push_back(std::move(it)); }
     };
     auto everything = [&](std::vector<Item>& out) {
+        collecting = true;
         project(out); library(out);
         if (target_ == AppState::LibTarget::Drum) out.insert(out.end(), kitItems_.begin(), kitItems_.end());
         if (target_ == AppState::LibTarget::Transition) builtIn(out);
@@ -386,8 +396,23 @@ void SampleBrowser::Draw(AppState& app) {
     if (ImGui::Button("X##sbClose", ImVec2(22, 0))) keepOpen = false;
     if (ImGui::IsItemHovered()) Hint("Close without a change (Esc)");
 
+    const bool copies = src_ == Source::Project && target_ == AppState::LibTarget::Sampler;
+    if (copies) {   // ---- THIS PROJECT (sampler / synth): IN USE / ALL COPIED (mockup section 2a) ----
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("SHOW");
+        ImGui::SameLine(0, 8);
+        char lab[48];
+        std::snprintf(lab, sizeof lab, "IN USE  %d##sbInUse", inUseCount_);
+        if (ToggleButton(lab, inUseOnly_, ImVec2(0, 0), ToggleTab())) { inUseOnly_ = true; dirty_ = true; sel_ = 0; scrollToSel_ = true; }
+        if (ImGui::IsItemHovered()) Hint("Only the samples that play somewhere in this project, and where.");
+        ImGui::SameLine(0, 4);
+        std::snprintf(lab, sizeof lab, "ALL COPIED  %d##sbAllCopied", copiedCount_);
+        if (ToggleButton(lab, !inUseOnly_, ImVec2(0, 0), ToggleTab())) { inUseOnly_ = false; dirty_ = true; sel_ = 0; scrollToSel_ = true; }
+        if (ImGui::IsItemHovered()) Hint("Every file ever copied into samples/ beside the project, also the ones nothing plays any more.");
+    }
     // ---- TYPE chips (library and the collections; the drums and transitions open on their own type) ----
     const bool typed = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
+    if (!copies) {
     ImGui::BeginDisabled(!typed);
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("TYPE");
@@ -400,6 +425,7 @@ void SampleBrowser::Draw(AppState& app) {
     }
     ImGui::EndDisabled();
     if (!typed && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("TYPE filters MY LIBRARY, FAVORITES and RECENT.");
+    }
     ImGui::Dummy(ImVec2(1, 2));
 
     const float footerH = 26.0f;
@@ -534,13 +560,14 @@ void SampleBrowser::Draw(AppState& app) {
         sel_ = i; if (autoHear_) wantHear = true;
     };
     const bool showBpm = src_ == Source::Library || src_ == Source::Favorites || src_ == Source::Recent;
-    const float xName = 26.0f, xFolder = fullW * 0.46f, xType = fullW * 0.76f, xBpm = fullW * 0.88f;
+    // THIS PROJECT copies have no type or tempo: WHERE IT PLAYS gets the rest of the row (the whole text is in the info line too)
+    const float xName = 26.0f, xFolder = fullW * (copies ? 0.40f : 0.46f), xType = copies ? fullW : fullW * 0.76f, xBpm = copies ? fullW : fullW * 0.88f;
     if (list_) {   // column titles: a click sorts by that column, a second click turns the order around
         const ImVec2 h0 = ImGui::GetCursorScreenPos();
-        static const char* const kCols[4] = {"NAME", "FOLDER", "TYPE", "BPM"};
+        const char* const kCols[4] = {"NAME", copies ? "WHERE IT PLAYS" : "FOLDER", "TYPE", "BPM"};
         const float xs[4] = {xName, xFolder, xType, xBpm};
         for (int c = 0; c < 4; ++c) {
-            if (c == 3 && !showBpm) continue;
+            if ((c == 3 && !showBpm) || (c == 2 && copies)) continue;
             const float x1 = c < 3 ? xs[c + 1] : fullW;
             ImGui::SetCursorScreenPos(ImVec2(h0.x + xs[c], h0.y));
             ImGui::PushID(c);
@@ -596,7 +623,7 @@ void SampleBrowser::Draw(AppState& app) {
                     cell(xFolder, xType, it.folder, vis::kTextDim);
                     cell(xType, xBpm, it.type, vis::kTextDim);
                     if (showBpm && it.bpm > 0.0) { char b[16]; std::snprintf(b, sizeof b, "%.0f", it.bpm); cell(xBpm, fullW, b, vis::kTextDim); }
-                    if (hov) Hint("%s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), who.c_str());
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), it.folder.c_str(), who.c_str());
                 } else {
                     const ImVec2 p0(rowO.x + cc * (cardW + gap), rowO.y), p1(p0.x + cardW, p0.y + cardH);
                     ImGui::SetCursorScreenPos(p0);
@@ -611,7 +638,7 @@ void SampleBrowser::Draw(AppState& app) {
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 7), vis::kText, it.name.c_str());
                     dl->AddText(ImVec2(p0.x + 10, p0.y + 27), vis::kTextDim, (it.type.empty() ? it.folder : it.type + "  " + it.folder).c_str());
                     ImGui::PopClipRect();
-                    if (hov) Hint("%s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), who.c_str());
+                    if (hov) Hint("%s  -  %s\nclick = select   Space / HEAR = listen   Return / double-click = use for %s", it.name.c_str(), it.folder.c_str(), who.c_str());
                 }
                 ImGui::PopID();
             }
@@ -628,6 +655,8 @@ void SampleBrowser::Draw(AppState& app) {
                         : waitLib_ ? "Reading the library ..."
                         : narrowed ? "Nothing here matches - clear the search or the TYPE."
                         : src_ == Source::Project && target_ == AppState::LibTarget::Drum ? "This kit has no sample for this drum. Try KITS or MY LIBRARY."
+                        : copies && inUseOnly_ && copiedCount_ > 0 ? "No sample plays in this project yet. ALL COPIED shows every file copied into it."
+                        : copies ? "This project has no samples yet. Take one from MY LIBRARY or FROM FINDER..."
                         : src_ == Source::Favorites && favs_.empty() ? "No favorites yet - click the star in a row."
                         : src_ == Source::Recent && recent_.empty() ? "Nothing taken yet."
                         : src_ == Source::Library && libList && libList->empty() ? "The library is empty. Put .wav / .aif files in the samples folder (Library > Show Samples Folder) and use Library > Rescan Samples."
