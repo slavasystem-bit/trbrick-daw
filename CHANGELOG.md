@@ -7,6 +7,12 @@ Newest first. Older entries (v22-v24) were moved here from the README.
 - When the program opened the last project at start, a synth or the chord on ENGINE > SAMPLE played the default synth (and the sampler track had no sample) until the scene's sound was touched. The start-up code handed the scene's sound over before the sequencer knew the audio engine, so the hand-over was silently skipped.
 - New `AppState::StartSound()` (sequencer first, then the scene's patches, samples, kits and mixer), used by `main.cpp`; covered by a "program start" check in `t8_selftest` that fails with the old order.
 
+## Mac launcher: a pull request can be tried while its GitHub checks are still running
+
+- The TR-Brick button now starts a pull request whose checks are still running (or not started yet) after a clear `WARNING: ... is NOT fully checked yet`, so an urgent fix can be tried on the Mac without waiting 15-30 minutes. Failed checks are still refused, and the self-check on the Mac still runs first.
+- A push that lands between the menu and the download is no longer refused either: the newest version starts with a warning.
+- The launcher updates itself the next time the main version is started; nothing to re-download.
+
 ## Stage C4b (part 5): FILL: SAMPLE
 
 ROADMAP "Samples in one place" (C4b), the approved exception "FILL: SAMPLE"; the brick's FILL page of the approved inspector.
