@@ -6456,6 +6456,20 @@ int main(int argc, char** argv) {
                 check(a.CurrentPattern().synthPatches[0].sample.markCount == 2 && a.GetSampleTarget(-1).markCount == 0, "sample engine: marks are added to the synth's sample, not to the sampler's");
                 a.RemoveNearestSliceMark(0.26f, 0.05f, 0);
                 check(a.CurrentPattern().synthPatches[0].sample.markCount == 1, "sample engine: a mark can be removed");
+                {   // C4b (d): drag a mark, clear all marks
+                    SamplerPatch mp = a.GetSampleTarget(0); mp.markCount = 0; a.PutSampleTarget(0, mp);
+                    a.AddSliceMark(0.2f, 0); a.AddSliceMark(0.4f, 0); a.AddSliceMark(0.6f, 0);
+                    const int ni = a.MoveSliceMark(0, 0.5f, 0);   // passes the mark at 0.4
+                    mp = a.GetSampleTarget(0);
+                    check(ni == 1 && mp.markCount == 3 && mp.marks[0] < mp.marks[1] && mp.marks[1] < mp.marks[2] && std::abs(mp.marks[1] / 65535.0f - 0.5f) < 0.001f,
+                          "c4b d: a dragged mark passes its neighbour and the marks stay in order");
+                    check(a.MoveSliceMark(1, 0.6f, 0) == 1 && a.GetSampleTarget(0).marks[1] == mp.marks[1] && a.MoveSliceMark(7, 0.1f, 0) == -1,
+                          "c4b d: a mark never lands on another; a wrong index does nothing");
+                    a.ClearSliceMarks(0);
+                    check(a.GetSampleTarget(0).markCount == 0, "c4b d: CLEAR ALL MARKS");
+                    a.Undo();
+                    check(a.GetSampleTarget(0).markCount == 3, "c4b d: CLEAR ALL MARKS is undoable");
+                }
                 // LAY OUT: slices placed on the synth's own steps, held as long as they last
                 tp = a.GetSampleTarget(0); tp.slices = 8; tp.fitBars = 1; tp.root = 60; a.PutSampleTarget(0, tp);
                 const std::string m = a.LayoutSamplerSlices(0);
@@ -7057,6 +7071,12 @@ int main(int argc, char** argv) {
                 check(src.find("!fieldTyping && browser::CaptureTyping") != std::string::npos && src.find("!fieldTyping && browser::HearKey") != std::string::npos
                       && src.find("n > 0 && !fieldTyping") != std::string::npos && src.find("!trashBusy && !fieldTyping") != std::string::npos
                       && src.find("bpmTyping_ = true") != std::string::npos, "c4b: typing a tempo into a BPM field keeps the keys in that field");
+            }
+            {   // C4b (d): the waveform card is edited by hand (START / end lines, marks); only an empty card opens the browser
+                std::ifstream in("src/ui_desktop/ContextPanel.cpp"); const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                check(src.find("if (clicked && !hasWave && ImGui::IsItemClicked") != std::string::npos && src.find("if (g.begin) app.PushUndo();") != std::string::npos
+                      && src.find("Undo only when something really moves") != std::string::npos && src.find("CLEAR ALL MARKS") != std::string::npos
+                      && src.find("t.edit.start = g.start") != std::string::npos, "c4b d: waveform gestures on the sampler and the drums, one Undo per drag");
             }
             {   // C4b (v3): performance sets (Library/Favorites/sample_sets.txt)
                 namespace ss = samplesets;
