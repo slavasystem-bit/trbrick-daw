@@ -17,6 +17,7 @@
 #include "imgui.h"
 #include "app/AppState.h"
 #include "TrackStyle.h"
+#include "core/SampleTags.h"
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -37,6 +38,8 @@ public:
         std::string folder;   // shown in FOLDER (library: the folder path below the root; kits: the kit)
         std::string type;     // KICK ... OTHER, or empty
         double bpm = 0.0;
+        std::string genre;    // library: guessed from the folder and file names (HOUSE ... GARAGE), or empty
+        unsigned tags = 0;    // library: bit i = kSampleTags[i]
         int riser = -1;       // transitions: the riser index
         int variant = -1;     // drums, THIS PROJECT: the variant of this drum in the kit
         std::string favKey;   // stable key for favourites and recent ("lib:<rel>", "kit:<path>", "prj:<name>", "riser:<name>")
@@ -53,7 +56,13 @@ public:
         for (size_t p = rel.find('/'); p != std::string::npos; p = rel.find('/', p + 1)) out.push_back(rel.substr(0, p));
         return out;
     }
-    // column 0 name, 1 folder, 2 type, 3 bpm; ties by name (case ignored); stable
+    // "BREAKS · DUSTY · LIVE": the GENRE · TAGS column
+    static std::string GenreTagsText(const Item& it) {
+        std::string out = it.genre;
+        for (int i = 0; i < kNumSampleTags; ++i) if (it.tags & (1u << i)) { if (!out.empty()) out += " \xC2\xB7 "; out += kSampleTags[i]; }
+        return out;
+    }
+    // column 0 name, 1 folder, 2 type, 3 bpm, 4 genre (then tags); ties by name (case ignored); stable
     static void SortItems(std::vector<Item>& items, int column, bool descending) {
         auto lower = [](std::string x) { for (auto& c : x) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return x; };
         auto key = [&](const Item& a, const Item& b) -> int {
@@ -61,6 +70,7 @@ public:
                 case 1: { const int c = lower(a.folder).compare(lower(b.folder)); if (c) return c; break; }
                 case 2: { const int c = a.type.compare(b.type); if (c) return c; break; }
                 case 3: if (a.bpm != b.bpm) return a.bpm < b.bpm ? -1 : 1; break;
+                case 4: { const int c = GenreTagsText(a).compare(GenreTagsText(b)); if (c) return c; break; }
                 default: break;
             }
             return lower(a.name).compare(lower(b.name));
@@ -144,6 +154,10 @@ private:
     std::map<std::string, int> folderCounts_;  // files below each library folder (counted once per library listing, not per frame)
     size_t folderCountsOf_ = static_cast<size_t>(-1);
     int type_ = -1;                            // -1 = ALL, else kLibCategories index
+    int genre_ = -1;                           // -1 = ALL, else kSampleGenres index
+    unsigned tagMask_ = 0;                     // every chosen tag must be on the file
+    int bpmLo_ = 0, bpmHi_ = 0;                // BPM from / to (0 = open); a file with no tempo is hidden while either is set
+    std::map<std::string, std::pair<std::string, unsigned>> guess_;   // library rel -> guessed genre / tags (guessed once per file)
     char search_[48] = "";
     bool list_ = true;                         // LIST / GRID
     int sortCol_ = 0; bool sortDesc_ = false;

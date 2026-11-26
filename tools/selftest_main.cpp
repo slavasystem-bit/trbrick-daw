@@ -6944,6 +6944,19 @@ int main(int argc, char** argv) {
         check(v[0].type == "KICK" && v[1].name == "b" && v[2].name == "c", "c4b: TYPE sorts by type, then by name");
         SB::SortItems(v, 1, false);
         check(v[0].folder == "x" && v[1].folder == "y" && v[2].folder == "Z", "c4b: FOLDER sorts case-blind");
+        {   // C4b (v1): genre and tags read from the folder and file names
+            check(GuessSampleGenre("BL_HipHop_95bpm_C3.wav") == "HIP HOP" && GuessSampleGenre("DL_DannyBryd_DnB_175bpm2.wav") == "DNB"
+                  && GuessSampleGenre("ML_Minimal-Glitch_100bpm_MscLoop3.wav") == "MINIMAL" && GuessSampleGenre("Break Funk Chop 115 bpm.wav") == "BREAKS",
+                  "c4b: the genre comes from the words of the name (camelCase and _ split, DnB kept whole)");
+            check(GuessSampleGenre("House/Disco Edits/x.wav") == "HOUSE" && GuessSampleGenre("Drum and Bass/k.wav") == "DNB" && GuessSampleGenre("Electronic pad.wav").empty()
+                  && GuessSampleGenre("Kicks/kick_03.wav").empty(), "c4b: the first genre in the path wins; a word inside another word does not count");
+            const auto tg = GuessSampleTags("Solid Sounds/Dusty Vinyl/Lo-Fi Keys Dark Live.wav");
+            check(tg == std::vector<std::string>{"DUSTY", "DARK", "LO-FI", "LIVE"} && GuessSampleTags("kick.wav").empty(), "c4b: tags come from sound words (vinyl = DUSTY, Lo-Fi = LO-FI)");
+            SB::Item x, y; x.name = "a"; x.genre = "BREAKS"; x.tags = 1u; y.name = "b"; y.genre = "";
+            check(SB::GenreTagsText(x) == "BREAKS \xC2\xB7 DUSTY" && SB::GenreTagsText(y).empty(), "c4b: the GENRE \xC2\xB7 TAGS column text");
+            std::vector<SB::Item> gv{x, y}; SB::SortItems(gv, 4, false);
+            check(gv[0].name == "b" && gv[1].name == "a", "c4b: GENRE \xC2\xB7 TAGS sorts (no genre first)");
+        }
         {   // C4b (g): THIS PROJECT shows where each copied file plays
             AppState a;
             for (int i : {0, 1, 2, 5}) a.project.patterns[static_cast<size_t>(i)].samplerPatch.file = "amen.wav";
