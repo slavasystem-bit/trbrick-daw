@@ -6617,6 +6617,36 @@ int main(int argc, char** argv) {
             a.clickOpens = false;
             a.project.currentPattern = pl; a.sequencer.ReleasePin();
         }
+        // --- Duplicate as new scene: the copy opens in the editor, the music stays on the scene that plays (it used to jump to the copy off the grid)
+        {
+            auto activeSteps = [&](int sc) { int n = 0; for (const Track& t : a.project.patterns[static_cast<size_t>(sc)].tracks) for (const Step& st : t.steps) n += st.active ? 1 : 0; return n; };
+            const int pl = a.sequencer.PlayPatternIndex();
+            const int dst = pl == 15 ? 14 : 15, dst2 = pl == 13 ? 12 : 13;
+            const int before = activeSteps(dst), before2 = activeSteps(dst2);
+            a.project.currentPattern = pl; a.sequencer.ReleasePin(); a.sequencer.ClearPendingScene();
+            Step& mark = a.project.patterns[static_cast<size_t>(pl)].tracks[kick].steps[0];
+            const Step markWas = mark;
+            mark.active = true;   // the playing scene has a note to copy
+            for (int q : {2, 0}) {   // LAUNCH = BAR and LAUNCH = NOW: neither launches the copy
+                a.sequencer.SetLaunchQuantize(q);
+                const int d = q == 2 ? dst : dst2;
+                a.DuplicateSceneAsNew(pl, d);
+                run(0.6);
+                check(a.sequencer.IsPlaying() && a.sequencer.PlayPatternIndex() == pl && a.sequencer.PendingScene() < 0 && a.project.currentPattern == d && a.SceneIsHeldApart(),
+                      q == 2 ? "duplicate: the copy opens in the editor, nothing is launched or queued (LAUNCH = BAR)" : "duplicate: the copy is not launched with LAUNCH = NOW either");
+                check(activeSteps(d) == activeSteps(pl) && activeSteps(pl) > 0, "duplicate: the new scene holds the notes of the original");
+                a.project.currentPattern = pl; a.sequencer.ReleasePin();
+            }
+            a.SelectSceneForEdit(dst2);   // the copy open apart, as the menu leaves it
+            const bool u2 = a.Undo() && activeSteps(dst2) == before2;
+            a.SelectSceneForEdit(dst);
+            const bool u1 = a.Undo();
+            check(u2 && u1 && activeSteps(dst) == before && a.sequencer.PlayPatternIndex() == pl, "duplicate: Cmd+Z empties the new slot again, the music is not touched");
+            mark = markWas;
+            a.sequencer.SetLaunchQuantize(2);
+            a.project.currentPattern = pl; a.sequencer.ReleasePin();
+            a.engine.GetMixer().SyncFromPattern(a.project.patterns[static_cast<size_t>(pl)]);
+        }
         // --- ARM: while a launch waits, the switches are for the scene that is coming
         a.project.currentPattern = 4; a.sequencer.ReleasePin(); a.SetMuteScene(snare, false);
         a.sequencer.LaunchScene(6);

@@ -2,14 +2,11 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
-## Stage C4b (part 6): GENRE, TAGS and BPM in the SAMPLES browser
+## Fix: "Duplicate as new scene" no longer starts the copy
 
-ROADMAP "Samples in one place" (C4b), item 4 (guessed part); approved mockup `docs/mockups/v45_samples_unified.png`, section 2.
-
-- **Guessed genre and tags** (`src/core/SampleTags.h`, pure, tested): from the words of the folders and file name, camelCase and `_` split ("BL_HipHop_95bpm" = HIP HOP, "DnB" = DNB). Genres use the STYLES words: HOUSE TECHNO ELECTRO BREAKS HIP HOP DISCO DNB MINIMAL GARAGE; the first one named in the path wins. Tags: DUSTY (also vinyl, dust, crackle), PUNCHY, DARK, LO-FI, LIVE. Guessed once per file (cached).
-- **Filters** under TYPE: GENRE (one), TAGS (all chosen must be on the file), BPM from - to (the program's number field; "any" = open; files without a tempo hide while a tempo is set). They add up with TYPE, the folder and the search; the search also finds genre and tag words.
-- **Column GENRE · TAGS** (sortable) in the library and the collections; the selected file shows them too.
-- Own corrections of genre / tags (a file beside the library) and performance sets come in later parts; the samples and folders are never changed.
+- The scene pad menu's **Duplicate as new scene** copied the scene and switched playback to the copy at once, off the launch grid. Now the copy only opens in the editor (held apart: "OPEN 05 - PLAYING 04 - GO launches 05"); the music keeps playing the scene it played. GO or a click on the pad launches the copy on the grid as usual. Stopped or in song mode nothing changes.
+- The undo step now belongs to the new slot, so Cmd+Z empties it again (before, it saved the open scene instead).
+- `AppState::DuplicateSceneAsNew` (takes the scene lock) + `t8_selftest` checks for LAUNCH = BAR and NOW and for undo.
 
 ## Mac launcher: a pull request can be tried while its GitHub checks are still running
 
