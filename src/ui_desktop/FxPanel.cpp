@@ -17,8 +17,7 @@ void FxPanel::Draw(AppState& app) {
     const ImVec2 kKnobSize(58.0f, 58.0f);
 
     ImGui::PushID("FxPanel");
-    ImGui::TextDisabled("MASTER FX -- project-wide");
-    ImGui::Spacing();
+    // C1: the title (MASTER FX, what it does, key F, x) is the tool strip that main draws above
 
     // ---- DELAY --------------------------------------------------------
     ImGui::BeginGroup();

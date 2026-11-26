@@ -140,11 +140,13 @@ void MenuBar::Draw(AppState& app) {
 
         // ---- View -------------------------------------------------------------------------------------------------------
         if (ImGui::BeginMenu("View")) {
-            if (Item("LIVE", nullptr, "The jam screen.")) app.uiTabRequest = 2;
-            if (Item("TRACK", nullptr, "Build the finished track from the bricks.")) app.uiTabRequest = 1;
-            if (Item("MIX LAB", nullptr, "Where the instruments fight for the same frequencies, and what to turn to make room.")) app.uiTabRequest = 3;
-            if (Item("CHORD LAB", nullptr, "Jam with chords over the running scene (on LIVE) or over the open brick (on TRACK). Esc closes it.", true, app.chordLabOpen)) { app.chordLabOpen = !app.chordLabOpen; if (app.chordLabOpen && app.ShownTab() != 1) app.uiTabRequest = 2; }
-            if (Item("MASTER FX", nullptr, "Project-wide delay / reverb / distortion / sidechain and the master chain.")) app.masterFxRequest = true;
+            // C1 (UI-1): the two screens, then the three tools that open the same way under the header (same key or Esc closes)
+            if (Item("LIVE", "Tab", "The jam screen.", true, app.ShownTab() == 2)) { app.uiTabRequest = 2; app.OpenTool(AppState::Tool::None); }
+            if (Item("TRACK", "Tab", "Build the finished track from the bricks.", true, app.ShownTab() == 1)) { app.uiTabRequest = 1; app.OpenTool(AppState::Tool::None); }
+            ImGui::Separator();
+            if (Item("MIX LAB", "M", "Where the instruments fight for the same frequencies, and what to turn to make room.", true, app.ToolOpen(AppState::Tool::MixLab))) app.ToggleTool(AppState::Tool::MixLab);
+            if (Item("CHORD LAB", "C", "Jam with chords over the running scene (on LIVE) or over the open brick (on TRACK).", true, app.ToolOpen(AppState::Tool::ChordLab))) app.ToggleTool(AppState::Tool::ChordLab);
+            if (Item("MASTER FX", "F", "Project-wide delay / reverb / distortion / sidechain and the master chain.", true, app.ToolOpen(AppState::Tool::MasterFx))) app.ToggleTool(AppState::Tool::MasterFx);
             ImGui::Separator();
             if (ImGui::BeginMenu("Interface Size")) {
                 for (int z = 0; z < AppState::kNumUiZoom; ++z) {

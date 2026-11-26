@@ -588,7 +588,6 @@ int main(int argc, char** argv) {
             const int tabReq = app.uiTabRequest;   // a request made during this frame (THROW ONTO THE TRACK) waits for the next one
             const ImGuiTabItemFlags trackFlags = tabReq == 1 ? ImGuiTabItemFlags_SetSelected : 0;
             const ImGuiTabItemFlags liveFlags = tabReq == 2 ? ImGuiTabItemFlags_SetSelected : 0;
-            const ImGuiTabItemFlags labFlags = tabReq == 3 ? ImGuiTabItemFlags_SetSelected : 0;
             const float headerH = 42.0f, liveChainH = 104.0f, liveCtxH = 214.0f, liveBottomH = 132.0f, trackInspH = BricksPanel::InspectorHeight();
             const ImGuiWindowFlags fixedFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
             // LIVE (the program opens here): jam. Scene pads + chord bank, the editor, the instrument block, RANDOM / KIT + LIVE.
@@ -617,6 +616,52 @@ int main(int argc, char** argv) {
                     ImGui::EndChild();
                     ImGui::PopStyleVar();
             };
+            // C1 (UI-1): MIX LAB, CHORD LAB and MASTER FX open the same way: in the room under the header of LIVE or TRACK, with one
+            // strip on top (name, what it does, key, x). The tab under them stays selected; Esc, the same key or x closes.
+            auto toolColor = [](AppState::Tool t) {
+                return t == AppState::Tool::MixLab ? ImVec4(0.70f, 0.55f, 0.95f, 1.0f) : t == AppState::Tool::ChordLab ? ImVec4(0.30f, 0.72f, 0.65f, 1.0f) : ImVec4(0.95f, 0.64f, 0.24f, 1.0f);
+            };
+            auto drawTool = [&](float rest) {
+                const AppState::Tool t = app.tool;
+                const char* name = t == AppState::Tool::MixLab ? "MIX LAB" : t == AppState::Tool::ChordLab ? "CHORD LAB" : "MASTER FX";
+                const char* what = t == AppState::Tool::MixLab ? "where instruments fight for the same frequencies"
+                                 : t == AppState::Tool::ChordLab ? "the chords of the key: hear them, try them, build a loop"
+                                 : "project-wide delay, reverb, distortion, sidechain and the master chain";
+                const char* key = t == AppState::Tool::MixLab ? "M" : t == AppState::Tool::ChordLab ? "C" : "F";
+                const float stripH = 30.0f;
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 4));
+                ImGui::PushStyleColor(ImGuiCol_Border, toolColor(t));
+                ImGui::BeginChild("ToolStripChild", ImVec2(0, stripH), ImGuiChildFlags_Borders, fixedFlags);
+                ImGui::PopStyleColor();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextColored(toolColor(t), "%s", name);
+                ImGui::SameLine(0, 12);
+                ImGui::TextDisabled("%s", what);
+                const float xw = 26.0f, right = ImGui::GetWindowContentRegionMax().x;
+                ImGui::SameLine(right - xw - 120.0f);
+                ImGui::TextDisabled("%s or Esc closes", key);
+                ImGui::SameLine(right - xw);
+                if (ImGui::Button("x##toolClose", ImVec2(xw, 0))) app.OpenTool(AppState::Tool::None);
+                if (ImGui::IsItemHovered()) Hint(t == AppState::Tool::ChordLab ? "Close CHORD LAB (key C or Esc). A draft stays in its chord slot." : "Close (the same key or Esc).");
+                ImGui::EndChild();
+                ImGui::PopStyleVar();
+                const float bodyH = std::max(200.0f, rest - stripH - ImGui::GetStyle().ItemSpacing.y);
+                if (t == AppState::Tool::MixLab) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 6));
+                    ImGui::BeginChild("MixLabChild", ImVec2(0, bodyH), ImGuiChildFlags_None, fixedFlags);
+                    mixLabPanel.Draw(app, ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
+                    ImGui::EndChild();
+                    ImGui::PopStyleVar();
+                } else if (t == AppState::Tool::ChordLab) {
+                    drawChordLabChild(bodyH);
+                } else {
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 8));
+                    ImGui::BeginChild("MasterFxChild", ImVec2(0, bodyH), ImGuiChildFlags_Borders, ImGuiWindowFlags_None);   // scrolls on a short window
+                    headerPanel.DrawMasterFx(app);
+                    ImGui::EndChild();
+                    ImGui::PopStyleVar();
+                }
+            };
             // v44.51: a pulsing dot on the tab whose music is playing (LIVE = the jam, TRACK = the bricks). The tab bar also says it in words.
             auto tabPlayDot = [&](int tab) {
                 const AppState::PlaySource ps = app.PlayingSource();
@@ -642,18 +687,14 @@ int main(int argc, char** argv) {
                 headerPanel.Draw(app);
                 ImGui::EndChild();
                 ImGui::PopStyleVar();
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 6));
-                ImGui::BeginChild("ChainChild", ImVec2(0, liveChainH), ImGuiChildFlags_Borders, fixedFlags);
-                chainPanel.Draw(app);
-                ImGui::EndChild();
-                ImGui::PopStyleVar();
-                if (app.chordLabOpen) {
-                    // v44.43 CHORD LAB: the sequencer stays (compact), the panel takes the place of the instrument block and RANDOM / KIT
-                    drawSceneEditor(availY, headerH + liveChainH, sp, 17.0f, 19.0f, 0.0f, 0.0f);
-                    const float rest = ImGui::GetContentRegionAvail().y - kInfoLineHeight - 4.0f;
-                    drawChordLabChild(rest);
+                if (app.tool != AppState::Tool::None) {
+                    drawTool(availY - headerH - sp);   // C1: a tool takes the room under the header
                 } else {
-                    chordLabPanel.Leave(app);
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 6));
+                    ImGui::BeginChild("ChainChild", ImVec2(0, liveChainH), ImGuiChildFlags_Borders, fixedFlags);
+                    chainPanel.Draw(app);
+                    ImGui::EndChild();
+                    ImGui::PopStyleVar();
                     drawSceneEditor(availY, headerH + liveChainH, sp, 18.0f, 34.0f, liveCtxH, liveBottomH);
                 }
                 ImGui::PopStyleVar(2);
@@ -684,6 +725,14 @@ int main(int argc, char** argv) {
                 headerPanel.Draw(app);
                 ImGui::EndChild();
                 ImGui::PopStyleVar();
+                if (app.tool != AppState::Tool::None) {   // C1: a tool takes the room under the header, over the brick that is open
+                    drawTool(availY - headerH - sp);
+                    chainPanel.DrawEditors(app);
+                    bottomPanel.DrawBrowsers(app);
+                    ImGui::PopStyleVar(2);
+                    ImGui::PopFont();
+                    ImGui::EndTabItem();
+                } else {
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 6));
                 ImGui::BeginChild("BricksChild", ImVec2(0, stripH), ImGuiChildFlags_Borders, fixedFlags);
                 bricksPanel.Draw(app, chainPanel, true);
@@ -711,15 +760,7 @@ int main(int argc, char** argv) {
                     ImGui::PopStyleVar(2);
                     ImGui::PopFont();
                     ImGui::EndTabItem();
-                } else if (app.chordLabOpen) {   // v44.51: CHORD LAB on TRACK: it takes the place of the inspector and the editor, over the brick that is open
-                    drawChordLabChild(ImGui::GetContentRegionAvail().y - kInfoLineHeight - 4.0f);
-                    chainPanel.DrawEditors(app);
-                    bottomPanel.DrawBrowsers(app);
-                    ImGui::PopStyleVar(2);
-                    ImGui::PopFont();
-                    ImGui::EndTabItem();
                 } else {
-                chordLabPanel.Leave(app);
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 5));
                 ImGui::BeginChild("InspectorChild", ImVec2(0, trackInspH), ImGuiChildFlags_Borders, fixedFlags);
                 bricksPanel.DrawInspector(app, chainPanel);
@@ -761,32 +802,34 @@ int main(int argc, char** argv) {
                 ImGui::PopFont();
                 ImGui::EndTabItem();
                 }
+                }
             }
-            // MIX LAB (v44.41): where the instruments of the played scene fight for the same frequencies, and what to turn to make room.
-            tabHue(ImVec4(0.14f, 0.12f, 0.24f, 1.0f), ImVec4(0.70f, 0.55f, 0.95f, 1.0f));
-            const bool labOpen = ImGui::BeginTabItem("MIX LAB", nullptr, labFlags);
-            ImGui::PopStyleColor(3);
-            if (labOpen) {
-                ShowTab(app, 3);
-                ImGui::PushFont(nullptr, 14.0f);
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 4));
-                const float availY = ImGui::GetContentRegionAvail().y - kInfoLineHeight - 4.0f;
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 4));
-                ImGui::BeginChild("HeaderChildL", ImVec2(0, headerH), ImGuiChildFlags_Borders, fixedFlags);
-                headerPanel.Draw(app);
-                ImGui::EndChild();
-                ImGui::PopStyleVar();
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 6));
-                ImGui::BeginChild("MixLabChild", ImVec2(0, std::max(200.0f, availY - headerH - 8.0f)), ImGuiChildFlags_None, fixedFlags);
-                mixLabPanel.Draw(app, ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
-                ImGui::EndChild();
-                ImGui::PopStyleVar();
-                ImGui::PopStyleVar(2);
-                ImGui::PopFont();
-                ImGui::EndTabItem();
-            } else mixLabPanel.Leave(app);
-            headerPanel.DrawMenus(app);   // MASTER FX, right next to the LIVE tab
+            // C1 (UI-1): the three tools, one look, the key next to the name; lit while open (one at a time)
+            if (app.tool != AppState::Tool::MixLab) mixLabPanel.Leave(app);
+            if (app.tool != AppState::Tool::ChordLab) chordLabPanel.Leave(app);
+            auto toolButton = [&](const char* label, const char* key, AppState::Tool t, bool dot, const char* hint) {
+                const bool on = app.tool == t;
+                const ImVec4 c = toolColor(t);
+                ImGui::PushStyleColor(ImGuiCol_Tab, on ? ImVec4(c.x * 0.30f, c.y * 0.30f, c.z * 0.30f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Tab));
+                ImGui::PushStyleColor(ImGuiCol_Text, on ? c : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+                char lb[48];
+                std::snprintf(lb, sizeof lb, "%s         ###tool%s", label, key);   // the spaces leave room for the key box
+                const bool hit = ImGui::TabItemButton(lb, ImGuiTabItemFlags_NoTooltip);
+                ImGui::PopStyleColor(2);
+                const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const ImVec2 ks = ImGui::CalcTextSize(key);
+                const float kx = a.x + ImGui::GetStyle().FramePadding.x + ImGui::CalcTextSize(label).x + (dot ? 26.0f : 12.0f), ky = (a.y + b.y) * 0.5f;
+                dl->AddRect(ImVec2(kx - 4.0f, ky - ks.y * 0.5f - 1.0f), ImVec2(kx + ks.x + 4.0f, ky + ks.y * 0.5f + 1.0f), vis::kLineHi, 3.0f);
+                dl->AddText(ImVec2(kx, ky - ks.y * 0.5f), vis::kTextDim, key);
+                if (dot) dl->AddCircleFilled(ImVec2(kx - 13.0f, ky), 3.5f, IM_COL32(94, 224, 201, 255));
+                if (on) dl->AddLine(ImVec2(a.x + 2.0f, a.y + 1.0f), ImVec2(b.x - 2.0f, a.y + 1.0f), ImGui::GetColorU32(c), 2.0f);
+                if (hit) app.ToggleTool(t);
+                if (ImGui::IsItemHovered()) Hint("%s  Key %s; the same key or Esc closes.", hint, key);
+            };
+            toolButton("MIX LAB", "M", AppState::Tool::MixLab, false, "MIX LAB: where the instruments of the played scene fight for the same frequencies, and what to turn to make room.");
+            toolButton("CHORD LAB", "C", AppState::Tool::ChordLab, false, "CHORD LAB: jam with the chords of the key over the running scene (LIVE) or the open brick (TRACK).");
+            toolButton("MASTER FX", "F", AppState::Tool::MasterFx, app.project.fx.master.chainOn, "MASTER FX: project-wide delay / reverb / distortion / sidechain and the master chain (the dot: the chain is on).");
             {   // v44.51: what plays, in words, at the right end of the tab bar; when the tab on screen is not the one that plays, a click moves the music here
                 const AppState::PlaySource ps = app.PlayingSource();
                 if (ps != AppState::PlaySource::None) {

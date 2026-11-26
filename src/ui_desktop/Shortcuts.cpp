@@ -18,25 +18,17 @@ void HandleShortcuts(AppState& app) {
     const bool cmd = io.KeyCtrl || io.KeySuper;     // ImGui maps Cmd to Ctrl on macOS
     const bool shift = io.KeyShift;
 
-    // v44.57: PITCH (a turntable pitch fader). P switches the mode; in it the arrow keys are the fader: up / down = faster / slower by
-    // 0.1% (Shift 1%), left / right = a push (pitch bend) while held, Return = back to 0, R = range +-8% / +-16%, Esc or P = leave.
-    // The keys are taken for the frame, so the grid, the piano roll and the lists do not move at the same time. Cmd+arrows stay as they were.
-    if (!cmd && ImGui::IsKeyPressed(ImGuiKey_P, false)) {
-        app.pitchMode = !app.pitchMode;
-        app.pitchBend.store(0, std::memory_order_relaxed);
-        app.SetStatus(app.pitchMode ? "PITCH: UP / DOWN = FASTER / SLOWER, LEFT / RIGHT = PUSH (HOLD), RETURN = 0%, R = RANGE, P = LEAVE" : "PITCH: ARROWS ARE BACK TO NORMAL");
-        return;
-    }
-    if (app.pitchMode && !cmd) {
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { app.pitchMode = false; app.pitchBend.store(0, std::memory_order_relaxed); return; }
+    // v44.57 PITCH, C1 (UI-4): no hidden keyboard mode any more. Option+Up / Down = faster / slower by 0.1% (Shift 1%),
+    // Option+Left / Right = a push (pitch bend) while held, at any time and on any screen; Return always plays from the brick.
+    // The keys are taken for the frame, so the grid, the piano roll and the lists do not move at the same time.
+    const bool opt = io.KeyAlt && !cmd;
+    if (opt) {
         const float stepPct = shift ? 1.0f : 0.1f;
         if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)) app.PitchStep(stepPct);
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) app.PitchStep(-stepPct);
-        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) { app.PitchSet(0.0f); app.SetStatus("PITCH 0.0%"); }
-        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { app.PitchSetRange16(!app.pitchRange16); app.SetStatus(app.pitchRange16 ? "PITCH RANGE +-16%" : "PITCH RANGE +-8%"); }
         const bool l = ImGui::IsKeyDown(ImGuiKey_LeftArrow), r = ImGui::IsKeyDown(ImGuiKey_RightArrow);
         app.pitchBend.store(l == r ? 0 : (r ? 1 : -1), std::memory_order_relaxed);
-        for (ImGuiKey k : {ImGuiKey_UpArrow, ImGuiKey_DownArrow, ImGuiKey_LeftArrow, ImGuiKey_RightArrow, ImGuiKey_Enter, ImGuiKey_KeypadEnter, ImGuiKey_R})
+        for (ImGuiKey k : {ImGuiKey_UpArrow, ImGuiKey_DownArrow, ImGuiKey_LeftArrow, ImGuiKey_RightArrow})
             ImGui::SetKeyOwner(k, ImGuiKeyOwner_Any, ImGuiInputFlags_LockThisFrame);
     } else {
         app.pitchBend.store(0, std::memory_order_relaxed);
@@ -47,16 +39,25 @@ void HandleShortcuts(AppState& app) {
         return;
     }
     if (app.helpOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { app.helpOpen = false; return; }
-    // v44.45: Esc closes what was opened last: CHORD LAB over LIVE, MIX LAB back to LIVE (popups and text boxes take Esc first)
-    if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
-        if (app.chordLabOpen && (app.activeTab == 2 || app.activeTab == 1)) { app.chordLabOpen = false; return; }
-        if (app.activeTab == 3) { app.uiTabRequest = 2; return; }
+    // C1 (UI-1): Esc closes the open tool (MIX LAB, CHORD LAB, MASTER FX), then the PITCH fader strip (popups and text boxes take Esc first)
+    // A drag in progress (a knob, a fader, a lane point) takes Esc first: it puts the value back (review of C1 part 2)
+    const bool dragging = ImGui::IsAnyItemActive();
+    if (!dragging && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (app.tool != AppState::Tool::None) { app.OpenTool(AppState::Tool::None); return; }
+        if (app.pitchMode) { app.pitchMode = false; return; }
+    }
+    // C1 (UI-1): M / C / F open MIX LAB / CHORD LAB / MASTER FX in the room under the header; the same key closes it
+    if (!cmd && !io.KeyAlt && !shift && !dragging) {
+        if (ImGui::IsKeyPressed(ImGuiKey_M, false)) { app.ToggleTool(AppState::Tool::MixLab); return; }
+        if (ImGui::IsKeyPressed(ImGuiKey_C, false)) { app.ToggleTool(AppState::Tool::ChordLab); return; }
+        if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { app.ToggleTool(AppState::Tool::MasterFx); return; }
     }
     if (!cmd && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
         app.TransportToggle();   // v44.10: the one player (brick loop / track), see AppState::TransportToggle
         return;
     }
-    if (!cmd && ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {   // v44.38: Tab goes between LIVE and TRACK
+    if (!cmd && ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {   // v44.38: Tab goes between LIVE and TRACK (C1: and closes the open tool)
+        app.OpenTool(AppState::Tool::None);
         app.uiTabRequest = app.activeTab == 1 ? 2 : 1;
         return;
     }
