@@ -1,6 +1,6 @@
 name: build
 # Every pull request and every change to main runs this. The TR-Brick button on the Mac
-# (tools/mac/launch.sh) refuses to start a pull request unless its checks are green, and
+# (tools/mac/launch.sh) refuses to start a pull request whose checks failed (still running = warns), and
 # main is protected: a pull request can be merged only when these checks pass.
 # A pull request that changes only documents (*.md, docs/) still runs this workflow, but the
 # build jobs show as "skipped" (which counts as passed): no need to build for text.

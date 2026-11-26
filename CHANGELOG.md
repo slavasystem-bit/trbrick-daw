@@ -11,6 +11,12 @@ ROADMAP "Samples in one place" (C4b), item 4 (guessed part); approved mockup `do
 - **Column GENRE · TAGS** (sortable) in the library and the collections; the selected file shows them too.
 - Own corrections of genre / tags (a file beside the library) and performance sets come in later parts; the samples and folders are never changed.
 
+## Mac launcher: a pull request can be tried while its GitHub checks are still running
+
+- The TR-Brick button now starts a pull request whose checks are still running (or not started yet) after a clear `WARNING: ... is NOT fully checked yet`, so an urgent fix can be tried on the Mac without waiting 15-30 minutes. Failed checks are still refused, and the self-check on the Mac still runs first.
+- A push that lands between the menu and the download is no longer refused either: the newest version starts with a warning.
+- The launcher updates itself the next time the main version is started; nothing to re-download.
+
 ## Stage C4b (part 5): FILL: SAMPLE
 
 ROADMAP "Samples in one place" (C4b), the approved exception "FILL: SAMPLE"; the brick's FILL page of the approved inspector.
