@@ -10,6 +10,11 @@ Audit v44.58 LIVE-5, full fix, step 1 of the plan: measure before changing how p
 - **The XRUN hint** now says who held the sound longest and how much of the last second the screen held it: "The screen held the sound at most 0.7 ms (HEADER), and 2% of the last second." A click on the readout resets the longest hold and its name, as before. Nothing else on screen changes.
 - First measurement (Linux, software drawing, 1440x900, playing): the screen holds the lock about 2% of the time, longest holds 0.3-2.8 ms, below the 4 ms the audio callback waits before it plays silence (#13). The Mac numbers decide which panels are worth changing next.
 - `SceneMutex::MaxHoldWho`, `HeldTotalUs`, `NameHolder`; 7 new `t8_selftest` checks (names, nesting, OTHER, reset, the audio thread's own render not counted).
+## Fix: "Duplicate as new scene" no longer starts the copy
+
+- The scene pad menu's **Duplicate as new scene** copied the scene and switched playback to the copy at once, off the launch grid. Now the copy only opens in the editor (held apart: "OPEN 05 - PLAYING 04 - GO launches 05"); the music keeps playing the scene it played. GO or a click on the pad launches the copy on the grid as usual. Stopped or in song mode nothing changes.
+- The undo step now belongs to the new slot, so Cmd+Z empties it again (before, it saved the open scene instead).
+- `AppState::DuplicateSceneAsNew` (takes the scene lock) + `t8_selftest` checks for LAUNCH = BAR and NOW and for undo.
 
 ## Mac launcher: a pull request can be tried while its GitHub checks are still running
 
