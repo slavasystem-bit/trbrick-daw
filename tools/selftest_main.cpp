@@ -36,6 +36,7 @@
 #include "TrackEq.h"
 #include "SynthVoice.h"
 #include "app/AppState.h"
+#include "app/AudioSettings.h"
 #include <sstream>
 #include "app/MixLab.h"
 #include "core/ChordLab.h"
@@ -6831,6 +6832,18 @@ int main(int argc, char** argv) {
         check(a.sequencer.LockForAudio(5000, waited), "lock-5: once the screen lets go, the next buffer plays normally");
         a.sequencer.UnlockForAudio();
         check(!a.sequencer.PatternMutex().HeldByThisThread(), "lock-5: the lock is free afterwards");
+    }
+    {   // N1 (LIVE-5 / LIVE-6): Settings > Audio rules
+        using namespace t8::audiosettings;
+        check(ValidBuffer(256) == 256 && ValidBuffer(512) == 512 && ValidBuffer(128) == 128, "audio-set: the three offered buffer sizes are kept");
+        check(ValidBuffer(0) == 128 && ValidBuffer(4096) == 128 && ValidBuffer(300) == 128, "audio-set: a damaged saved buffer size becomes 128");
+        const std::vector<std::string> outs = {"MacBook Pro Speakers", "Scarlett 2i2 USB"};
+        check(OutputToOpen("Scarlett 2i2 USB", outs) == "Scarlett 2i2 USB", "audio-set: a plugged-in chosen output is opened");
+        check(OutputToOpen("AirPods", outs).empty(), "audio-set: an unplugged chosen output falls back to the system default");
+        check(OutputToOpen("", outs).empty(), "audio-set: no choice = the system default");
+        check(std::abs(BufferMs(128, 44100) - 2.9) < 0.05 && std::abs(BufferMs(512, 44100) - 11.6) < 0.05, "audio-set: buffer lengths in ms");
+        AppState a;
+        check(a.audioBufferChoice == 128 && a.audioOutputChoice.empty(), "audio-set: the default is the system output with 128 frames (as before)");
     }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;
