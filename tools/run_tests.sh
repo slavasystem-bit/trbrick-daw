@@ -4,6 +4,7 @@
 #
 #   tools/run_tests.sh <build-dir> selftest            # t8_selftest
 #   tools/run_tests.sh <build-dir> fuzz [fuzz args]    # t8_fuzz, e.g. --seeds 30
+#   tools/run_tests.sh <build-dir> uitest [args]       # t8_uitest (the real screen, no window), e.g. --seeds 6
 #
 # The tests read the sources by relative path (src/..., kits/808, CMakeLists.txt),
 # so the scratch folder gets a symlink to every top-level entry of the repo and the
@@ -19,8 +20,9 @@ BUILD="$(cd "$BUILD" && pwd)" || { echo "run_tests: no build folder $BUILD"; exi
 
 case "$WHAT" in
     selftest) BIN="$BUILD/t8_selftest" ;;
+    uitest)   BIN="$BUILD/t8_uitest" ;;
     fuzz)     BIN="$BUILD/t8_fuzz" ;;
-    *) echo "run_tests: unknown test '$WHAT' (selftest or fuzz)"; exit 2 ;;
+    *) echo "run_tests: unknown test '$WHAT' (selftest, uitest or fuzz)"; exit 2 ;;
 esac
 [ -x "$BIN" ] || { echo "run_tests: $BIN is not built"; exit 2; }
 
@@ -31,7 +33,7 @@ trap cleanup EXIT
 for e in "$REPO"/* "$REPO"/.[!.]*; do
     [ -e "$e" ] || continue
     name="$(basename "$e")"
-    case "$name" in .git|build|build-*|selftest_*|ui_settings.cfg|imgui.ini) continue ;; esac
+    case "$name" in .git|build|build-*|selftest_*|uitest_*|ui_settings.cfg|imgui.ini) continue ;; esac
     ln -s "$e" "$TMP/$name"
 done
 

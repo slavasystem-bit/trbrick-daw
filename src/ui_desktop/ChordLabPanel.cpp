@@ -681,7 +681,8 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.86f, 0.50f, 0.12f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.10f, 0.07f, 0.03f, 1.0f));
-        if (ImGui::Button("THROW ONTO THE TRACK", ImVec2(176, 28))) { if (app.ThrowIntoChain()) { app.selBrick = std::max(0, app.project.songChainLength - 1); app.uiTabRequest = 1; } }
+        if (ImGui::Button("THROW ONTO THE TRACK", ImVec2(176, 28))) { SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");   // TEST-5 found it unlocked
+            if (app.ThrowIntoChain()) { app.selBrick = std::max(0, app.project.songChainLength - 1); app.uiTabRequest = 1; } }
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) Hint("The scene becomes the next brick of the track and TRACK opens. With the chord bank on, the brick plays the chord slot you are hearing (and keeps the scene's own chords too).");
         ImGui::SameLine(0, 8);
