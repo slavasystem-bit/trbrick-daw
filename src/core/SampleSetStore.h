@@ -76,7 +76,7 @@ inline SampleSetList ParseStore(const std::string& text, int* skipped = nullptr)
         if (line.size() < 3 || line.compare(0, 2, "- ") != 0 || out.empty() || out.back().name.empty()) { ++bad; continue; }
         const std::string key = line.substr(2);
         SampleSet& set = out.back();
-        if (key.find('\t') != std::string::npos || std::find(set.keys.begin(), set.keys.end(), key) != set.keys.end() || set.keys.size() >= kMaxEntries) { ++bad; continue; }
+        if (key.find_first_of("\t\r") != std::string::npos || std::find(set.keys.begin(), set.keys.end(), key) != set.keys.end() || set.keys.size() >= kMaxEntries) { ++bad; continue; }
         set.keys.push_back(key);
     }
     out.erase(std::remove_if(out.begin(), out.end(), [](const SampleSet& s) { return s.name.empty(); }), out.end());

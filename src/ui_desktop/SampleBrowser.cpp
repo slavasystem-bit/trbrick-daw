@@ -96,6 +96,10 @@ void SampleBrowser::Open(AppState& app, AppState::LibTarget target, int brick) {
     src_ = it != lastSrc_.end() ? it->second : Source::Project;
     if (src_ == Source::Kits && target != AppState::LibTarget::Drum) src_ = Source::Project;
     if (src_ == Source::BuiltIn && target != AppState::LibTarget::Transition) src_ = Source::Project;
+    if (src_ == Source::Set) {   // a set that is gone (deleted meanwhile): back to FAVORITES
+        const SampleSetList* sets = app.SampleSetsIfReady();
+        if (set_ < 0 || (sets && set_ >= static_cast<int>(sets->size()))) { src_ = Source::Favorites; set_ = -1; }
+    }
     if (src_ == Source::Project && (target == AppState::LibTarget::Sampler || target == AppState::LibTarget::Fill) && app.SampleNames().empty()) src_ = Source::Library;
     type_ = -1;
     if (target == AppState::LibTarget::Drum) {
@@ -658,7 +662,8 @@ void SampleBrowser::Draw(AppState& app) {
                 ImGui::Separator();
                 if (ImGui::MenuItem("DELETE THIS SET (the files stay)")) {
                     if (app.DeleteSampleSet(setMenu_)) {
-                        if (src_ == Source::Set) { if (set_ == setMenu_) { src_ = Source::Favorites; set_ = -1; } else if (set_ > setMenu_) --set_; }
+                        // review of PR 37: set_ is shared by every target (another one may remember Source::Set): always follow the shift
+                        if (set_ == setMenu_) { set_ = -1; if (src_ == Source::Set) src_ = Source::Favorites; } else if (set_ > setMenu_) --set_;
                         dirty_ = true; sel_ = 0;
                     }
                 }

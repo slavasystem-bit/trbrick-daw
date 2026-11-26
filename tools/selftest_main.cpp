@@ -7033,10 +7033,10 @@ int main(int argc, char** argv) {
                       "c4b v3: a set is written as [name] and one '- key' line per file (a folder in brackets is fine)");
                 int bad = -1;
                 check(ss::ParseStore(txt, &bad) == l && bad == 0, "c4b v3: sets read back exactly, in order");
-                const std::string damaged = "- orphan.wav\n[A]\n- a.wav\n- a.wav\nno dash\n[A]\n- swallowed.wav\n[]\n- gone.wav\n[B\n[  C  ]\r\n- c.wav\r\n- t\tab.wav\n";
+                const std::string damaged = "- orphan.wav\n[A]\n- a.wav\n- a.wav\nno dash\n[A]\n- swallowed.wav\n[]\n- gone.wav\n[B\n[  C  ]\r\n- c.wav\r\n- t\tab.wav\n- cr\rinside.wav\n";
                 const SampleSetList d = ss::ParseStore(damaged, &bad);
-                check(d.size() == 2 && d[0].name == "A" && d[0].keys == std::vector<std::string>{"a.wav"} && d[1].name == "C" && d[1].keys == std::vector<std::string>{"c.wav"} && bad == 9,
-                      "c4b v3: a damaged file: orphans, repeats, a second set of the same name, bad headers and tabs are skipped, the rest is kept");
+                check(d.size() == 2 && d[0].name == "A" && d[0].keys == std::vector<std::string>{"a.wav"} && d[1].name == "C" && d[1].keys == std::vector<std::string>{"c.wav"} && bad == 10,
+                      "c4b v3: a damaged file: orphans, repeats, a second set of the same name, bad headers, tabs and inner CRs are skipped, the rest is kept");
                 check(ss::ParseStore("").empty() && ss::ParseStore("\xff\xfe\0garbage\n").empty(), "c4b v3: an empty or binary file = no sets");
                 check(ss::CleanName("  My [gig]\n ") == "My gig" && ss::CleanName(std::string(60, 'x')).size() == ss::kNameMax
                       && ss::CleanName(std::string(39, 'x') + "\xD0\x96").size() == 39, "c4b v3: set names are trimmed, lose brackets / breaks, and are cut on a letter boundary");
@@ -7074,7 +7074,8 @@ int main(int argc, char** argv) {
                 std::ifstream in("src/ui_desktop/SampleBrowser.cpp"); const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
                 std::ifstream mi("src/main.cpp"); const std::string msrc((std::istreambuf_iterator<char>(mi)), std::istreambuf_iterator<char>());
                 check(src.find("menuWant_ || menuOpen_ || setMenuOpen_") != std::string::npos && src.find("##sbRowMenu") != std::string::npos && src.find("case Source::Set:") != std::string::npos
-                      && msrc.find("app.FlushSampleSets();") != std::string::npos, "c4b v3: the menus own the keys, sets are a source, flushed at quit");
+                      && msrc.find("app.FlushSampleSets();") != std::string::npos
+                      && src.find("if (set_ == setMenu_) { set_ = -1;") != std::string::npos && src.find("a set that is gone (deleted meanwhile)") != std::string::npos, "c4b v3: the menus own the keys, sets are a source, flushed at quit");
             }
             {   // C4b (v2): the user's own genre / tags, in Library/sample_tags.txt
                 namespace st = sampletags;
