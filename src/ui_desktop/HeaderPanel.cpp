@@ -285,7 +285,7 @@ void HeaderPanel::Draw(AppState& app) {
     }
     if (ImGui::IsItemHovered()) {
         Pattern lp = pat; lp.masterLength = lenEditing ? lenEditVal : pat.masterLength;
-        Hint("Pattern length in steps. Longer REPEATS what is already there (16 -> 64 = four copies); tracks with their own length stay. Option+click = 16. Undoable.  Now: %.4g bars = %.1f s at %.0f BPM (a bar = %d steps).",
+        Hint("Scene length in steps. Longer REPEATS what is already there (16 -> 64 = four copies); tracks with their own length stay. Option+click = 16. Undoable.  Now: %.4g bars = %.1f s at %.0f BPM (a bar = %d steps).",
                           PatternBars(lp), PatternSeconds(lp), pat.bpm, 4 * ClampGrid(pat.stepsPerBeat));
     }
     {   // v44.4: the length in bars next to the field ("1b", "2.5b": a triplet grid does not always end on a bar line)
@@ -310,14 +310,14 @@ void HeaderPanel::Draw(AppState& app) {
     {
         const bool staged = !app.stagedGroove.IsFlat();
         if (ToggleButton(staged && !app.grooveViewOpen ? "GROOVE *" : "GROOVE", app.grooveViewOpen, ImVec2(0, 0), ToggleTab())) app.grooveViewOpen = !app.grooveViewOpen;
-        if (ImGui::IsItemHovered()) Hint("Groove of the whole pattern: opens the groove window in place of the mixer.\nChoose a groove and an amount there, then BAKE writes it into the steps.%s",
+        if (ImGui::IsItemHovered()) Hint("Groove of the whole scene: opens the groove window in place of the mixer.\nChoose a groove and an amount there, then BAKE writes it into the steps.%s",
                                                        staged ? "\n(* a groove is chosen but not baked yet)" : "");
         ImGui::SameLine(0, 4);
         const bool feel = app.FeelIsActive(pat);
         ImGui::PushStyleColor(ImGuiCol_Text, feel ? ImVec4(0.95f, 0.64f, 0.24f, 1.0f) : ImVec4(0.45f, 0.47f, 0.55f, 1.0f));
         if (ImGui::Button("RESET##feel")) app.ResetFeel();
         ImGui::PopStyleColor();
-        if (ImGui::IsItemHovered()) Hint("Straight again: swing 0, every track back on the pattern swing, no groove chosen.\nAlways available; Undo brings the feel back. (Grooves already baked into steps stay.)");
+        if (ImGui::IsItemHovered()) Hint("Straight again: swing 0, every track back on the scene swing, no groove chosen.\nAlways available; Undo brings the feel back. (Grooves already baked into steps stay.)");
     }
     Gap(10);
     Label("GRID");
@@ -328,7 +328,7 @@ void HeaderPanel::Draw(AppState& app) {
         }
         ChoiceEnd();
     }
-    if (ImGui::IsItemHovered()) Hint("Step grid of this pattern: 1/16 (default), 1/32, 1/16 triplets, 1/8 triplets.\nSwitching the grid converts the pattern (notes stay where they are in time).\nThe triplet grids move every note to the nearest step in time\n(tempo and feel stay put; 16ths between the triplet steps snap). The length keeps its number of bars. Undoable.");
+    if (ImGui::IsItemHovered()) Hint("Step grid of this scene: 1/16 (default), 1/32, 1/16 triplets, 1/8 triplets.\nSwitching the grid converts the scene (notes stay where they are in time).\nThe triplet grids move every note to the nearest step in time\n(tempo and feel stay put; 16ths between the triplet steps snap). The length keeps its number of bars. Undoable.");
 
     // (MASTER FX sits next to the LIVE tab: see DrawMenus; the document lives in the menu bar)
     Gap(10);

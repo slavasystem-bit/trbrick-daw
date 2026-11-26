@@ -108,7 +108,7 @@ void ApplyNoteAtRow(AppState& app, int trackIndex, int col, int rowNote, bool va
 
 
 // Every distinct pitch used anywhere on the track (within its own length),
-// highest first -- the rows ACTIVE ONLY mode shows.
+// highest first -- the rows ACTIVE mode shows.
 std::vector<int> UsedPitches(const Track& t, int trackLen) {
     std::set<int, std::greater<int>> notes;
     for (int i = 0; i < trackLen && i < kMaxSteps; ++i) {
@@ -191,21 +191,21 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
     if (ImGui::Button("X  MIXER")) app.deskRollClosed = true;
     if (ImGui::IsItemHovered()) Hint("Close the piano roll and bring the mixer back");
     ImGui::SameLine(0, 8);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "ROLL");
-    ImGui::SameLine(0, 6);
+    ImGui::AlignTextToFramePadding();   // UI-7: no ROLL word any more (the pictogram and the name say whose notes these are), so the row fits at 1440 px
     {   // v44.37: the instrument's pictogram before its name
         const ImVec2 p = ImGui::GetCursorScreenPos();
         DrawInstrumentGlyph(ImGui::GetWindowDrawList(), std::clamp(app.seqCursorTrack, 0, kNumTracks - 1), ImVec2(p.x + 8.0f, p.y + ImGui::GetFrameHeight() * 0.5f), 14.0f, TrackColor(std::clamp(app.seqCursorTrack, 0, kNumTracks - 1)));
         ImGui::Dummy(ImVec2(18.0f, 1.0f));
         ImGui::SameLine(0, 0);
     }
-    ImGui::TextDisabled("%.8s", TrackDisplayName(t).c_str());
-    ImGui::SameLine(0, 14);
-    if (ToggleButton("ALL NOTES", !activeOnly_ && !scaleUsed_, ImVec2(0, 0), ToggleTab())) { activeOnly_ = false; scaleUsed_ = false; }
+    ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "%.8s", TrackDisplayName(t).c_str());
+    // UI-7: the rows-to-show choices are ALL / ACTIVE / SCALE+USED (were ALL-NOTES / ACTIVE-ONLY), so EUCLID n/m and GHOST fit at 1440 px
+    ImGui::SameLine(0, 10);
+    if (ToggleButton("ALL", !activeOnly_ && !scaleUsed_, ImVec2(0, 0), ToggleTab())) { activeOnly_ = false; scaleUsed_ = false; }
+    if (ImGui::IsItemHovered()) Hint("Show every pitch (all notes): click an empty row to add a new note.");
     ImGui::SameLine(0, 4);
-    if (ToggleButton("ACTIVE ONLY", activeOnly_, ImVec2(0, 0), ToggleTab())) { activeOnly_ = true; scaleUsed_ = false; }
-    if (ImGui::IsItemHovered()) Hint("Show only the pitches that play on this track.\nSwitch back to ALL NOTES to add a new pitch.");
+    if (ToggleButton("ACTIVE", activeOnly_, ImVec2(0, 0), ToggleTab())) { activeOnly_ = true; scaleUsed_ = false; }
+    if (ImGui::IsItemHovered()) Hint("Show only the pitches that play on this track.\nSwitch back to ALL to add a new pitch.");
     ImGui::SameLine(0, 4);
     if (ToggleButton("SCALE+USED", scaleUsed_, ImVec2(0, 0), ToggleTab())) { scaleUsed_ = !scaleUsed_; if (scaleUsed_) { activeOnly_ = false; recenter_ = true; } }
     if (ImGui::IsItemHovered()) Hint("Every note of the key / scale together with every pitch this track plays,\nacross several octaves (mouse wheel to scroll). Notes outside the scale are red,\nrows show the scale degree, other tracks' notes appear as ghosts.");
@@ -214,9 +214,9 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
         static const char* kScaleViewLabel[3] = {"SCALE: OFF", "SCALE: MARK", "SCALE: ONLY"};
         if (ToggleButton(kScaleViewLabel[scaleView_], scaleView_ != 0, ImVec2(0, 0), ToggleTab())) scaleView_ = (scaleView_ + 1) % 3;
         if (ImGui::IsItemHovered())
-            Hint("Notes of the project's key / scale (set in the header).\nMARK = shade scale rows, tonic highlighted.\nONLY = list just the scale notes (ALL NOTES view).");
+            Hint("Notes of the project's key / scale (set in the header).\nMARK = shade scale rows, tonic highlighted.\nONLY = list just the scale notes (ALL view).");
     }
-    ImGui::SameLine(0, 10);
+    ImGui::SameLine(0, 8);
     if (ToggleButton("LANE", laneOn_, ImVec2(0, 0), ToggleTab())) laneOn_ = !laneOn_;
     if (ImGui::IsItemHovered()) Hint("Velocity / nudge of every step as bars under the notes\nSeveral notes: Shift+drag = rubber band, Shift+click = add / remove, Cmd+A = all. Then drag them (Option = copy),\nUp / Down = semitone (Shift = octave), Left / Right = step (Shift = beat), Delete, Cmd+D = duplicate.");
     ImGui::SameLine(0, 4);
@@ -234,11 +234,21 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
     if (ImGui::Button("SNAP")) app.SnapTrackToScale(ti);
     if (ImGui::IsItemHovered()) Hint("Move every note of this track that is outside the header's key / scale\nto the nearest scale note (undoable).");
     ImGui::SameLine(0, 4);
-    DrawEuclidTools(app, ti);
-    if (scaleUsed_) {
-        ImGui::SameLine(0, 4);
-        if (ToggleButton("GHOST", ghost_, ImVec2(0, 0), ToggleTab())) ghost_ = !ghost_;
-        if (ImGui::IsItemHovered()) Hint("Show the notes of the other melodic tracks as faint outlines.");
+    {   // UI-7: EUCLID n/m and GHOST are the last two on the row; when they would run past the edge (SCALE+USED with a spread on, a
+        // narrow window) they are drawn smaller (not below 10 points) instead of being cut to "EUC"
+        const float pad = ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float need = ImGui::CalcTextSize("EUCLID 16/64").x + pad + (scaleUsed_ ? ImGui::CalcTextSize("GHOST").x + pad + 4.0f : 0.0f);
+        const float avail = origin.x + innerW - ImGui::GetCursorPosX();
+        const float fs = ImGui::GetFontSize();
+        const float fit = need > avail && need > 0.0f ? std::max(10.0f, fs * avail / need) : fs;
+        DrawEuclidTools(app, ti, fit < fs ? fit : 0.0f);
+        ImGui::PushFont(nullptr, fit);
+        if (scaleUsed_) {
+            ImGui::SameLine(0, 4);
+            if (ToggleButton("GHOST", ghost_, ImVec2(0, 0), ToggleTab())) ghost_ = !ghost_;
+            if (ImGui::IsItemHovered()) Hint("Show the notes of the other melodic tracks as faint outlines.");
+        }
+        ImGui::PopFont();
     }
     // The Mixer is hidden while the roll shows, so keep this track's VOL / PAN here.
     float usedX = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x; // end of the last button, window-local
@@ -470,7 +480,7 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
 
     if (rows.empty()) {
         ImGui::SetCursorPos(ImVec2(origin.x + 8.0f, rowsTop + 8.0f));
-        ImGui::TextDisabled("No notes on this track yet - switch to ALL NOTES and click a cell (mouse wheel scrolls the pitches).");
+        ImGui::TextDisabled("No notes on this track yet - switch to ALL and click a cell (mouse wheel scrolls the pitches).");
     }
     for (size_t ri = 0; ri < rows.size(); ++ri) {
         int rowNote = rows[ri];
@@ -645,7 +655,9 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
         ImGui::SetCursorPos(ImVec2(origin.x, laneTop + 12.0f));
         if (ToggleButton("VEL", laneKind_ == LaneKind::Velocity, ImVec2(kLabelW - 4.0f, 20), ToggleTab())) laneKind_ = LaneKind::Velocity;
         ImGui::SetCursorPos(ImVec2(origin.x, laneTop + 36.0f));
+        ImGui::PushFont(nullptr, std::max(10.0f, std::min(ImGui::GetFontSize(), 12.0f)));   // UI-7: "NUDGE" fits the label column (was "NUDG")
         if (ToggleButton("NUDGE", laneKind_ == LaneKind::Nudge, ImVec2(kLabelW - 4.0f, 20), ToggleTab())) laneKind_ = LaneKind::Nudge;
+        ImGui::PopFont();
         const float totalW = geom.X(kPageSteps - 1) + cellW - geom.x0;
         DrawStepLane(app, ti, laneKind_, laneState_, geom, laneTop, laneH - 8.0f, totalW, trackLen, playing ? playStep : -1);
     }

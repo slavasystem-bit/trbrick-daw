@@ -534,10 +534,10 @@ void ChainPanel::Draw(AppState& app) {
         if (idx >= 0 && idx < proj.songChainLength) {
             ImGui::TextDisabled("SCENE SLOT %d", idx + 1);
             ImGui::Separator();
-            if (ImGui::BeginMenu("Change pattern")) {
+            if (ImGui::BeginMenu("Change scene")) {
                 for (int p = 0; p < kNumLiveScenes; ++p) {
                     char lbl[16];
-                    std::snprintf(lbl, sizeof(lbl), "Pattern %02d", p + 1);
+                    std::snprintf(lbl, sizeof(lbl), "Scene %02d", p + 1);
                     if (ImGui::MenuItem(lbl, nullptr, proj.songChain[idx].patternIndex == p)) { app.PushSoundUndo(); proj.songChain[idx].patternIndex = p; }
                 }
                 ImGui::EndMenu();

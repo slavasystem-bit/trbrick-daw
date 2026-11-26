@@ -195,7 +195,7 @@ void SequencerPanel::Draw(AppState& app, const LiveLayout& layout) {
             DrawInstrumentItems(app, app.project.currentPattern, row);
             ImGui::Separator();
             if (ImGui::MenuItem("Copy whole scene", "Cmd+Shift+C")) { app.CopyPattern(); app.SetStatus("SCENE COPIED"); }
-            if (ImGui::MenuItem("Paste whole pattern", "Cmd+Shift+V", false, app.hasPatternClipboard))
+            if (ImGui::MenuItem("Paste whole scene", "Cmd+Shift+V", false, app.hasPatternClipboard))
                 app.SetStatus(app.PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
             if (t.type == TrackType::Drum) {
                 ImGui::Separator();

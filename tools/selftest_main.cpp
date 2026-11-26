@@ -7191,6 +7191,18 @@ int main(int argc, char** argv) {
         AppState a;
         check(a.audioBufferChoice == 128 && a.audioOutputChoice.empty(), "audio-set: the default is the system output with 128 frames (as before)");
     }
+    {   // C1 (UI-6, UI-7): one word for a scene, labels that fit (source ratchets)
+        auto slurp = [](const std::string& path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+        const std::string seq = slurp("src/ui_desktop/SequencerPanel.cpp"), chain = slurp("src/ui_desktop/ChainPanel.cpp"), head = slurp("src/ui_desktop/HeaderPanel.cpp");
+        const std::string roll = slurp("src/ui_desktop/PianoRollPanel.cpp"), cell = slurp("src/ui_desktop/ParamCell.h"), ctx = slurp("src/ui_desktop/ContextPanel.cpp");
+        check(seq.find("\"Paste whole scene\"") != std::string::npos && seq.find("whole pattern") == std::string::npos, "c1 ui-6: Paste whole scene under Copy whole scene");
+        check(chain.find("\"Change scene\"") != std::string::npos && chain.find("\"Pattern %02d\"") == std::string::npos, "c1 ui-6: the brick slot menu says Change scene");
+        check(head.find("Pattern length") == std::string::npos && head.find("of this pattern") == std::string::npos, "c1 ui-6: the header hints say scene");
+        check(ctx.find("\"PAT\"") == std::string::npos, "c1 ui-6: a track on the scene swing shows SCENE, not PAT");
+        check(roll.find("\"ALL NOTES\"") == std::string::npos && roll.find("\"ACTIVE ONLY\"") == std::string::npos && roll.find("\"ROLL\"") == std::string::npos, "c1 ui-7: the roll toolbar is ALL / ACTIVE, no ROLL word");
+        check(roll.find("DrawEuclidTools(app, ti, fit") != std::string::npos, "c1 ui-7: EUCLID n/m and GHOST shrink to fit the roll toolbar");
+        check(cell.find("kParamCellMinFont = 10.0f") != std::string::npos && cell.find("ImGui::GetFont(), size") != std::string::npos, "c1 ui-7: a cell label is drawn smaller to fit, not below 10 points");
+    }
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : "FAILURES: " + std::to_string(failures)) << "\n";
     return failures == 0 ? 0 : 1;
 }

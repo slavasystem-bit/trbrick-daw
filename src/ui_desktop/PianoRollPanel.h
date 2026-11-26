@@ -5,8 +5,8 @@
 //
 //   - always 16 steps wide, paged together with the Sequencer
 //     (AppState::deskStepPage) -- no scrolling
-//   - ALL NOTES shows one octave (12 pitch rows) that the mouse wheel scrolls (the OCT buttons are gone: right-click a note = OCTAVE UP / DOWN);
-//     ACTIVE ONLY lists just the pitches that actually have a note on this
+//   - ALL shows one octave (12 pitch rows) that the mouse wheel scrolls (the OCT buttons are gone: right-click a note = OCTAVE UP / DOWN);
+//     ACTIVE lists just the pitches that actually have a note on this
 //     track, so a sparse bassline collapses to a handful of tall rows
 //   - the selected track's VOLUME / PAN sit in the header, since the Mixer
 //     (which normally owns them) is hidden while this is showing
@@ -27,7 +27,7 @@ public:
     void Draw(AppState& app, const LiveLayout& layout);
 
 private:
-    int topNote_ = 59;       // MIDI note on the top row in ALL NOTES mode
+    int topNote_ = 59;       // MIDI note on the top row in ALL mode
     int lastTrack_ = -1;     // re-centres topNote_ when the selected track changes
     bool activeOnly_ = false;
     bool scaleUsed_ = false; // SCALE+USED: every scale note plus every played pitch (multi-octave, scrollable)

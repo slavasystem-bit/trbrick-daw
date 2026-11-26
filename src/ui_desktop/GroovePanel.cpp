@@ -44,7 +44,7 @@ void GroovePanel::Draw(AppState& app, const LiveLayout& layout) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(amber, "GROOVE");
     ImGui::SameLine(0, 8);
-    ImGui::TextDisabled("of the whole pattern:  1 choose  -  2 amount  -  3 bake");
+    ImGui::TextDisabled("of the whole scene:  1 choose  -  2 amount  -  3 bake");
 
     // ---- row 1: 1 CHOOSE, 2 AMOUNT, 3 BAKE ------------------------------------------------------------
     ImGui::SetCursorPos(ImVec2(x0, origin.y + layout.headerH + 6.0f));
@@ -64,7 +64,7 @@ void GroovePanel::Draw(AppState& app, const LiveLayout& layout) {
         }
         ChoiceEnd();
     }
-    if (ImGui::IsItemHovered()) Hint("Pick a groove: its shape appears below. Nothing changes in the pattern until you press BAKE.");
+    if (ImGui::IsItemHovered()) Hint("Pick a groove: its shape appears below. Nothing changes in the scene until you press BAKE.");
     ImGui::SameLine(0, 14);
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("2 AMOUNT");
