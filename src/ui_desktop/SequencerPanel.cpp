@@ -45,7 +45,7 @@ ImU32 StepColor(int row, const Step& s, bool shadedGroup) {
 } // namespace
 
 void SequencerPanel::Draw(AppState& app, const LiveLayout& layout) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "SEQUENCER");
     Pattern& pat = app.CurrentPattern();
 
     ImGui::PushID("SequencerPanel");

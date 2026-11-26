@@ -50,7 +50,7 @@ const char* BeatCategory(const std::string& n) {
 } // namespace
 
 void BottomPanel::Draw(AppState& app) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "BROWSERS");
     ImGui::PushID("BottomPanel");
     DrawRandomKit(app);
     VSep();
@@ -62,7 +62,7 @@ void BottomPanel::Draw(AppState& app) {
 // v44.26: the kit browser (and the audition) belong to every screen that has a KIT picker, not only to LIVE: the SOUND view of a drum
 // on TRACK asks for it with app.kitBrowserRequest too. Called once per frame by whichever screen is shown.
 void BottomPanel::DrawBrowsers(AppState& app) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "BROWSERS");
     ImGui::PushID("BottomPanelBrowsers");
     if (app.kitBrowserRequest) { app.kitBrowserRequest = false; OpenKitBrowser(app); }
     if (app.libraryBrowserRequest != AppState::LibTarget::None) { const auto t = app.libraryBrowserRequest; app.libraryBrowserRequest = AppState::LibTarget::None; OpenLibraryBrowser(app, t, app.libraryBrowserBrick); }
