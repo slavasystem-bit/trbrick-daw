@@ -551,8 +551,11 @@ void ContextPanel::DrawKitBlock(AppState& app, int ti, float width) {
     if (sh.open) app.OpenLibrary(AppState::LibTarget::Drum);   // C4b: the SAMPLES browser, on the samples of this drum in its kit
     {   // v44.52: the waveform of that sample, with the START / LENGTH of the SAMPLE knobs (the same card the sampler has)
         ImGui::Dummy(ImVec2(1, 3));
+        WaveGesture g; g.lines = buf != nullptr;
         DrawWaveCard(app, "##drumWave", buf ? buf->data.data() : nullptr, buf ? buf->frames() : 0, buf ? buf->channels : 1, buf ? buf->sampleRate : kSampleRate, t.edit,
-                     width, 40.0f, TrackColor(ti), 0, slot == DrumSlot::Kick ? "NO SAMPLE (SYNTH KICK)" : "NO SAMPLE IN THIS KIT", nullptr);
+                     width, 40.0f, TrackColor(ti), 0, slot == DrumSlot::Kick ? "NO SAMPLE (SYNTH KICK)" : "NO SAMPLE IN THIS KIT", nullptr, nullptr, 0, &g);
+        if (g.begin) app.PushUndo();   // C4b (d): one Undo per drag of START / the end
+        if (g.edit) { t.edit.start = g.start; t.edit.length = g.length; }
     }
     BlockEnd();
 }
@@ -751,16 +754,25 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
         bool clicked = false;
         const bool marksMode = sp.mode == 1 && sp.slices == 0 && smp;   // v44.52.1: on HITS slices a click on the waveform edits the marks
         const char* msg = sp.file.empty() ? "CLICK TO CHOOSE A SAMPLE" : "FILE NOT FOUND - CLICK TO CHOOSE";
+        WaveGesture g; g.lines = smp != nullptr; g.marks = marksMode;
         DrawWaveCard(app, "##smpWave", smp ? smp->data.data() : nullptr, smp ? smp->frames() : 0, smp ? smp->channels : 1, smp ? smp->sampleRate : kSampleRate, ed,
-                     width, synthTgt ? 40.0f : std::max(40.0f, cellSize_.y - 8.0f), TrackColor(ti), sp.mode == 1 ? sp.slices : 0, msg, marksMode ? nullptr : &clicked,
-                     marksMode ? sp.marks.data() : nullptr, marksMode ? sp.markCount : 0);
-        if (clicked) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);   // C4b: the same browser as the name
-        if (marksMode) {
-            const ImVec2 rmin = ImGui::GetItemRectMin();
-            const float frac = std::clamp((ImGui::GetMousePos().x - (rmin.x + 6.0f)) / std::max(1.0f, width - 12.0f), 0.0f, 1.0f);
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) app.AddSliceMark(frac, tgt);
-            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) app.RemoveNearestSliceMark(frac, 10.0f / std::max(1.0f, width - 12.0f), tgt);
-            if (ImGui::IsItemHovered()) Hint("HITS slices: click = add a mark here, right-click = remove the nearest mark. Each mark starts a slice; slice 1 is played by ROOT, slice 2 by ROOT + 1 ...");
+                     width, synthTgt ? 40.0f : std::max(40.0f, cellSize_.y - 8.0f), TrackColor(ti), sp.mode == 1 ? sp.slices : 0, msg, &clicked,
+                     marksMode ? sp.marks.data() : nullptr, marksMode ? sp.markCount : 0, &g);
+        if (clicked) app.OpenLibrary(AppState::LibTarget::Sampler, -1, tgt);   // C4b: the same browser as the name (an empty card)
+        if (g.begin) app.PushUndo();   // one Undo per drag
+        if (g.edit) { SamplerPatch np = app.GetSampleTarget(tgt); np.start = g.start; np.decay = g.length; app.PutSampleTarget(tgt, np); }
+        if (g.moveMark >= 0) waveDragMark_ = app.MoveSliceMark(g.moveMark, g.moveFrac, tgt);   // the mark may pass a neighbour: follow its new index
+        if (g.addMark) app.AddSliceMark(g.frac, tgt);
+        if (g.delMark) app.RemoveNearestSliceMark(g.frac, 10.0f / std::max(1.0f, width - 12.0f), tgt);
+        if (g.menu) { waveMenuFrac_ = g.frac; waveMenuTgt_ = tgt; ImGui::OpenPopup("##waveMarks"); }
+        if (ImGui::BeginPopup("##waveMarks")) {
+            const float tol = 10.0f / std::max(1.0f, width - 12.0f);
+            const SamplerPatch cp = app.GetSampleTarget(waveMenuTgt_);
+            bool near = false; for (int i = 0; i < cp.markCount; ++i) if (std::fabs(cp.marks[static_cast<size_t>(i)] / 65535.0f - waveMenuFrac_) <= tol) near = true;
+            if (ImGui::MenuItem("ADD A MARK HERE", nullptr, false, !near && cp.markCount < 32)) app.AddSliceMark(waveMenuFrac_, waveMenuTgt_);
+            if (ImGui::MenuItem("DELETE THIS MARK", nullptr, false, near)) app.RemoveNearestSliceMark(waveMenuFrac_, tol, waveMenuTgt_);
+            if (ImGui::MenuItem("CLEAR ALL MARKS", nullptr, false, cp.markCount > 0)) app.ClearSliceMarks(waveMenuTgt_);
+            ImGui::EndPopup();
         }
     }
     BlockEnd();
@@ -769,12 +781,14 @@ void ContextPanel::DrawSampleBlock(AppState& app, int ti, float width) {
 // v44.52: the waveform card shared by the sampler and the drum tracks: the part that plays (START .. LENGTH) is lit, SLICES are
 // marked, the white line is START and the coloured line the end. `data` null = nothing to show (emptyMsg is written instead).
 void ContextPanel::DrawWaveCard(AppState& app, const char* id, const float* data, int frames, int channels, int sampleRate, const SampleEdit& ed,
-                                float width, float bh, ImU32 tc, int slices, const char* emptyMsg, bool* clicked, const uint16_t* marks, int markCount) {
+                                float width, float bh, ImU32 tc, int slices, const char* emptyMsg, bool* clicked, const uint16_t* marks, int markCount, WaveGesture* gest) {
     (void)app;
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton(id, ImVec2(width, bh));
+    ImGui::InvisibleButton(id, ImVec2(width, bh), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
     const bool hov = ImGui::IsItemHovered();
-    if (clicked && ImGui::IsItemClicked(ImGuiMouseButton_Left)) *clicked = true;
+    const bool hasWave = data && frames >= 2;
+    // C4b (d): with a sample the card is edited by hand; only an empty card opens the browser (the name always does)
+    if (clicked && !hasWave && ImGui::IsItemClicked(ImGuiMouseButton_Left)) *clicked = true;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1(p0.x + width, p0.y + bh);
     dl->AddRectFilled(p0, p1, hov && clicked ? vis::kCellHover : vis::kCell, 5.0f);
@@ -831,13 +845,56 @@ void ContextPanel::DrawWaveCard(AppState& app, const char* id, const float* data
             if (in && markCount <= 24) { char nb[8]; std::snprintf(nb, sizeof(nb), "%d", i + 1); dl->AddText(ImVec2(x + 3.0f, p1.y - ImGui::GetTextLineHeight() - 2.0f), vis::kTextDim, nb); }
         }
     }
-    dl->AddLine(ImVec2(sx, p0.y + 3.0f), ImVec2(sx, p1.y - 3.0f), IM_COL32(255, 255, 255, 200), 1.5f);
-    dl->AddLine(ImVec2(ex, p0.y + 3.0f), ImVec2(ex, p1.y - 3.0f), ColorAlpha(tc, 255), 1.5f);
+    // ---- C4b (d): gestures (the caller applies them) ----
+    const float span = std::max(1.0f, width - 12.0f);
+    const float mx = ImGui::GetIO().MousePos.x;
+    const float mfrac = std::clamp((mx - x0) / span, 0.0f, 1.0f);
+    auto nearMark = [&](float x) { int best = -1; float bd = 6.0f; for (int i = 0; i < markCount; ++i) { const float d = std::fabs(x0 + marks[i] / 65535.0f * span - x); if (d <= bd) { bd = d; best = i; } } return best; };
+    int hoverWhat = 0;   // 1 START, 2 end, 3 a mark
+    if (gest && hov && waveDrag_ == 0) {
+        if (gest->lines && std::fabs(mx - sx) <= 5.0f) hoverWhat = 1;
+        else if (gest->lines && std::fabs(mx - ex) <= 5.0f) hoverWhat = 2;
+        else if (gest->marks && marks && nearMark(mx) >= 0) hoverWhat = 3;
+    }
+    if (gest) {
+        if (ImGui::IsItemActivated() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            waveDragMoved_ = false;
+            waveDrag_ = hoverWhat ? hoverWhat : 4;
+            waveDragMark_ = hoverWhat == 3 ? nearMark(mx) : -1;
+        }
+        if (ImGui::IsItemActive() && waveDrag_ != 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+            if (!waveDragMoved_ && waveDrag_ != 4) gest->begin = true;   // Undo only when something really moves
+            waveDragMoved_ = true;
+            const float endAbs = std::min(1.0f, st + (1.0f - st) * std::clamp(ed.length, 0.02f, 1.0f));
+            if (waveDrag_ == 1) {   // START moves, the end stays where it is
+                const float ns = std::clamp(mfrac, 0.0f, std::min(0.95f, endAbs - 0.01f));
+                gest->edit = true; gest->start = ns; gest->length = std::clamp((endAbs - ns) / std::max(0.05f, 1.0f - ns), 0.02f, 1.0f);
+            } else if (waveDrag_ == 2) {
+                gest->edit = true; gest->start = ed.start; gest->length = std::clamp((mfrac - st) / std::max(0.05f, 1.0f - st), 0.02f, 1.0f);
+            } else if (waveDrag_ == 3 && waveDragMark_ >= 0 && waveDragMark_ < markCount) {
+                gest->moveMark = waveDragMark_; gest->moveFrac = mfrac;
+            }
+        }
+        if (ImGui::IsItemDeactivated() && waveDrag_ != 0) {
+            if (waveDrag_ == 4 && !waveDragMoved_ && gest->marks) { gest->addMark = true; gest->frac = mfrac; }   // a click on nothing
+            waveDrag_ = 0; waveDragMark_ = -1;
+        }
+        if (gest->marks && hov && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && nearMark(mx) >= 0) { gest->delMark = true; gest->addMark = false; gest->frac = mfrac; }
+        if (gest->marks && hov && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) { gest->menu = true; gest->frac = mfrac; }
+        const int shown = waveDrag_ == 1 || waveDrag_ == 2 || waveDrag_ == 3 ? waveDrag_ : hoverWhat;
+        if (shown) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+    const bool hotStart = gest && (waveDrag_ == 1 || hoverWhat == 1), hotEnd = gest && (waveDrag_ == 2 || hoverWhat == 2);
+    dl->AddLine(ImVec2(sx, p0.y + 3.0f), ImVec2(sx, p1.y - 3.0f), IM_COL32(255, 255, 255, 200), hotStart ? 3.0f : 1.5f);
+    dl->AddLine(ImVec2(ex, p0.y + 3.0f), ImVec2(ex, p1.y - 3.0f), ColorAlpha(tc, 255), hotEnd ? 3.0f : 1.5f);
     const double secs = static_cast<double>(frames) / std::max(1, sampleRate);
     char info[48]; std::snprintf(info, sizeof(info), "%.2f S  %s%s", secs, ch == 2 ? "STEREO" : "MONO", ed.reverse ? "  REV" : "");
     dl->AddText(ImVec2(p1.x - ImGui::CalcTextSize(info).x - 8.0f, p0.y + 3.0f), vis::kTextDim, info);
-    if (hov) Hint(clicked ? "Click: choose a .wav or .aif in the file window (it is copied into samples/ beside the project). Or drop it on the window.\nThe white line is START, the coloured line the end set by LENGTH."
-                          : "The sample of this track. The white line is START, the coloured line the end set by LENGTH. Numbers mark SLICES.");
+    if (hov && waveDrag_ == 0) {
+        if (gest && gest->marks) Hint("HITS slices: click = add a mark, drag a mark = move it, double-click a mark = delete it, right-click = menu.\nDrag the white line = START, the coloured line = the end. Each mark starts a slice; slice 1 is played by ROOT, slice 2 by ROOT + 1 ...");
+        else if (gest && gest->lines) Hint("Drag the white line = START, the coloured line = the end (LENGTH): the same as the START and LENGTH knobs. Numbers mark SLICES.");
+        else Hint("The sample of this track. The white line is START, the coloured line the end set by LENGTH. Numbers mark SLICES.");
+    }
 }
 
 // v44.52: the knobs that edit a sample, identical on every instrument that plays one (drum tracks and the sampler).

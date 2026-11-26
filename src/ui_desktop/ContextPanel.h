@@ -76,9 +76,23 @@ private:
     void DrawSampleBlock(AppState& app, int ti, float width);
     // v44.52: ONE editor for the sample of a drum track and of the sampler -- the same card, the same knobs, the same words.
     // `ed` is the track's SampleEdit (the sampler's patch is copied in and out by the caller through onChange).
+    // C4b (d): what a gesture on the card asks for (the caller applies it, with one Undo per gesture):
+    //   drag the white line = START, the coloured line = the end (LENGTH); on HITS: click empty = add a mark, drag a mark = move it,
+    //   double-click a mark = delete it, right-click = the marks menu.
+    struct WaveGesture {
+        bool lines = false, marks = false;   // in: which gestures this card offers
+        bool begin = false;                  // out: a drag started this frame (push Undo now)
+        bool edit = false; float start = 0.0f, length = 1.0f;   // out: new START / LENGTH
+        int moveMark = -1; float moveFrac = 0.0f;               // out: mark `moveMark` goes to moveFrac (of the whole sample)
+        bool addMark = false, delMark = false, menu = false; float frac = 0.0f;   // out: at frac
+    };
     void DrawWaveCard(AppState& app, const char* id, const float* data, int frames, int channels, int sampleRate, const SampleEdit& ed,
                       float width, float height, ImU32 tc, int slices, const char* emptyMsg, bool* clicked,
-                      const uint16_t* marks = nullptr, int markCount = 0);   // marks: HITS slices (v44.52.1)
+                      const uint16_t* marks = nullptr, int markCount = 0, WaveGesture* gest = nullptr);   // marks: HITS slices (v44.52.1)
+    int waveDrag_ = 0;              // C4b (d): 0 none, 1 START, 2 end, 3 a mark (waveDragMark_), 4 pressed on nothing
+    int waveDragMark_ = -1;
+    bool waveDragMoved_ = false;
+    float waveMenuFrac_ = 0.0f; int waveMenuTgt_ = 0;   // the marks menu
     void DrawSampleEditBlocks(AppState& app, SampleEdit& ed, const std::function<void()>& onChange, bool drum, bool lastSeparator, bool hideAttack = false);
     void DrawSound(AppState& app, int ti);
     void DrawChords(AppState& app, int ti);

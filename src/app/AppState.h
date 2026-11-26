@@ -3551,6 +3551,28 @@ struct AppState {
         --sp.markCount;
         PutSampleTarget(tgt, sp);
     }
+    // C4b (d): drag a HITS mark. No Undo here (the caller pushed one when the drag began). The marks stay sorted; returns the
+    // mark's new index (it may pass a neighbour), or -1. A mark never lands on another (40 / 65535 apart at least).
+    int MoveSliceMark(int idx, float frac, int tgt = kTargetSampler) {
+        SamplerPatch sp = GetSampleTarget(tgt);
+        if (idx < 0 || idx >= sp.markCount) return -1;
+        const int v = std::clamp(static_cast<int>(std::lround(frac * 65535.0f)), 0, 65535);
+        for (int i = 0; i < sp.markCount; ++i) if (i != idx && std::abs(static_cast<int>(sp.marks[static_cast<size_t>(i)]) - v) < 40) return idx;   // would sit on another
+        for (int i = idx; i + 1 < sp.markCount; ++i) sp.marks[static_cast<size_t>(i)] = sp.marks[static_cast<size_t>(i + 1)];
+        int n = sp.markCount - 1, at = n;
+        while (at > 0 && sp.marks[static_cast<size_t>(at - 1)] > v) { sp.marks[static_cast<size_t>(at)] = sp.marks[static_cast<size_t>(at - 1)]; --at; }
+        sp.marks[static_cast<size_t>(at)] = static_cast<uint16_t>(v);
+        sp.markCount = static_cast<uint8_t>(n + 1);
+        PutSampleTarget(tgt, sp);
+        return at;
+    }
+    void ClearSliceMarks(int tgt = kTargetSampler) {
+        SamplerPatch sp = GetSampleTarget(tgt);
+        if (sp.markCount == 0) return;
+        PushUndo();
+        sp.markCount = 0;
+        PutSampleTarget(tgt, sp);
+    }
     // Names of the sample files (.wav, .aif, .aiff, .aifc) in samples/ (for the picker).
     const std::vector<std::string>& SampleNames() {
         if (!sampleNamesValid_) {
