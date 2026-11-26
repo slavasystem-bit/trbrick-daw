@@ -30,7 +30,7 @@ void Gap(float w = 10.0f) { ImGui::SameLine(0, w); }
 // v44.3: MASTER FX sits in the tab bar, right next to the LIVE tab (called by main inside BeginTabBar). v44.19 (U8c): the FILE
 // drawer is gone -- the menu bar (MenuBar.cpp) carries File / Edit / View / Library / Settings.
 void HeaderPanel::DrawMenus(AppState& app) {
-    SceneLock lock(app.sequencer.PatternMutex(), "MENUS");
+    SceneLock lock(app.sequencer.PatternMutex(), "MASTER FX");
     const bool fxHit = ImGui::TabItemButton("MASTER FX  v", ImGuiTabItemFlags_None);
     if (ImGui::IsItemHovered()) Hint("Project-wide delay / reverb / distortion / sidechain");
     const ImVec2 fxMax = ImGui::GetItemRectMax();

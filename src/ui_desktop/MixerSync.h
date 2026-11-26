@@ -96,7 +96,7 @@ inline void SetTrackFloatField(AppState& app, int trackIndex,
 // from it -- the two steps are: set currentPattern, re-sync. Caller
 // does not need to hold the pattern lock (taken here; it is recursive).
 inline void SwitchPattern(AppState& app, int patternIndex) {
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "SCENE SWITCH");
     app.project.currentPattern = std::clamp(patternIndex, 0, kNumPatterns - 1);
     // While a chain is playing, selecting a scene only changes what is being
     // EDITED -- playback keeps following the chain (see

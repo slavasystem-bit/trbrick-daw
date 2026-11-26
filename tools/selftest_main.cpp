@@ -7159,9 +7159,10 @@ int main(int argc, char** argv) {
         SceneMutex m;
         auto hold = [&](const char* who, int ms) { SceneLock lk(m, who); std::this_thread::sleep_for(std::chrono::milliseconds(ms)); };
         check(m.MaxHoldWho()[0] == '\0' && m.HeldTotalUs() == 0, "lock-5 names: nothing held yet");
-        hold("MIXER", 2); hold("CONTEXT", 8); hold("HEADER", 1);
-        check(std::string(m.MaxHoldWho()) == "CONTEXT" && m.MaxHoldUs() >= 8000, "lock-5 names: the longest hold is named");
-        check(m.HeldTotalUs() >= 11000, "lock-5 names: all holds add up to the total held time");
+        hold("MIXER", 2); hold("CONTEXT", 40); hold("HEADER", 1);   // 40 ms: far above any sleep overshoot of the short ones
+        check(std::string(m.MaxHoldWho()) == "CONTEXT" && m.MaxHoldUs() >= 40000, "lock-5 names: the longest hold is named");
+        check(m.HeldTotalUs() >= 43000, "lock-5 names: all holds add up to the total held time");
+        m.ResetMaxHold();
         {   // nested: the outer name covers the whole hold (a panel calling into the app, which locks again)
             SceneLock outer(m, "BRICKS");
             { SceneLock inner(m, "MENU"); std::this_thread::sleep_for(std::chrono::milliseconds(12)); }
