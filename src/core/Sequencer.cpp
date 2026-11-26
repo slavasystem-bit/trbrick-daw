@@ -2,6 +2,7 @@
 #include "Sequencer.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace t8 {
 
@@ -38,7 +39,7 @@ void Sequencer::Play() {
     samplesIntoStep_ = 0.0;
     pendingRatchets_.clear();
     prefire_.fill(Prefire{});
-    fillWas_ = false; fillActiveUi_.store(false); riserArmedFor_ = -1;
+    fillWas_ = false; fillPosPrev_ = -1; fillActiveUi_.store(false); riserArmedFor_ = -1;
     ApplyStepOverlay();
     engine_->SamplerSetTempo(project_->patterns[PlayPatternIndex()].bpm);
     engine_->SamplerLoopRestart();   // v44.52: a sampler LOOP starts with the first step
@@ -67,7 +68,8 @@ void Sequencer::Stop() {
     engine_->SamplerFadeOut();
     chordNoteOffScheduled_ = false;
     chordHeldCount_ = 0;
-    fillWas_ = false; fillActiveUi_.store(false);
+    fillWas_ = false; fillPosPrev_ = -1; fillActiveUi_.store(false);
+    engine_->FillSampleStop();
     ApplyStepOverlay();   // not playing: the arrangement mutes let go
 }
 
@@ -377,16 +379,27 @@ void Sequencer::FireTick(int tick) {
     if (!useBreak) {
         FillRule rule;
         fs = FillAt(tick, &rule);
-        if (fs.active && !fillWas_) {                     // a new window starts: settle the kind and the break once
+        // a new window starts: settle the kind and the break once. A window that follows the previous one without a gap (a fill as
+        // long as the pass, or the next brick's fill right after this one) is new too: its position starts again (review of C4b).
+        if (fs.active && (!fillWas_ || fs.pos <= fillPosPrev_)) {
             FillKind k = rule.kind;
             if (k == FillKind::Random) k = static_cast<FillKind>(std::uniform_int_distribution<int>(0, 3)(rng_));
             fillKindCur_.store(static_cast<int>(k));
             const int nb = static_cast<int>(AllDrumBreaks().size());
             fillBreakCur_ = rule.breakIndex > 0 ? std::clamp(static_cast<int>(rule.breakIndex) - 1, 0, std::max(0, nb - 1)) : std::uniform_int_distribution<int>(0, std::max(0, nb - 1))(rng_);
+            if (k == FillKind::Sample) {
+                float g = 1.0f;
+                if (const ChainStep* fcs = PlayingChainStep()) g = LevelDbToGain(fcs->levels.fillDb);
+                StartFillSample(rule, fs, g);
+            }
+        } else if (!fs.active && fillWas_ && static_cast<FillKind>(fillKindCur_.load()) == FillKind::Sample) {
+            engine_->FillSampleStop();                    // the window was left early (another scene / step): no tail into the next part
         }
         fillWas_ = fs.active;
+        fillPosPrev_ = fs.active ? fs.pos : -1;
     } else {
-        fillWas_ = false;
+        if (fillWas_ && static_cast<FillKind>(fillKindCur_.load()) == FillKind::Sample) engine_->FillSampleStop();   // a live break wins over the fill
+        fillWas_ = false; fillPosPrev_ = -1;
     }
     fillActiveUi_.store(fs.active);
     const FillKind fillKind = static_cast<FillKind>(fillKindCur_.load());
@@ -407,6 +420,7 @@ void Sequencer::FireTick(int tick) {
 
         if (fs.active && !useBreak && i < kNumDrumTracks) {
             if (fillKind == FillKind::DropOut) continue;                       // the drums fall silent for the window
+            if (fillKind == FillKind::Sample && fillDrumsMute_) continue;      // C4b: the sample plays alone (DRUMS MUTE)
             const bool hatRoll = fillKind == FillKind::HatRoll && t.slotIndex == static_cast<int>(DrumSlot::ClosedHat);
             const bool snareRoll = fillKind == FillKind::SnareBuild && t.slotIndex == static_cast<int>(DrumSlot::Snare);
             if (hatRoll || snareRoll) {
@@ -594,6 +608,28 @@ int Sequencer::LoopSteps() const {
     const Pattern& p = project_->patterns[PlayPatternIndex()];
     const ChainStep* cs = PlayingChainStep();
     return cs ? ChainStepLoopSteps(p, *cs) : std::max(1, p.masterLength);
+}
+
+// C4b: start the SAMPLE fill voice for the window that begins now (`fs.pos` > 0 when it was entered late). STRETCH fits the whole
+// sample to the window (and starts proportionally further in); AS IS plays it at its own speed from where the window would be.
+// The length is fixed at the start: a tempo change inside the window (BPM edit, MIDI clock) moves its end off the next beat 1.
+void Sequencer::StartFillSample(const FillRule& rule, const FillState& fs, float gain) {
+    fillDrumsMute_ = rule.drumsMute;
+    if (!engine_ || !rule.sample[0] || fs.total <= 0) { if (engine_) engine_->FillSampleStop(); return; }
+    SamplePtr sp;
+    for (const FillSampleEntry& e : fillSamples_)
+        if (e.sample && std::strncmp(e.name, rule.sample, FillRule::kSampleMax) == 0) { sp = e.sample; break; }
+    if (!sp || sp->frames() < 2) { engine_->FillSampleStop(); return; }
+    const int sr = engine_->SampleRate();
+    const double sps = SamplesPerStep(sr);
+    const double windowFrames = fs.total * sps;
+    const double frames = sp->frames();
+    const int pos = std::clamp(fs.pos, 0, fs.total - 1);
+    const int length = static_cast<int>(std::lround((fs.total - pos) * sps));
+    double rate, start;
+    if (rule.sampleFit == 0) { rate = frames / std::max(1.0, windowFrames); start = frames * pos / fs.total; }
+    else { rate = static_cast<double>(sp->sampleRate) / std::max(1, sr); start = pos * sps * rate; }
+    engine_->FillSampleStart(sp, start, rate, gain * 0.8f, length);
 }
 
 FillState Sequencer::FillAt(int tick, FillRule* ruleOut) const {

@@ -28,6 +28,7 @@
 #include "KickSynth.h"
 #include "Scales.h"
 #include "SubtractiveSynth.h"
+#include <cstring>
 #include "CustomSynthPresets.h"
 #include "MidiCapture.h"
 #include "KitInfo.h"
@@ -3271,6 +3272,77 @@ int main(int argc, char** argv) {
                 while (done < total) { const int n = std::min(256, total - done); std::fill(o.begin(), o.begin() + n * 2, 0.0f); sq3.RenderAndAdvance(o.data(), n, kSampleRate); std::copy(o.begin(), o.begin() + n * 2, acc.begin() + done * 2); done += n; }
                 check(rms(9.6, 16) > rms(1, 7.4) * 1.3, "fill v44.5: HAT ROLL is denser and louder than the plain hats before it");
             }
+            {   // C4b: the SAMPLE fill plays a sample of samples/ over its window, ends exactly with it, and can silence the drums
+                static Project fp; fp = Project{};
+                Pattern& pf = fp.patterns[0]; pf.bpm = 120.0f; pf.masterLength = 16;
+                const double spStep = 60.0 / 120.0 / 4.0 * kSampleRate;
+                auto tone = [](double seconds, float amp) {
+                    auto sd = std::make_shared<SampleData>(); sd->channels = 1; sd->sampleRate = kSampleRate; sd->name = "fx.wav";
+                    const int n = static_cast<int>(seconds * kSampleRate); sd->data.resize(static_cast<size_t>(n));
+                    for (int i = 0; i < n; ++i) sd->data[static_cast<size_t>(i)] = amp * std::sin(6.2831853f * 220.0f * static_cast<float>(i) / kSampleRate);
+                    return SamplePtr(sd);
+                };
+                auto table = [](const SamplePtr& sp) {
+                    std::array<Sequencer::FillSampleEntry, Sequencer::kMaxFillSamples> t{};
+                    std::strncpy(t[0].name, "fx.wav", FillRule::kSampleMax - 1); t[0].sample = sp; return t;
+                };
+                const int total = static_cast<int>(spStep * 32);
+                std::vector<float> acc(static_cast<size_t>(total) * 2, 0.0f), o(4096, 0.0f);
+                auto run = [&](const SamplePtr& sp, bool kicks, bool song = false) {
+                    AudioEngine e; e.Init(kSampleRate); e.GetKit()->LoadFromFolder("kits/808", kSampleRate);
+                    for (int i = 0; i < 16; ++i) fp.patterns[0].tracks[0].steps[i].active = kicks;
+                    e.GetMixer().SyncFromPattern(fp.patterns[0]);
+                    Sequencer sq; sq.Init(&e, &fp); sq.SetFillSamples(table(sp));
+                    if (song) sq.SetSongModeActive(true);
+                    sq.Play();
+                    std::fill(acc.begin(), acc.end(), 0.0f);
+                    int done = 0;
+                    while (done < total) { const int n = std::min(256, total - done); std::fill(o.begin(), o.begin() + n * 2, 0.0f); sq.RenderAndAdvance(o.data(), n, kSampleRate); std::copy(o.begin(), o.begin() + n * 2, acc.begin() + done * 2); done += n; }
+                    sq.Stop();
+                    for (int k = 0; k < 4; ++k) sq.RenderAndAdvance(o.data(), 256, kSampleRate);   // the 10 ms stop fade
+                    check(!e.FillSamplePlaying(), "fill C4b: STOP silences the SAMPLE fill");
+                };
+                auto rms = [&](double fromStep, double toStep) { double sum = 0; int a = static_cast<int>(spStep * fromStep), b = static_cast<int>(spStep * toStep); for (int i = a; i < b; ++i) sum += acc[i * 2] * acc[i * 2]; return std::sqrt(sum / std::max(1, b - a)); };
+                FillRule fr{FillWhen::EveryLoop, FillKind::Sample, 2, 4, 0}; fr.SetSample("fx.wav");
+                fp.patterns[0].fill = fr;   // STRETCH a 3-second sample over the last 2 beats (1 second)
+                run(tone(3.0, 0.5f), false);
+                // (16.2: the master limiter delays everything by a few ms, the drums as much as the fill)
+                check(rms(1, 7.5) < 0.002, "fill C4b: nothing of the SAMPLE fill before its window");
+                check(rms(8.3, 15.7) > 0.1, "fill C4b: the SAMPLE fill sounds over its window (STRETCH)");
+                check(rms(16.2, 23.5) < 0.002, "fill C4b: STRETCH is silent exactly from the step after the window");
+                check(rms(24.3, 31.7) > 0.1, "fill C4b: EVERY LOOP plays it again in the next pass");
+                fp.patterns[0].fill.sampleFit = 1;   // AS IS: a long sample is cut at the end of the window
+                run(tone(3.0, 0.5f), false);
+                check(rms(8.3, 15.7) > 0.1 && rms(16.2, 23.5) < 0.002, "fill C4b: AS IS plays the sample and cuts it exactly at the end of the window");
+                run(tone(0.1, 0.5f), false);   // a short sample AS IS: it simply ends
+                check(rms(8.0, 8.7) > 0.1 && rms(9.5, 15.5) < 0.002, "fill C4b: a sample shorter than the window AS IS ends on its own");
+                fp.patterns[0].fill.sampleFit = 0;
+                run(tone(3.0, 0.0f), true);   // a silent sample with DRUMS MUTE: the window is (almost) silent, like DROP OUT
+                const double busy = rms(2, 7);
+                check(busy > 0.02 && rms(9.6, 16) < busy * 0.35, "fill C4b: DRUMS MUTE silences the drums while the sample plays");
+                fp.patterns[0].fill.drumsMute = false;
+                run(tone(3.0, 0.0f), true);
+                check(rms(9.6, 16) > busy * 0.5, "fill C4b: DRUMS PLAY ON keeps the drums under the sample");
+                fp.patterns[0].fill.SetSample("other.wav");   // a file the sequencer was not given: nothing plays, nothing breaks
+                run(tone(3.0, 0.5f), false);
+                check(rms(8.3, 15.7) < 0.002, "fill C4b: a SAMPLE fill without its sample plays nothing");
+                // review of C4b: a window that follows the previous one without a gap starts the sample again
+                fp.patterns[0].fill = FillRule{FillWhen::EveryLoop, FillKind::Sample, 4, 4, 0}; fp.patterns[0].fill.SetSample("fx.wav");   // the whole 1-bar pass
+                run(tone(3.0, 0.5f), false);
+                check(rms(0.3, 15.7) > 0.1 && rms(16.3, 31.7) > 0.1, "fill C4b: a SAMPLE fill as long as the pass plays in every pass, not only the first");
+                fp.patterns[0].fill.beats = 8;   // 2 bars on a 1-bar scene (cut to the pass)
+                run(tone(3.0, 0.5f), false);
+                check(rms(0.3, 15.7) > 0.1 && rms(16.3, 31.7) > 0.1, "fill C4b: a SAMPLE fill longer than the pass plays in every pass");
+                fp.patterns[0].fill = FillRule{};
+                fp.patterns[16] = fp.patterns[0];   // two 1-bar bricks in a row, each with its own whole-bar SAMPLE fill
+                fp.songChainLength = 2; fp.songChain[0] = ChainStep(16); fp.songChain[1] = ChainStep(16);
+                for (int b = 0; b < 2; ++b) { fp.songChain[b].fillMode = FillMode::Own; fp.songChain[b].fill = FillRule{FillWhen::LastLoop, FillKind::Sample, 4, 4, 0}; fp.songChain[b].fill.SetSample("fx.wav"); }
+                run(tone(3.0, 0.5f), false, true);
+                check(rms(0.3, 15.7) > 0.1 && rms(16.3, 31.7) > 0.1, "fill C4b: the next brick's SAMPLE fill right after this one plays too");
+                fp.songChainLength = 0; fp.songChain[0] = ChainStep(); fp.songChain[1] = ChainStep();
+                // RANDOM never picks SAMPLE (it has no sample of its own)
+                check(static_cast<int>(FillKind::Sample) > 3 && std::string(FillKindName(FillKind::Sample)) == "SAMPLE", "fill C4b: SAMPLE is a kind of its own, outside what RANDOM chooses from");
+            }
             {   // RESET of swing + groove
                 AppState gr; gr.engine.Init(kSampleRate); gr.sequencer.Init(&gr.engine, &gr.project);
                 Pattern& pr = gr.CurrentPattern();
@@ -4136,6 +4208,80 @@ int main(int argc, char** argv) {
         check(SaveProject(pj, path), "v44.25: save a project with a moved fill");
         Project lp; check(LoadProject(lp, path) && lp.songChain[0].fill.shiftBeats == 6 && lp.songChain[0].fill.breakIndex == 3 && lp.songChain[0].fillMode == FillMode::Own, "v44.25: the moved fill and its chosen break survive save / load");
         std::remove(path.c_str());
+        {   // C4b: the SAMPLE fill is saved and loaded (scene and brick), an older file loads with the defaults, a path is refused
+            Project sp; sp.songChainLength = 2; sp.songChain[0].patternIndex = 16; sp.songChain[1].patternIndex = 16;
+            sp.songChain[1].fillMode = FillMode::Own;
+            FillRule a{FillWhen::LastLoop, FillKind::Sample, 2, 4, 0}; a.SetSample("Big, Riser 01.wav"); a.sampleFit = 1; a.drumsMute = false;
+            sp.songChain[1].fill = a;
+            FillRule b{FillWhen::EveryLoop, FillKind::Sample, 4, 4, 0}; b.SetSample("vox.aif");
+            sp.patterns[16].fill = b;
+            const std::string fpth = "selftest_c4b_fill.t8proj";
+            check(SaveProject(sp, fpth), "fill C4b: save a project with SAMPLE fills");
+            Project lp2;
+            check(LoadProject(lp2, fpth) && lp2.songChain[1].fill == a && lp2.patterns[16].fill == b && lp2.songChain[1].fill.Sample() == "Big, Riser 01.wav",
+                  "fill C4b: the sample, FIT and DRUMS of the fills of a brick and of a scene survive save / load (a comma in the name too)");
+            std::string txt = slurp(fpth);
+            check(txt.find("fillSample=0,1,vox.aif") != std::string::npos && txt.find("fsm1=1,0,Big, Riser 01.wav") != std::string::npos, "fill C4b: the keys fillSample= and fsmN= are written");
+            auto replaceAll = [](std::string t, const std::string& from, const std::string& to) { for (size_t q = t.find(from); q != std::string::npos; q = t.find(from, q + to.size())) t.replace(q, from.size(), to); return t; };
+            { std::ofstream f(fpth, std::ios::trunc); f << replaceAll(txt, "fillSample=0,1,vox.aif", "fillSample=7,1,../../etc/x.wav"); }
+            Project lp3;
+            check(LoadProject(lp3, fpth) && lp3.patterns[16].fill.sample[0] == 0 && lp3.patterns[16].fill.sampleFit == 1, "fill C4b: a path instead of a name in samples/ is dropped, a damaged FIT is put back into range");
+            std::string old = txt;
+            for (const char* key : {"fillSample=", "fsm1="}) { const size_t q = old.find(key); if (q != std::string::npos) old.erase(q, old.find('\n', q) - q + 1); }
+            { std::ofstream f(fpth, std::ios::trunc); f << old; }
+            Project lp4;
+            check(LoadProject(lp4, fpth) && lp4.songChain[1].fill.sample[0] == 0 && lp4.songChain[1].fill.sampleFit == 0 && lp4.songChain[1].fill.drumsMute, "fill C4b: a file without the new keys loads with no sample, STRETCH and DRUMS MUTE");
+            std::remove(fpth.c_str());
+        }
+        {   // C4b: choosing the sample of a brick's fill (one Undo step); the cleanup of samples/ keeps it
+            auto gap = std::make_unique<AppState>(); AppState& ga = *gap;
+            ga.engine.Init(kSampleRate); ga.sequencer.Init(&ga.engine, &ga.project);
+            ga.project.songChainLength = 1; ga.project.songChain[0].patternIndex = 16;
+            check(!ga.SetFillSample(0, "../x.wav") && !ga.SetFillSample(3, "hit.wav"), "fill C4b: a path or a brick that does not exist is refused");
+            check(ga.SetFillSample(0, "hit.wav"), "fill C4b: a sample becomes the fill of a brick");
+            const ChainStep& gcs = ga.project.songChain[0];
+            check(gcs.fillMode == FillMode::Own && gcs.fill.kind == FillKind::Sample && gcs.fill.when == FillWhen::LastLoop && gcs.fill.Sample() == "hit.wav", "fill C4b: the brick gets an own SAMPLE fill on its last loop");
+            check(ga.SampleFilesNamedInMemory().count("hit.wav") == 1 && ga.FillSamplesWanted() == std::vector<std::string>{"hit.wav"}, "fill C4b: the fill's sample counts as used (MOVE UNUSED TO TRASH keeps it) and goes to the sequencer");
+            check(ga.Undo() && ga.project.songChain[0].fillMode == FillMode::Scene && ga.project.songChain[0].fill.sample[0] == 0, "fill C4b: Undo takes the fill's sample back");
+            check(ga.SampleFilesNamedInMemory().count("hit.wav") == 1, "fill C4b: ... and the Redo of it still keeps the file");
+        }
+        {   // review of C4b: a library file copied for a fill lands only if it is still wanted there
+            namespace fsys = std::filesystem;
+            const std::string dir = "selftest_tmp_c4b_fillcopy";
+            fsys::remove_all(dir); fsys::create_directories(dir + "/lib");
+            std::vector<float> tone(4000, 0.0f); for (size_t k = 0; k < tone.size(); ++k) tone[k] = 0.3f * std::sin(static_cast<float>(k) * 0.05f);
+            check(WriteWavPCM16(dir + "/lib/lib.wav", tone, 1, kSampleRate), "fill C4b copy: test file written");
+            auto gap = std::make_unique<AppState>(); AppState& ga = *gap;
+            ga.engine.Init(kSampleRate); ga.sequencer.Init(&ga.engine, &ga.project);
+            ga.projectPath = dir + "/p.t8proj";
+            ga.project.songChainLength = 3; for (int b = 0; b < 3; ++b) ga.project.songChain[b] = ChainStep(16 + b);
+            ga.loader.Start();
+            auto fillOf = [&](int b) { return ga.project.songChain[static_cast<size_t>(b)].fill.Sample(); };
+            { std::lock_guard<SceneMutex> lk(ga.sequencer.PatternMutex()); ga.AssignSampleToFill(dir + "/lib/lib.wav", 1); }
+            check(fillOf(1).empty(), "fill C4b copy: the fill gets the file only once it is copied");
+            ga.loader.FinishAllForTest();
+            check(fillOf(1) == "lib.wav" && fsys::exists(dir + "/samples/lib.wav"), "fill C4b copy: then it is copied into samples/ and set");
+            // E: a project file chosen while the library file is still being copied wins
+            { std::lock_guard<SceneMutex> lk(ga.sequencer.PatternMutex()); ga.SetFillSample(2, "old.wav"); ga.AssignSampleToFill(dir + "/lib/lib.wav", 2); ga.SetFillSample(2, "mine.wav"); }
+            ga.loader.FinishAllForTest();
+            check(fillOf(2) == "mine.wav" && ga.statusMessage.find("ANOTHER SAMPLE") != std::string::npos, "fill C4b copy: a newer choice is not overwritten by the late copy");
+            // G: Undo while it is copied
+            { std::lock_guard<SceneMutex> lk(ga.sequencer.PatternMutex()); ga.AssignSampleToFill(dir + "/lib/lib.wav", 2); ga.Undo(); }
+            const std::string afterUndo = fillOf(2);
+            ga.loader.FinishAllForTest();
+            check(fillOf(2) == afterUndo && afterUndo != "lib.wav" && ga.statusMessage.find("CHANGED MEANWHILE") != std::string::npos, "fill C4b copy: an Undo meanwhile is not undone by the late copy");
+            // F: the brick in front is removed while it is copied: the brick that moves into its place does not get it
+            { std::lock_guard<SceneMutex> lk(ga.sequencer.PatternMutex());
+              ga.project.songChain[0].fillMode = FillMode::Own; ga.project.songChain[0].fill = FillRule{};
+              ga.AssignSampleToFill(dir + "/lib/lib.wav", 1);
+              for (int b = 0; b + 1 < ga.project.songChainLength; ++b) ga.project.songChain[b] = ga.project.songChain[b + 1];
+              --ga.project.songChainLength; }
+            const std::string moved = fillOf(1);
+            ga.loader.FinishAllForTest();
+            check(fillOf(1) == moved && ga.statusMessage.find("THE BRICK CHANGED MEANWHILE") != std::string::npos, "fill C4b copy: a brick removed meanwhile: the late copy goes nowhere");
+            ga.loader.Stop();
+            fsys::remove_all(dir);
+        }
         // the UI (source ratchets): move, click removes, the break is a choice, the rows are taller
         const std::string brickSrc = slurp("src/ui_desktop/BricksPanel.cpp"), mainSrc = slurp("src/main.cpp");
         check(brickSrc.find("Drag::FillMove") != std::string::npos && brickSrc.find("Drag::TransMove") != std::string::npos && brickSrc.find("FILL REMOVED") != std::string::npos && brickSrc.find("TRANSITION MOVED") != std::string::npos, "v44.25: fills and transitions can be moved and removed by click");
