@@ -473,9 +473,7 @@ void ChainPanel::Draw(AppState& app) {
                 if (dst < 0) {
                     app.SetStatus("ALL 16 SCENE SLOTS ARE IN USE");
                 } else {
-                    app.PushUndo();
-                    proj.patterns[dst] = proj.patterns[i];
-                    SwitchPattern(app, dst);
+                    app.DuplicateSceneAsNew(i, dst);   // opens the copy; playback stays on the scene that plays
                     app.SetStatus("SCENE " + std::to_string(i + 1) + " DUPLICATED -> " + std::to_string(dst + 1));
                 }
             }

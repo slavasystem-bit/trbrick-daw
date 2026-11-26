@@ -2875,6 +2875,18 @@ struct AppState {
         if (sequencer.PendingScene() == scene) sequencer.ClearPendingScene();
         SelectSceneForEdit(scene);
     }
+    // "Duplicate as new scene" (pad menu): copies scene `src` into the free slot `dst` and opens the copy in the editor WITHOUT launching it.
+    // The music keeps playing what it plays; GO (or a click on the pad) launches the copy on the grid as usual. Before, the copy took over
+    // playback at once, off the grid. Stopped or in song mode only the edited scene changes, as before. One undo step empties the slot again.
+    void DuplicateSceneAsNew(int src, int dst) {
+        if (src < 0 || src >= kNumLiveScenes || dst < 0 || dst >= kNumLiveScenes || src == dst) return;
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        PushUndoForScene(dst);
+        project.patterns[dst] = project.patterns[src];
+        if (sequencer.IsPlaying() && !sequencer.IsSongModeActive()) { SelectSceneForEdit(dst); return; }
+        project.currentPattern = dst;
+        if (EditIsPlaying()) { engine.GetMixer().SyncFromPattern(CurrentPattern()); sequencer.ApplySceneSound(dst); }
+    }
     // What one frame of mouse input on a SCENES pad means (ChainPanel passes ImGui's facts; the selftest replays real click sequences).
     // released = the pad's Button returned true (it fires on EVERY release, also the one that ends a double click);
     // doubleClicked = the second press of a double click landed on the pad; clickCount = io.MouseClickedLastCount[0] (2 on that second

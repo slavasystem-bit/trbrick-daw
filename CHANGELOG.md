@@ -2,6 +2,12 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Fix: "Duplicate as new scene" no longer starts the copy
+
+- The scene pad menu's **Duplicate as new scene** copied the scene and switched playback to the copy at once, off the launch grid. Now the copy only opens in the editor (held apart: "OPEN 05 - PLAYING 04 - GO launches 05"); the music keeps playing the scene it played. GO or a click on the pad launches the copy on the grid as usual. Stopped or in song mode nothing changes.
+- The undo step now belongs to the new slot, so Cmd+Z empties it again (before, it saved the open scene instead).
+- `AppState::DuplicateSceneAsNew` (takes the scene lock) + `t8_selftest` checks for LAUNCH = BAR and NOW and for undo.
+
 ## Fix: the arrow keys move the selected notes in the piano roll again
 
 - After a click in the piano roll (or Cmd+A over it) the arrow keys stay with the selected notes even when the mouse leaves the roll: up / down = a semitone (Shift = an octave), left / right = a step (Shift = a beat). Before, the notes moved only while the mouse was over the roll, so the arrows went to the instrument block instead.
