@@ -55,7 +55,7 @@ Vec Filter(const Vec& x, int type, double f, double q = 0.7071, int passes = 1) 
 Vec Zeros(double sec) { return Vec(static_cast<size_t>(sec * kGenRate), 0.0); }
 double T(size_t i) { return static_cast<double>(i) / kGenRate; }
 void Add(Vec& a, const Vec& b, double g = 1.0) { for (size_t i = 0; i < a.size() && i < b.size(); ++i) a[i] += b[i] * g; }
-Vec Scale(Vec a, double g) { for (double& v : a) v *= g; return a; }
+[[maybe_unused]] Vec Scale(Vec a, double g) { for (double& v : a) v *= g; return a; }
 Vec Mix(const Vec& a, const Vec& b, double wa, double wb) { Vec o(std::max(a.size(), b.size()), 0.0); Add(o, a, wa); Add(o, b, wb); return o; }
 
 Vec Noise(double sec, uint64_t seed) { Vec n = Zeros(sec); Rng r(seed); for (double& v : n) v = r.Next(); return n; }

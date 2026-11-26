@@ -727,7 +727,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
     std::string line;
     std::string section;
     int curPattern = -1, curTrack = -1, curSynth = -1, curChordScene = -1;
-    bool curChordPatch = false; // Phase 6: "[chordpatch]" section
+    [[maybe_unused]] bool curChordPatch = false; // Phase 6 (tracked for symmetry, never read): "[chordpatch]" section
     SynthPatch* curPatchPtr = nullptr;   // v44.5.4: the patch a [synthN] / [chordpatch] / [patternP.synthN] / [patternP.chordpatch] section fills
     std::array<bool, kNumSlotsTotal> ownSound{}, ownKick{};   // scenes whose file carries their own sound (older files do not)
 

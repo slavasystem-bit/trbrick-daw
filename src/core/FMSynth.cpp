@@ -11,7 +11,7 @@ constexpr double kFmPi = 3.14159265358979323846;
 // "barely audible sideband" at low levels up to harsh/noisy at max --
 // deliberately generous since FM timbres are famous for needing a lot of
 // headroom to reach their brighter/metallic extremes.
-constexpr float kModIndexScale = 8.0f;
+[[maybe_unused]] constexpr float kModIndexScale = 8.0f;   // documented range, not read by the current FM code
 
 inline float Sine01(double phase) {
     return static_cast<float>(std::sin(2.0 * kFmPi * phase));

@@ -58,7 +58,6 @@ private:
     int dragRow_ = -1, dragCol_ = -1;    // a palette chip being dragged towards the loop
     int resizeBlk_ = -1;                 // a block edge being dragged
     double auditionUntil_ = 0.0;
-    int startFromSel_ = 0;
 };
 
 } // namespace t8::desktop

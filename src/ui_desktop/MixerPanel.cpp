@@ -16,7 +16,6 @@ namespace t8::desktop {
 void MixerPanel::Draw(AppState& app, const LiveLayout& layout) {
     std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
     Pattern& pat = app.CurrentPattern();
-    auto& mixer = app.engine.GetMixer();
 
     ImGui::PushID("MixerPanel");
     ImVec2 origin = ImGui::GetCursorPos();

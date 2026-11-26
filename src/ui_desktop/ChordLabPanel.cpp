@@ -462,7 +462,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
     for (int s = 0; s <= loopSteps; s += perBeat) {
         const bool bar = (s % perBar) == 0;
         dl->AddLine(ImVec2(bx0 + s * unit, by0), ImVec2(bx0 + s * unit, by0 + (bar ? bh : 6.0f)), bar ? vis::kLineHi : vis::kGrid, 1.0f);
-        if (bar && s < loopSteps) { char n[8]; std::snprintf(n, sizeof n, "%d", s / perBar + 1); Text(dl, ImVec2(bx0 + s * unit + 3, by0 + 1), vis::kTextDim, n, 10.0f); }
+        if (bar && s < loopSteps) { char n[12]; std::snprintf(n, sizeof n, "%d", s / perBar + 1); Text(dl, ImVec2(bx0 + s * unit + 3, by0 + 1), vis::kTextDim, n, 10.0f); }
     }
     bool overLoop = mouse.x >= bx0 && mouse.x <= bx1 && mouse.y >= by0 && mouse.y <= by0 + bh;
     // blocks
