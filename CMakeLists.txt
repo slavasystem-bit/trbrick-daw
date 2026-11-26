@@ -24,8 +24,18 @@ if(T8_SANITIZE)
     add_link_options(-fsanitize=${T8_SANITIZE})
     add_compile_definitions(T8_SANITIZED=1)   # lets the selftest skip its CPU-time checks
 endif()
+# T8_WARNINGS_AS_ERRORS (CI only): any compiler warning in our own code (not in third-party libraries such as ImGui)
+# fails the build, so new warnings cannot pile up. gcc's -Wstringop-overflow stays a warning: it reports a false
+# positive in ArrangeTypes.h (Lane::Normalize, where n >= 2 is guaranteed). Local builds are not affected.
+option(T8_WARNINGS_AS_ERRORS "Treat every warning in first-party code as an error (used by CI)" OFF)
 function(t8_first_party target)
     target_compile_options(${target} PRIVATE ${T8_WARN_FLAGS})
+    if(T8_WARNINGS_AS_ERRORS)
+        target_compile_options(${target} PRIVATE -Werror)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(${target} PRIVATE -Wno-error=stringop-overflow)
+        endif()
+    endif()
 endfunction()
 function(t8_tool target)
     t8_first_party(${target})
