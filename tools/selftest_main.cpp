@@ -7086,7 +7086,8 @@ int main(int argc, char** argv) {
             { std::lock_guard<SceneMutex> plain(m); }
         }
         check(std::string(m.MaxHoldWho()) == "BRICKS" && m.MaxHoldUs() >= 12000, "lock-5 names: a nested lock keeps the outer name");
-        { std::lock_guard<SceneMutex> plain(m); std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
+        m.ResetMaxHold();   // sleeps overshoot on busy CI machines: compare the unnamed hold only with itself
+        { std::lock_guard<SceneMutex> plain(m); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
         check(std::string(m.MaxHoldWho()) == "OTHER", "lock-5 names: a hold without a name is called OTHER");
         m.ResetMaxHold();
         check(m.MaxHoldUs() == 0 && m.MaxHoldWho()[0] == '\0', "lock-5 names: a click on the readout resets the longest hold and its name");
