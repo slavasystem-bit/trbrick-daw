@@ -483,6 +483,8 @@ static void WriteProject(std::ostream& f, const Project& project) {
               << static_cast<int>(cs.fill.beats) << "," << static_cast<int>(cs.fill.everyBars) << "," << static_cast<int>(cs.fill.breakIndex) << ","
               << static_cast<int>(cs.riser) << "," << static_cast<int>(cs.riserBars) << "," << static_cast<int>(cs.trimSteps) << "\n";
         if (cs.fill.shiftBeats != 0) f << "fsh" << i << "=" << static_cast<int>(cs.fill.shiftBeats) << "\n";   // v44.25: a fill moved earlier inside the brick
+        if (cs.fill.sample[0] || cs.fill.sampleFit != 0 || !cs.fill.drumsMute)   // C4b: SAMPLE fill: fit, drums, then the file (may hold commas)
+            f << "fsm" << i << "=" << static_cast<int>(cs.fill.sampleFit) << "," << (cs.fill.drumsMute ? 1 : 0) << "," << cs.fill.Sample() << "\n";
         if (cs.automation.Any())   // v44.21: the MIX lane and the DJ filter lane, each as "pos:value,pos:value,..."
             f << "dyn" << i << "=" << LaneToString(cs.automation.mix) << ";" << LaneToString(cs.automation.filter) << "\n";
         if (cs.levels.Any()) {   // v44.13 / v44.21: transition and fill levels, then one lane per instrument
@@ -515,6 +517,8 @@ static void WriteProject(std::ostream& f, const Project& project) {
         if (pat.fill.when != FillWhen::Off)
             f << "fill=" << static_cast<int>(pat.fill.when) << "," << static_cast<int>(pat.fill.kind) << "," << static_cast<int>(pat.fill.beats) << ","
               << static_cast<int>(pat.fill.everyBars) << "," << static_cast<int>(pat.fill.breakIndex) << "\n";
+        if (pat.fill.sample[0] || pat.fill.sampleFit != 0 || !pat.fill.drumsMute)   // C4b: SAMPLE fill of the scene
+            f << "fillSample=" << static_cast<int>(pat.fill.sampleFit) << "," << (pat.fill.drumsMute ? 1 : 0) << "," << pat.fill.Sample() << "\n";
         if (pat.grooveAmount > 0.0f || !pat.groove.IsFlat() || !pat.groove.name.empty()) {   // v42, only when used
             f << "grooveName=" << pat.groove.name << "\ngrooveAmount=" << pat.grooveAmount << "\ngroove=";
             for (int g = 0; g < 16; ++g) f << (g ? "," : "") << static_cast<int>(pat.groove.steps[g].nudge) << ":" << static_cast<int>(pat.groove.steps[g].vel);
@@ -606,6 +610,17 @@ bool SaveProject(const Project& project, const std::string& path, bool keepHisto
 }
 
 namespace {
+// C4b: "fit,drums,file" of a SAMPLE fill (the file is the rest of the line, so a comma in a name is kept). A damaged value is put
+// back into range; a missing file part leaves no file.
+void ParseFillSample(const std::string& val, FillRule& r) {
+    const size_t c1 = val.find(','), c2 = c1 == std::string::npos ? std::string::npos : val.find(',', c1 + 1);
+    r.sampleFit = static_cast<uint8_t>(std::clamp(std::atoi(val.c_str()), 0, 1));
+    r.drumsMute = c1 == std::string::npos || std::atoi(val.c_str() + c1 + 1) != 0;
+    std::string file = c2 == std::string::npos ? std::string() : val.substr(c2 + 1);
+    if (file.find('/') != std::string::npos || file.find('\\') != std::string::npos || file == "." || file == "..") file.clear();   // a name in samples/, never a path
+    r.SetSample(file);
+}
+
 // ---- Load-time sanity pass (DATA-3) ---------------------------------------------------------------------------------------
 // The reader trusts many numbers it parses (lengths, slot indices, levels). A damaged or hand-edited file must never make the
 // engine read past an array or feed NaN into the audio, so after parsing every value that indexes something or reaches the
@@ -1021,6 +1036,9 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
                     if (semi != std::string::npos) au.filter = LaneFromString(val.substr(semi + 1), kFilterMin, kFilterMax);
                     project.songChain[idx].automation = NormalizeAuto(au);
                 }
+            } else if (key.rfind("fsm", 0) == 0) {   // C4b: the SAMPLE fill of chain step N (after its arr line): fit, drums, file
+                const int idx = std::atoi(key.substr(3).c_str());
+                if (idx >= 0 && idx < kMaxChainSteps) ParseFillSample(val, project.songChain[idx].fill);
             } else if (key.rfind("fsh", 0) == 0) {   // v44.25 the own fill of chain step N is moved earlier by that many beats
                 const int idx = std::atoi(key.substr(3).c_str());
                 if (idx >= 0 && idx < kMaxChainSteps) project.songChain[idx].fill.shiftBeats = static_cast<uint8_t>(std::clamp(std::atoi(val.c_str()), 0, 64));
@@ -1149,6 +1167,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
                     pat.fill = NormalizeFill(r);
                 }
             }
+            else if (key == "fillSample") ParseFillSample(val, pat.fill);   // C4b, after fill=
             else if (key == "grooveName") pat.groove.name = val;
             else if (key == "grooveAmount") pat.grooveAmount = std::clamp(std::stof(val), 0.0f, 1.0f);
             else if (key == "groove") {

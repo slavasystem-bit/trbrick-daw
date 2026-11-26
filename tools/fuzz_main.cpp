@@ -25,7 +25,7 @@ static const char* kOpNames[] = {"ToggleStep","RandomizeDrums","RandomizeMelodic
     "LoopAll","ToStart","Undo","Redo","CopyPastePattern","CopyPasteTrack","CopyInstrument","MatchLevelPanEq","ClearInstrument","ClearPattern","Genre","Drop","Mutes",
     "AdjustToScale","SnapToScale","KeyScale","LaunchScene","SynthPreset","LiveChord","ChordSettings","EditScene","BrickLevels","ParamRow","MatchLevel","SelectBrick",
     "Starter","SaveLoad","Style","Sampler","SynthSample","NextBar","EuclidKeep",
-    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged"};
+    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged","FillSample"};
 constexpr int kNumOps = sizeof(kOpNames) / sizeof(kOpNames[0]);
 
 static int Check(AppState& a, const char* op, unsigned seed, int n) {
@@ -330,6 +330,19 @@ int main(int argc, char** argv) {
                 std::remove((f1 + ".bak").c_str());
                 a.LoadProjectFile(f1);   // takes the lock itself; a refused file leaves the open project as it was
                 a.projectPath = "selftest_tmp_fuzz/fuzz.t8proj";
+                break; }
+            case 72: {   // C4b: the SAMPLE fill of a scene or a brick: a library file, a copy of samples/, a missing one, FIT / DRUMS, other kinds
+                const int where = nb > 0 && R(2) ? R(nb) : -1 - p.currentPattern;
+                FillRule* fr = a.FillRuleAt(where);
+                switch (R(6)) {
+                case 0: a.AssignSampleToFill(R(2) ? "selftest_tmp_fuzz/src/fz_a.wav" : "selftest_tmp_fuzz/src/fz_b.wav", where); break;
+                case 1: { const auto& nm = a.SampleNames(); if (!nm.empty()) a.SetFillSample(where, nm[static_cast<size_t>(R(static_cast<int>(nm.size())))]); break; }
+                case 2: if (fr) { fr->kind = FillKind::Sample; fr->when = FillWhen::EveryLoop; fr->SetSample(R(2) ? "gone.wav" : std::string(R(200), 'q')); } break;   // missing / absurd: silence
+                case 3: if (fr) { fr->sampleFit = static_cast<uint8_t>(R(2)); fr->drumsMute = R(2) != 0; fr->beats = static_cast<uint8_t>(kFillBeatChoices[R(4)]); fr->when = static_cast<FillWhen>(R(kNumFillWhen)); } break;
+                case 4: if (fr) fr->kind = static_cast<FillKind>(R(kNumFillKinds)); break;
+                default: if (where >= 0) p.songChain[static_cast<size_t>(where)].fillMode = static_cast<FillMode>(R(3)); break;
+                }
+                a.sequencer.RefreshArrangement();
                 break; }
             case 60:   // v44.49: a style with a random set of parts, on whatever grid, length and key the scene has
                 a.styleBeat = R(4) != 0; a.styleSound = R(2) != 0; a.styleNotes = R(4) != 0; a.styleTempo = R(4) == 0;

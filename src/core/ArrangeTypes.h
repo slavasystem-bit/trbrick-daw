@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 
 namespace t8 {
 
@@ -27,11 +29,14 @@ inline const char* FillWhenName(FillWhen w) {
     switch (w) { case FillWhen::LastLoop: return "LAST LOOP"; case FillWhen::EveryLoop: return "EVERY LOOP"; case FillWhen::EveryBars: return "EVERY N BARS"; default: return "OFF"; }
 }
 // What the fill plays: a drum break from the library (its last beats), a hi-hat roll that speeds up, a snare roll that speeds up,
-// a drum drop-out (the drums fall silent), or one of those at random every time.
-enum class FillKind : uint8_t { Break = 0, HatRoll = 1, SnareBuild = 2, DropOut = 3, Random = 4 };
-constexpr int kNumFillKinds = 5;
+// a drum drop-out (the drums fall silent), or one of those at random every time (RANDOM never picks SAMPLE).
+// C4b: SAMPLE plays a sample of the project's samples/ over the window, started on its first step and ended exactly on the step
+// after the window (the next brick's beat 1): STRETCH fits the sample to the window (speed and pitch together, like FIT TO of the
+// sampler), AS IS plays it at its own speed and cuts it at the end with a short fade.
+enum class FillKind : uint8_t { Break = 0, HatRoll = 1, SnareBuild = 2, DropOut = 3, Random = 4, Sample = 5 };
+constexpr int kNumFillKinds = 6;
 inline const char* FillKindName(FillKind k) {
-    switch (k) { case FillKind::Break: return "BREAK"; case FillKind::HatRoll: return "HAT ROLL"; case FillKind::SnareBuild: return "SNARE BUILD"; case FillKind::DropOut: return "DROP OUT"; default: return "RANDOM"; }
+    switch (k) { case FillKind::Break: return "BREAK"; case FillKind::HatRoll: return "HAT ROLL"; case FillKind::SnareBuild: return "SNARE BUILD"; case FillKind::DropOut: return "DROP OUT"; case FillKind::Sample: return "SAMPLE"; default: return "RANDOM"; }
 }
 constexpr int kFillBeatChoices[4] = {1, 2, 4, 8};         // length of the fill in beats
 constexpr int kFillBarChoices[4] = {2, 4, 8, 16};         // N of EVERY N BARS
@@ -43,7 +48,17 @@ struct FillRule {
     uint8_t everyBars = 4;    // 2, 4, 8 or 16 (EveryBars only)
     uint8_t breakIndex = 0;   // 0 = a random break each time, otherwise 1 + index into the drum break library (Break kind)
     uint8_t shiftBeats = 0;   // v44.25: the fill is moved this many beats EARLIER than the end of the pass / of the N-bar block (drag on the lane)
-    bool operator==(const FillRule& o) const { return when == o.when && kind == o.kind && beats == o.beats && everyBars == o.everyBars && breakIndex == o.breakIndex && shiftBeats == o.shiftBeats; }
+    // C4b, SAMPLE kind: the file in the project's samples/ (plain array, so the rule stays plain data), how it fits, the drums
+    static constexpr int kSampleMax = 96;
+    char sample[kSampleMax] = {};
+    uint8_t sampleFit = 0;    // 0 = STRETCH to the length, 1 = AS IS (cut at the end)
+    bool drumsMute = true;    // the drums are silent while the sample plays (false = they play on)
+    void SetSample(const std::string& f) { std::memset(sample, 0, sizeof(sample)); std::memcpy(sample, f.data(), std::min<size_t>(f.size(), kSampleMax - 1)); }
+    std::string Sample() const { size_t n = 0; while (n < static_cast<size_t>(kSampleMax) && sample[n]) ++n; return std::string(sample, n); }
+    bool operator==(const FillRule& o) const {
+        return when == o.when && kind == o.kind && beats == o.beats && everyBars == o.everyBars && breakIndex == o.breakIndex && shiftBeats == o.shiftBeats
+            && std::memcmp(sample, o.sample, sizeof(sample)) == 0 && sampleFit == o.sampleFit && drumsMute == o.drumsMute;
+    }
 };
 inline FillRule NormalizeFill(FillRule r) {
     if (static_cast<int>(r.when) >= kNumFillWhen) r.when = FillWhen::Off;
@@ -52,6 +67,8 @@ inline FillRule NormalizeFill(FillRule r) {
     r.beats = static_cast<uint8_t>(snap(r.beats, kFillBeatChoices));
     r.everyBars = static_cast<uint8_t>(snap(r.everyBars, kFillBarChoices));
     r.shiftBeats = std::min<uint8_t>(r.shiftBeats, 64);
+    r.sample[FillRule::kSampleMax - 1] = 0;
+    r.sampleFit = std::min<uint8_t>(r.sampleFit, 1);
     return r;
 }
 // A chain step uses the fill of its scene, none at all, or a rule of its own.
