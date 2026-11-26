@@ -39,7 +39,7 @@ void Sequencer::Play() {
     samplesIntoStep_ = 0.0;
     pendingRatchets_.clear();
     prefire_.fill(Prefire{});
-    fillWas_ = false; fillActiveUi_.store(false); riserArmedFor_ = -1;
+    fillWas_ = false; fillPosPrev_ = -1; fillActiveUi_.store(false); riserArmedFor_ = -1;
     ApplyStepOverlay();
     engine_->SamplerSetTempo(project_->patterns[PlayPatternIndex()].bpm);
     engine_->SamplerLoopRestart();   // v44.52: a sampler LOOP starts with the first step
@@ -68,7 +68,7 @@ void Sequencer::Stop() {
     engine_->SamplerFadeOut();
     chordNoteOffScheduled_ = false;
     chordHeldCount_ = 0;
-    fillWas_ = false; fillActiveUi_.store(false);
+    fillWas_ = false; fillPosPrev_ = -1; fillActiveUi_.store(false);
     engine_->FillSampleStop();
     ApplyStepOverlay();   // not playing: the arrangement mutes let go
 }
@@ -379,7 +379,9 @@ void Sequencer::FireTick(int tick) {
     if (!useBreak) {
         FillRule rule;
         fs = FillAt(tick, &rule);
-        if (fs.active && !fillWas_) {                     // a new window starts: settle the kind and the break once
+        // a new window starts: settle the kind and the break once. A window that follows the previous one without a gap (a fill as
+        // long as the pass, or the next brick's fill right after this one) is new too: its position starts again (review of C4b).
+        if (fs.active && (!fillWas_ || fs.pos <= fillPosPrev_)) {
             FillKind k = rule.kind;
             if (k == FillKind::Random) k = static_cast<FillKind>(std::uniform_int_distribution<int>(0, 3)(rng_));
             fillKindCur_.store(static_cast<int>(k));
@@ -394,8 +396,10 @@ void Sequencer::FireTick(int tick) {
             engine_->FillSampleStop();                    // the window was left early (another scene / step): no tail into the next part
         }
         fillWas_ = fs.active;
+        fillPosPrev_ = fs.active ? fs.pos : -1;
     } else {
-        fillWas_ = false;
+        if (fillWas_ && static_cast<FillKind>(fillKindCur_.load()) == FillKind::Sample) engine_->FillSampleStop();   // a live break wins over the fill
+        fillWas_ = false; fillPosPrev_ = -1;
     }
     fillActiveUi_.store(fs.active);
     const FillKind fillKind = static_cast<FillKind>(fillKindCur_.load());
@@ -608,6 +612,7 @@ int Sequencer::LoopSteps() const {
 
 // C4b: start the SAMPLE fill voice for the window that begins now (`fs.pos` > 0 when it was entered late). STRETCH fits the whole
 // sample to the window (and starts proportionally further in); AS IS plays it at its own speed from where the window would be.
+// The length is fixed at the start: a tempo change inside the window (BPM edit, MIDI clock) moves its end off the next beat 1.
 void Sequencer::StartFillSample(const FillRule& rule, const FillState& fs, float gain) {
     fillDrumsMute_ = rule.drumsMute;
     if (!engine_ || !rule.sample[0] || fs.total <= 0) { if (engine_) engine_->FillSampleStop(); return; }

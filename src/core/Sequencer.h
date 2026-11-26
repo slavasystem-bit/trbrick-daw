@@ -632,6 +632,7 @@ private:
     std::atomic<int> fillKindCur_{0};      // the kind chosen for the fill that plays now (Random is resolved at the start of a window)
     int fillBreakCur_ = 0;                 // the library break chosen for a Break fill
     bool fillWas_ = false;
+    int fillPosPrev_ = -1;                 // the window position of the previous tick (-1 = outside a window)
     bool fillDrumsMute_ = true;            // C4b: the SAMPLE fill that plays now silences the drums
     std::array<FillSampleEntry, kMaxFillSamples> fillSamples_{};
     void StartFillSample(const FillRule& rule, const FillState& fs, float gain);

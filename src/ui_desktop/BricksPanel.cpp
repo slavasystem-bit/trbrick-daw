@@ -1505,7 +1505,7 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
         if (cs.fillMode == FillMode::Own && cs.fill.kind == FillKind::Sample) {
             at(px, kRow + fh + 16.0f);   // under the LEVEL caption
             FillRule nr = cs.fill;
-            if (FillSampleControls(app, nr, i, 250.0f)) { app.PushSoundUndo(); cs.fill = NormalizeFill(nr); refresh(); }
+            if (FillSampleControls(app, nr, i, 280.0f)) { app.PushSoundUndo(); cs.fill = NormalizeFill(nr); refresh(); }
         } else if (cs.fillMode == FillMode::Scene && pat.fill.when != FillWhen::Off && pat.fill.kind == FillKind::Sample) {
             at(px, kRow + fh + 16.0f);
             ImGui::AlignTextToFramePadding();
