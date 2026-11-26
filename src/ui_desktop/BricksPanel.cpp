@@ -914,7 +914,7 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
         }
         // ---- Delete removes the selected brick (or all bricks of the selected range) -----------------------------------------------------------------------------------
         // C1 (UI-8): Delete or Backspace (the Mac delete key; Delete alone needed fn on a MacBook), like the piano roll
-        const bool delKey = ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace);
+        const bool delKey = ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false);   // no repeat: holding the key removes one brick
         if (app.HasBrickRange() && winHovered && !io.WantTextInput && delKey) { int lo = 0, hi = 0; app.LoopRange(&lo, &hi); app.RemoveBrickRange(lo, hi); }
         else if (sel_ >= 0 && sel_ < n && winHovered && !io.WantTextInput && delKey) { app.RemoveChainStep(sel_); app.selBrick = std::min(sel_, proj.songChainLength - 1); }
 

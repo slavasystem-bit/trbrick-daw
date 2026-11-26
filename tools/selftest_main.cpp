@@ -4776,9 +4776,18 @@ int main(int argc, char** argv) {
             one[0].pitch = 64;
             PasteNotes(ch, one, 2, 16);
             check(ch.steps[2].chordSize == 2 && NoteIsOn(ch, 2, 60) && NoteIsOn(ch, 2, 64), "c1 ui-8: on a chord track a pasted note joins the chord of that step");
+            {   // a full chord takes no more notes: the paste returns only what is really there
+                Track full; full.type = TrackType::Chord; full.length = 16;
+                full.steps[3].active = true; full.steps[3].chordSize = kMaxChordVoices;
+                for (int v = 0; v < kMaxChordVoices; ++v) full.steps[3].chordNotes[static_cast<size_t>(v)] = static_cast<int8_t>(48 + v);
+                NoteClip two = one; two.push_back(one[0]); two[1].pitch = 66; two[1].relCol = 1;
+                const std::vector<NoteRef> got = PasteNotes(full, two, 3, 16);
+                check(got.size() == 1 && got[0].col == 4 && got[0].pitch == 66, "c1 ui-8: notes that do not fit a full chord are not counted as pasted");
+            }
             const std::string roll = slurp("src/ui_desktop/PianoRollPanel.cpp"), keys = slurp("src/ui_desktop/Shortcuts.cpp");
             check(roll.find("noteClip_ = CopyNotes(t, sel_)") != std::string::npos && roll.find("PasteNotes(t, noteClip_, at, trackLen)") != std::string::npos && keys.find("app.rollCopyFrame >= frame - 1") != std::string::npos && keys.find("app.rollPasteFrame >= frame - 1") != std::string::npos, "c1 ui-8: over the roll Cmd+C / Cmd+V go to the notes, elsewhere to the track");
-            check(brickSrc.find("ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)") != std::string::npos, "c1 ui-8: Backspace removes a brick too (Delete needs fn on a MacBook)");
+            check(roll.find("int at = noteClipCol_;") != std::string::npos, "c1 ui-8: with the mouse off the grid Cmd+V pastes where the notes were copied from");
+            check(brickSrc.find("ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)") != std::string::npos, "c1 ui-8: Backspace removes a brick too (Delete needs fn on a MacBook)");
             t.steps = snap;
         }
 

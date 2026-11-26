@@ -354,9 +354,11 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
     if (editHot && interaction::IsCmd() && !ImGui::GetIO().KeyShift) {
         if (!sel_.empty() && ImGui::IsKeyPressed(ImGuiKey_C, false)) {
             noteClip_ = CopyNotes(t, sel_);
+            noteClipCol_ = kMaxSteps;
+            for (const NoteRef& n : sel_) noteClipCol_ = std::min(noteClipCol_, n.col);
             app.SetStatus(std::to_string(noteClip_.size()) + " NOTES COPIED (CMD+V PASTES WHERE THE MOUSE IS)");
         } else if (!noteClip_.empty() && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
-            int at = noteClip_.front().relCol;   // the mouse column on this page; off the grid: where the notes were copied from
+            int at = noteClipCol_;   // the mouse column on this page; off the grid: where the notes were copied from
             {
                 const PageGeom g{origin.x + kLabelW, cellW, kCellGap, kGroupGap, base, kPageSteps, kGroup};
                 const float mx = ImGui::GetIO().MousePos.x - win.x + ImGui::GetScrollX();

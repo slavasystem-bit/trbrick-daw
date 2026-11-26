@@ -173,6 +173,11 @@ inline std::vector<NoteRef> PasteNotes(Track& t, const NoteClip& clip, int atCol
         d.lengthSteps = static_cast<uint8_t>(std::clamp<int>(d.lengthSteps, 1, std::max(1, trackLen - tc)));
         out.push_back({tc, c.pitch});
     }
+    // only the notes that are really there: a full chord takes no more, and on a Synth track a later note in the same column
+    // replaced an earlier one
+    PruneNotes(t, out);
+    std::sort(out.begin(), out.end(), [](const NoteRef& a, const NoteRef& b) { return a.col != b.col ? a.col < b.col : a.pitch < b.pitch; });
+    out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
 }
 

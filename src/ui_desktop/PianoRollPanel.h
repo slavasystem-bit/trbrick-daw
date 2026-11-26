@@ -30,6 +30,7 @@ private:
     int topNote_ = 59;       // MIDI note on the top row in ALL mode
     int lastTrack_ = -1;     // re-centres topNote_ when the selected track changes
     NoteClip noteClip_;      // C1 (UI-8): Cmd+C / Cmd+V of notes (kept across tracks and scenes)
+    int noteClipCol_ = 0;    // the first copied column: where Cmd+V pastes when the mouse is off the grid
     bool activeOnly_ = false;
     bool scaleUsed_ = false; // SCALE+USED: every scale note plus every played pitch (multi-octave, scrollable)
     float humanizePct_ = 15.0f;   // HUMANIZE amount, % of the lane range
