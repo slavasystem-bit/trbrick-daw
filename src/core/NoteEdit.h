@@ -52,6 +52,13 @@ inline void ClampNoteDelta(const std::vector<NoteRef>& sel, int trackLen, int* d
     *dPitch = std::clamp(*dPitch, -minP, 127 - maxP);
 }
 
+// Who gets the arrow keys while notes are selected in the piano roll. The roll keeps them after a click or Cmd+A in it
+// ("focus"), so the selected notes still move when the mouse drifts off the roll; a click anywhere else gives them back to
+// the instrument block. Nothing moves while a text box is typed in or a mouse gesture (move / band / length drag) is running.
+inline bool RollOwnsKeys(bool hovered, bool focused, bool typing, bool mouseGesture) {
+    return (hovered || focused) && !typing && !mouseGesture;
+}
+
 inline void RemoveNoteFromStep(Track& t, int col, int pitch) {
     Step& s = t.steps[static_cast<size_t>(col)];
     if (IsNoteTrackType(t.type)) { if (s.active && s.note == pitch) s.active = false; return; }
