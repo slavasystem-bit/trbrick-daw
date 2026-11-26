@@ -298,10 +298,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "NOTE: only %d/%d riser samples loaded from \"kits/risers\".\n",
                       loadedRisers, RiserPlayer::kMaxRisers);
     }
-    app.RefreshSound();   // v44.5.4: patches, kick and kit of the played scene
-    app.engine.GetMixer().SyncFromPattern(app.CurrentPattern());
-    app.engine.GetMixer().SyncFxFromProject(app.project);
-    app.sequencer.Init(&app.engine, &app.project);
+    app.StartSound();   // patches, samples, kick and kit of the played scene (the sequencer is given the engine first)
     if (firstRunSettings && !(projectExplicit && FileExists(projectPath)) && app.CurrentPatternIsEmpty()) {
         ApplyStarterGroove(app.CurrentPattern(), app.StepTrack(app.CurrentPattern(), kChordTrackIndex));   // v44.8 first launch: something to hear at once
         app.SyncMixer(app.CurrentPattern());

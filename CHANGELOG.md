@@ -2,14 +2,11 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
-## Stage N1 (LIVE-5, part 1): the XRUN hint names who held the sound
+## Fix: the last project's samples play from the first note after the program starts
 
-Audit v44.58 LIVE-5, full fix, step 1 of the plan: measure before changing how panels lock.
+- When the program opened the last project at start, a synth or the chord on ENGINE > SAMPLE played the default synth (and the sampler track had no sample) until the scene's sound was touched. The start-up code handed the scene's sound over before the sequencer knew the audio engine, so the hand-over was silently skipped.
+- New `AppState::StartSound()` (sequencer first, then the scene's patches, samples, kits and mixer), used by `main.cpp`; covered by a "program start" check in `t8_selftest` that fails with the old order.
 
-- **Every hold of the scene lock by the screen has a name** (`SceneLock lock(mutex, "MIXER")` instead of `std::lock_guard<SceneMutex>`): the panels (HEADER, SEQUENCER, MIXER, INSTRUMENT PANEL, BRICKS, TRACK STRIP, BROWSERS, ...), MENU, KEYS and LAYOUT. The outermost name covers everything a panel calls while it holds the lock; a hold without a name is OTHER (loaders, timers).
-- **The XRUN hint** now says who held the sound longest and how much of the last second the screen held it: "The screen held the sound at most 0.7 ms (HEADER), and 2% of the last second." A click on the readout resets the longest hold and its name, as before. Nothing else on screen changes.
-- First measurement (Linux, software drawing, 1440x900, playing): the screen holds the lock about 2% of the time, longest holds 0.3-2.8 ms, below the 4 ms the audio callback waits before it plays silence (#13). The Mac numbers decide which panels are worth changing next.
-- `SceneMutex::MaxHoldWho`, `HeldTotalUs`, `NameHolder`; 7 new `t8_selftest` checks (names, nesting, OTHER, reset, the audio thread's own render not counted).
 ## Fix: "Duplicate as new scene" no longer starts the copy
 
 - The scene pad menu's **Duplicate as new scene** copied the scene and switched playback to the copy at once, off the launch grid. Now the copy only opens in the editor (held apart: "OPEN 05 - PLAYING 04 - GO launches 05"); the music keeps playing the scene it played. GO or a click on the pad launches the copy on the grid as usual. Stopped or in song mode nothing changes.

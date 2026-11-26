@@ -6333,6 +6333,39 @@ int main(int argc, char** argv) {
             check(std::string(PatchParamName(SynthEngineType::Sample, 1)) == "CUTOFF" && NumPatchParams(SynthEngineType::Sample) == 1 + 6 + 19, "sample engine: the rows are the filter and the shared rows");
             AdjustPatchParam(p, 0, 1); check(p.engineType == SynthEngineType::Subtractive, "sample engine: ENGINE wraps round to SUBTRACTIVE");
         }
+        {   // program start: the last project opens with a SAMPLE synth; its sample plays from the first note (not the default synth)
+            fs::remove_all("selftest_boot"); fs::create_directories("selftest_boot/src");
+            { std::vector<float> w(44100); for (size_t i = 0; i < w.size(); ++i) w[i] = static_cast<float>(0.6 * std::sin(2.0 * 3.14159265358979 * 220.0 * static_cast<double>(i) / 44100.0)); WriteWavPCM16("selftest_boot/src/boot.wav", w, 1, 44100); }
+            {
+                auto wp = std::make_unique<AppState>(); AppState& w = *wp;
+                w.engine.Init(kSampleRate); w.sequencer.Init(&w.engine, &w.project);
+                w.projectPath = "selftest_boot/p.t8proj";
+                std::lock_guard<SceneMutex> lk(w.sequencer.PatternMutex());
+                w.project.currentPattern = 0;
+                for (auto& t : w.CurrentPattern().tracks) for (auto& st : t.steps) st = Step{};
+                w.CurrentPattern().synthPatches[0] = patchFor();
+                w.AssignSampleToSampler("selftest_boot/src/boot.wav", 0);
+                w.CurrentPattern().synthPatches[0].sample.root = 57;
+                w.CurrentPattern().tracks[kNumDrumTracks].steps[0].active = true; w.CurrentPattern().tracks[kNumDrumTracks].steps[0].note = 60; w.CurrentPattern().tracks[kNumDrumTracks].steps[0].lengthSteps = 16;
+                w.CurrentPattern().bpm = 120.0f; w.CurrentPattern().masterLength = 16;
+                check(SaveProject(w.project, w.projectPath), "program start: the project with a SAMPLE synth is saved");
+            }
+            auto bp = std::make_unique<AppState>(); AppState& b = *bp;   // the order of main.cpp: engine, project file, then StartSound
+            b.engine.Init(kSampleRate);
+            check(LoadProject(b.project, "selftest_boot/p.t8proj"), "program start: the last project opens");
+            b.projectPath = "selftest_boot/p.t8proj";
+            b.StartSound();
+            check(b.engine.Synth(0).Patch().engineType == SynthEngineType::Sample, "program start: the synth gets the project's SAMPLE patch at once (not the default synth)");
+            check(b.engine.SynthSampleCurrent(0) && b.engine.SynthSampleCurrent(0)->name == "boot.wav", "program start: the project's sample is in the voice before the first note");
+            b.engine.GetMixer().masterVolume = 1.0f;
+            b.sequencer.Play();
+            std::vector<float> buf(44100 * 2, 0.0f);
+            for (int r = 0; r < 22050; r += 256) b.sequencer.RenderAndAdvance(buf.data() + static_cast<size_t>(r) * 2, std::min(256, 22050 - r), kSampleRate);
+            float pk = 0; for (float v : buf) pk = std::max(pk, std::fabs(v));
+            check(pk > 0.1f, "program start: the first note plays the sample (audible)");
+            b.sequencer.Stop();
+            fs::remove_all("selftest_boot");
+        }
         {   // the whole way: a file in samples/, the scene's patch, the sequencer plays it; two scenes with different samples
             fs::remove_all("selftest_smp53"); fs::create_directories("selftest_smp53/src");
             auto wav = [&](const std::string& path, double hz, double sec) { std::vector<float> w(static_cast<size_t>(sec * 44100)); for (size_t i = 0; i < w.size(); ++i) w[i] = static_cast<float>(0.6 * std::sin(2.0 * 3.14159265358979 * hz * static_cast<double>(i) / 44100.0)); WriteWavPCM16(path, w, 1, 44100); };
@@ -6974,6 +7007,25 @@ int main(int argc, char** argv) {
         check(v[0].type == "KICK" && v[1].name == "b" && v[2].name == "c", "c4b: TYPE sorts by type, then by name");
         SB::SortItems(v, 1, false);
         check(v[0].folder == "x" && v[1].folder == "y" && v[2].folder == "Z", "c4b: FOLDER sorts case-blind");
+        {   // C4b (v1): genre and tags read from the folder and file names
+            check(GuessSampleGenre("BL_HipHop_95bpm_C3.wav") == "HIP HOP" && GuessSampleGenre("DL_DannyBryd_DnB_175bpm2.wav") == "DNB"
+                  && GuessSampleGenre("ML_Minimal-Glitch_100bpm_MscLoop3.wav") == "MINIMAL" && GuessSampleGenre("Break Funk Chop 115 bpm.wav") == "BREAKS",
+                  "c4b: the genre comes from the words of the name (camelCase and _ split, DnB kept whole)");
+            check(GuessSampleGenre("House/Disco Edits/x.wav") == "HOUSE" && GuessSampleGenre("Drum and Bass/k.wav") == "DNB" && GuessSampleGenre("Electronic pad.wav").empty()
+                  && GuessSampleGenre("Kicks/kick_03.wav").empty(), "c4b: the first genre in the path wins; a word inside another word does not count");
+            const auto tg = GuessSampleTags("Solid Sounds/Dusty Vinyl/Lo-Fi Keys Dark Live.wav");
+            check(tg == std::vector<std::string>{"DUSTY", "DARK", "LO-FI", "LIVE"} && GuessSampleTags("kick.wav").empty(), "c4b: tags come from sound words (vinyl = DUSTY, Lo-Fi = LO-FI)");
+            SB::Item x, y; x.name = "a"; x.genre = "BREAKS"; x.tags = 1u; y.name = "b"; y.genre = "";
+            check(SB::GenreTagsText(x) == "BREAKS \xC2\xB7 DUSTY" && SB::GenreTagsText(y).empty(), "c4b: the GENRE \xC2\xB7 TAGS column text");
+            std::vector<SB::Item> gv{x, y}; SB::SortItems(gv, 4, false);
+            check(gv[0].name == "b" && gv[1].name == "a", "c4b: GENRE \xC2\xB7 TAGS sorts (no genre first)");
+            {   // review of part 6: a number typed into a BPM field is not taken by the search, the browse keys, Return or Esc
+                std::ifstream in("src/ui_desktop/SampleBrowser.cpp"); const std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                check(src.find("!fieldTyping && browser::CaptureTyping") != std::string::npos && src.find("!fieldTyping && browser::HearKey") != std::string::npos
+                      && src.find("n > 0 && !fieldTyping") != std::string::npos && src.find("!trashBusy && !fieldTyping") != std::string::npos
+                      && src.find("bpmTyping_ = true") != std::string::npos, "c4b: typing a tempo into a BPM field keeps the keys in that field");
+            }
+        }
         {   // C4b (g): THIS PROJECT shows where each copied file plays
             AppState a;
             for (int i : {0, 1, 2, 5}) a.project.patterns[static_cast<size_t>(i)].samplerPatch.file = "amen.wav";
