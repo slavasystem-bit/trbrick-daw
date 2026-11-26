@@ -6813,6 +6813,71 @@ int main(int argc, char** argv) {
             check(u.count("pad.wav") && u.at("pad.wav") == synth + " (SAMPLE) - scene 4", "c4b: a synth on ENGINE > SAMPLE counts as using its file: " + (u.count("pad.wav") ? u.at("pad.wav") : std::string("-")));
             check(u.count("hit.wav") && u.at("hit.wav") == sampler + " - brick 4" && !u.count("lift.wav"), "c4b: a brick's sample counts, a slot no brick uses does not");
         }
+        {   // C4b (g2): MOVE UNUSED TO TRASH keeps everything anything still names, and moves only by rename
+            namespace fs = std::filesystem;
+            const std::string dir = fs::absolute("selftest_trash").string();
+            fs::remove_all(dir); fs::create_directories(dir + "/prj/samples"); fs::create_directories(dir + "/trash");
+            std::vector<float> tone(256, 0.1f);
+            for (const char* n : {"c4bt_used.wav", "c4bt_spare_slot.wav", "c4bt_undo.wav", "c4bt_saved.wav", "c4bt_other.wav", "c4bt_gone.wav", "c4bt_gone2.wav"})
+                WriteWavPCM16(dir + "/prj/samples/" + n, tone, 1, kSampleRate);
+            { std::ofstream f(dir + "/prj/p.t8proj"); f << "[project]\nsampler=c4bt_saved.wav|60|0\n"; }        // the saved version names one
+            { std::ofstream f(dir + "/prj/other.t8proj"); f << "[project]\nsampler=c4bt_other.wav|60|0\n"; }    // another project in the folder
+            AppState a;
+            a.projectPath = dir + "/prj/p.t8proj";
+            a.project.patterns[0].samplerPatch.file = "c4bt_used.wav";
+            a.project.patterns[kNumPatterns - 1].samplerPatch.file = "c4bt_spare_slot.wav";   // a brick slot nothing points at
+            { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); a.PushUndo(); }
+            a.undoStack.back().pattern.samplerPatch.file = "c4bt_undo.wav";                // Cmd+Z could bring it back
+            const auto mem = a.SampleFilesNamedInMemory();
+            check(mem.count("c4bt_used.wav") && mem.count("c4bt_spare_slot.wav") && mem.count("c4bt_undo.wav"), "c4b: memory keeps the files of every slot (also unused ones) and of the Undo steps");
+            std::vector<std::string> plan; int kept = -1; std::string err = "?";
+            a.PlanTrashUnusedSamples([&](std::vector<std::string> l, int k, std::string e) { plan = std::move(l); kept = k; err = e; });
+            check(err.empty() && plan == std::vector<std::string>{"c4bt_gone.wav", "c4bt_gone2.wav"} && kept == 2,
+                  "c4b: only the copies nothing names may go to the Trash; the saved version and the other project keep theirs (" + std::to_string(plan.size()) + " / kept " + std::to_string(kept) + ")");
+            // the trash itself, in a test folder (freedesktop layout: files/ + info/, as on Linux; macOS layout: straight in)
+            std::string e;
+            check(cleanup::MoveToTrash(dir + "/prj/samples/c4bt_gone.wav", e, dir + "/trash", true) && fs::exists(dir + "/trash/files/c4bt_gone.wav")
+                  && fs::exists(dir + "/trash/info/c4bt_gone.wav.trashinfo") && !fs::exists(dir + "/prj/samples/c4bt_gone.wav"), "c4b: a file moved to the Trash keeps its restore note (" + e + ")");
+            WriteWavPCM16(dir + "/prj/samples/c4bt_gone.wav", tone, 1, kSampleRate);
+            check(cleanup::MoveToTrash(dir + "/prj/samples/c4bt_gone.wav", e, dir + "/trash", true) && fs::exists(dir + "/trash/files/c4bt_gone 2.wav"), "c4b: a name already in the Trash gets a number, nothing there is overwritten");
+            check(cleanup::MoveToTrash(dir + "/prj/samples/c4bt_gone2.wav", e, dir + "/mactrash", false) && fs::exists(dir + "/mactrash/c4bt_gone2.wav"), "c4b: macOS layout: the file goes straight into the Trash");
+            check(!cleanup::MoveToTrash(dir + "/prj/samples/missing.wav", e, dir + "/trash", true) && !e.empty() && !fs::exists(dir + "/trash/info/missing.wav.trashinfo"), "c4b: a file that cannot be moved leaves no restore note behind");
+            // step 2 re-checks memory: a file that became used after the question stays
+            a.project.patterns[1].samplerPatch.file = "c4bt_saved.wav";
+            const char* oldX = std::getenv("XDG_DATA_HOME"); const std::string keepX = oldX ? oldX : "";
+            const char* oldH = std::getenv("HOME"); const std::string keepH = oldH ? oldH : "";
+            setenv("XDG_DATA_HOME", (dir + "/xdg").c_str(), 1); setenv("HOME", (dir + "/home").c_str(), 1);
+            fs::create_directories(dir + "/home");
+            int moved = -1;
+            a.TrashSampleFiles({"c4bt_saved.wav", "../p.t8proj"}, [&](int m, std::string) { moved = m; });
+            if (oldX) setenv("XDG_DATA_HOME", keepX.c_str(), 1); else unsetenv("XDG_DATA_HOME");
+            if (oldH) setenv("HOME", keepH.c_str(), 1); else unsetenv("HOME");
+            check(moved == 0 && fs::exists(dir + "/prj/samples/c4bt_saved.wav") && fs::exists(dir + "/prj/p.t8proj"), "c4b: the move checks memory again and never leaves samples/");
+            // review of C4b g2: upper / lower case (the Mac's disk ignores it) and another project opened before the answer
+            WriteWavPCM16(dir + "/prj/samples/c4bt_case.wav", tone, 1, kSampleRate);
+            WriteWavPCM16(dir + "/prj/samples/c4bt_savedcase.wav", tone, 1, kSampleRate);
+            WriteWavPCM16(dir + "/prj/samples/c4bt_free.wav", tone, 1, kSampleRate);
+            { std::ofstream f(dir + "/prj/p.t8proj", std::ios::app); f << "sampler=C4BT_SavedCase.wav|60|0\n"; }
+            a.project.patterns[2].samplerPatch.file = "C4BT_Case.wav";   // what CopySamplerFile can leave: the disk has c4bt_case.wav
+            a.sampleNamesValid_ = false;
+            plan.clear(); err = "?";
+            a.PlanTrashUnusedSamples([&](std::vector<std::string> l, int, std::string e) { plan = std::move(l); err = e; });
+            const bool hasCase = std::find(plan.begin(), plan.end(), "c4bt_case.wav") != plan.end();
+            const bool hasSavedCase = std::find(plan.begin(), plan.end(), "c4bt_savedcase.wav") != plan.end();
+            check(err.empty() && !hasCase && !hasSavedCase && std::find(plan.begin(), plan.end(), "c4bt_free.wav") != plan.end(),
+                  "c4b: a name in memory or in a saved file keeps the file whatever its upper / lower case");
+            { std::error_code hl; fs::create_hard_link(dir + "/prj/samples/c4bt_free.wav", dir + "/prj/samples/C4BT_Other_Spelling.wav", hl); }   // one file, two names (as on a case-blind disk)
+            check(cleanup::SameFileAsAny(dir + "/prj/samples", "c4bt_free.wav", {"C4BT_Other_Spelling.wav"}) && !cleanup::SameFileAsAny(dir + "/prj/samples", "c4bt_free.wav", {"c4bt_case.wav"}),
+                  "c4b: step 2 knows two spellings of one file on disk");
+            fs::create_directories(dir + "/prj2/samples");
+            WriteWavPCM16(dir + "/prj2/samples/c4bt_free.wav", tone, 1, kSampleRate);
+            a.projectPath = dir + "/prj2/p.t8proj"; ++a.docGen_;                  // a dropped project opened while the question was up
+            moved = -1; std::string why;
+            a.TrashSampleFiles(plan, [&](int m, std::string e) { moved = m; why = e; });
+            check(!a.TrashPlanStillValid() && moved == 0 && why.find("another project") != std::string::npos && fs::exists(dir + "/prj2/samples/c4bt_free.wav") && fs::exists(dir + "/prj/samples/c4bt_free.wav"),
+                  "c4b: a plan made for one project never moves anything in another");
+            fs::remove_all(dir);
+        }
     }
     {   // N1 (TEST-6, LIVE-9): the audio thread does not allocate or free memory while it plays a busy set
         AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);

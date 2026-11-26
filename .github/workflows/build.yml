@@ -54,9 +54,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake g++ libsdl2-dev libasound2-dev
-      - name: Build (all targets, harmful warnings in tools/ are errors)
+      - name: Build (all targets, any warning in our code is an error)
         run: |
-          cmake -S . -B build-x86_64 -DCMAKE_BUILD_TYPE=Release -DT8_WERROR=ON
+          cmake -S . -B build-x86_64 -DCMAKE_BUILD_TYPE=Release -DT8_WERROR=ON -DT8_WARNINGS_AS_ERRORS=ON
           cmake --build build-x86_64 -j"$(nproc)"
       - name: t8_selftest
         run: tools/run_tests.sh build-x86_64 selftest
@@ -120,9 +120,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: brew install sdl2
-      - name: Build (all targets, including the app)
+      - name: Build (all targets, including the app; any warning in our code is an error)
         run: |
-          cmake -S . -B build-mac -DCMAKE_BUILD_TYPE=Release -DT8_WERROR=ON
+          cmake -S . -B build-mac -DCMAKE_BUILD_TYPE=Release -DT8_WERROR=ON -DT8_WARNINGS_AS_ERRORS=ON
           cmake --build build-mac -j"$(sysctl -n hw.ncpu)"
       - name: t8_selftest
         run: tools/run_tests.sh build-mac selftest
