@@ -166,6 +166,7 @@ repo root so `kits/` resolves.
 - `docs/AUDIO_AUDIT_AND_PLAN.md` the measured audit of the engine and the phased plan to reach the target sound.
 - `docs/PERFORMER_GUIDE.md` live use. `docs/REFERENCE.md` kits, typical patterns, synth presets.
 - `CHANGELOG.md` per-version changes (the old handheld-era README and plans are in the v30 zip).
+- `changelog.d/` the newest changes, one file per pull request, not yet folded into `CHANGELOG.md` (how: `changelog.d/README.md`).
 
 ## Limits (v31)
 

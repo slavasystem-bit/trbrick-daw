@@ -32,6 +32,17 @@ jobs:
           if git grep -nE '^(<<<<<<<|>>>>>>>) ' -- '*.md' 'docs/'; then
             echo "a document still has merge conflict markers"; exit 1
           fi
+      - name: Changelog entries are in changelog.d/, not at the top of CHANGELOG.md
+        run: |
+          tools/changelog.sh check
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            # only a release PR (tools/changelog.sh release: it also deletes fragments) may edit CHANGELOG.md
+            if git diff --name-only HEAD^1 HEAD | grep -qx CHANGELOG.md \
+               && ! git diff --name-only --diff-filter=D HEAD^1 HEAD | grep -q '^changelog\.d/'; then
+              echo "::error file=CHANGELOG.md::Do not edit CHANGELOG.md in a normal PR. Move your entry into a new file: tools/changelog.sh new short-slug \"Title\" (see changelog.d/README.md). Editing CHANGELOG.md makes every other open PR conflict."
+              exit 1
+            fi
+          fi
       - name: Does this change touch anything besides documents?
         id: diff
         run: |
