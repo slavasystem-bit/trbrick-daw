@@ -4624,6 +4624,20 @@ int main(int argc, char** argv) {
         check(NoteIsOn(c, 4, 60) && c.steps[0].chordSize == 2 && c.steps[4].chordSize == 1 && c.steps[4].active, "u6: one note of a chord moved in time becomes its own step");
         const std::string rollSrc = slurp("src/ui_desktop/PianoRollPanel.cpp");
         check(rollSrc.find("MoveNotes") != std::string::npos && rollSrc.find("marquee_") != std::string::npos, "u6: the roll uses the group editing (source ratchet)");
+
+        // arrow keys move the selected notes: also after the mouse leaves the roll (a click in it gives it the keys)
+        check(RollOwnsKeys(true, false, false, false) && RollOwnsKeys(false, true, false, false), "roll keys: hovered or clicked last = the arrows move the notes");
+        check(!RollOwnsKeys(false, false, false, false), "roll keys: a click elsewhere gives the arrows back to the instrument block");
+        check(!RollOwnsKeys(true, true, true, false) && !RollOwnsKeys(true, true, false, true), "roll keys: not while typing or during a mouse drag");
+        check(rollSrc.find("RollOwnsKeys(rollHovered, keysFocus_") != std::string::npos && rollSrc.find("keysFocus_ = rollHovered") != std::string::npos,
+              "roll keys: the roll keeps the arrows after a click in it (source ratchet)");
+        check(rollSrc.find("sel_ = AllNotes(t, trackLen); keysFocus_ = true;") != std::string::npos,
+              "roll keys: Cmd+A over the roll also keeps the arrows with the notes when the mouse leaves (source ratchet)");
+        check(rollSrc.find("ImGuiKey_UpArrow)) dp = shiftKey ? 12 : 1") != std::string::npos && rollSrc.find("ImGuiKey_DownArrow)) dp = shiftKey ? -12 : -1") != std::string::npos
+              && rollSrc.find("ImGuiKey_RightArrow)) dc = shiftKey") != std::string::npos && rollSrc.find("ImGuiKey_LeftArrow)) dc = shiftKey") != std::string::npos,
+              "roll keys: up / down = a semitone, Shift = an octave; left / right = a step, Shift = a beat (source ratchet)");
+        check(slurp("src/main.cpp").find("app.rollKeysFrame >= ImGui::GetFrameCount() - 1") != std::string::npos,
+              "roll keys: the instrument block leaves the arrows to the selected notes (source ratchet)");
     }
 
     // ---- v44.31 (U7): browsers and modal windows answer the same keys ----

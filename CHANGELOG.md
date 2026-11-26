@@ -2,6 +2,12 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Fix: the arrow keys move the selected notes in the piano roll again
+
+- After a click in the piano roll (or Cmd+A over it) the arrow keys stay with the selected notes even when the mouse leaves the roll: up / down = a semitone (Shift = an octave), left / right = a step (Shift = a beat). Before, the notes moved only while the mouse was over the roll, so the arrows went to the instrument block instead.
+- A click anywhere else gives the arrows back to the instrument block. Cmd+A, Delete, Cmd+D and Esc still act only with the mouse over the roll (the bricks strip uses them too); a window on top keeps its own keys.
+- `RollOwnsKeys` (pure, tested) + source ratchets in `t8_selftest`.
+
 ## Stage C4b (part 4): MOVE UNUSED TO TRASH
 
 ROADMAP "Samples in one place" (C4b), item 5 (second half); approved mockup `docs/mockups/v45_samples_unified.png`, section 2a.
