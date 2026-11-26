@@ -6784,6 +6784,21 @@ int main(int argc, char** argv) {
         check(v[0].type == "KICK" && v[1].name == "b" && v[2].name == "c", "c4b: TYPE sorts by type, then by name");
         SB::SortItems(v, 1, false);
         check(v[0].folder == "x" && v[1].folder == "y" && v[2].folder == "Z", "c4b: FOLDER sorts case-blind");
+        {   // C4b (g): THIS PROJECT shows where each copied file plays
+            AppState a;
+            for (int i : {0, 1, 2, 5}) a.project.patterns[static_cast<size_t>(i)].samplerPatch.file = "amen.wav";
+            SynthPatch& sp = a.project.patterns[3].synthPatches[1];
+            sp.engineType = SynthEngineType::Sample; sp.sample.SetFile("pad.wav");
+            a.project.patterns[kNumLiveScenes + 2].samplerPatch.file = "lift.wav";   // a brick slot no brick points at: not in use
+            a.project.patterns[kNumLiveScenes + 3].samplerPatch.file = "hit.wav";
+            a.project.songChainLength = 4; a.project.songChain[3].patternIndex = static_cast<uint8_t>(kNumLiveScenes + 3);
+            const auto u = SB::SampleUsage(a);
+            const std::string sampler = t8::desktop::TrackDisplayName(a.project.patterns[0].tracks[kSamplerTrackIndex]);
+            const std::string synth = t8::desktop::TrackDisplayName(a.project.patterns[3].tracks[kNumDrumTracks + 1]);
+            check(u.count("amen.wav") && u.at("amen.wav") == sampler + " - scenes 1-3, 6", "c4b: a sample's scenes are listed as ranges: " + (u.count("amen.wav") ? u.at("amen.wav") : std::string("-")));
+            check(u.count("pad.wav") && u.at("pad.wav") == synth + " (SAMPLE) - scene 4", "c4b: a synth on ENGINE > SAMPLE counts as using its file: " + (u.count("pad.wav") ? u.at("pad.wav") : std::string("-")));
+            check(u.count("hit.wav") && u.at("hit.wav") == sampler + " - brick 4" && !u.count("lift.wav"), "c4b: a brick's sample counts, a slot no brick uses does not");
+        }
     }
     {   // N1 (TEST-6, LIVE-9): the audio thread does not allocate or free memory while it plays a busy set
         AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);

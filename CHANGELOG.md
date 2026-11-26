@@ -2,6 +2,14 @@
 
 Newest first. Older entries (v22-v24) were moved here from the README.
 
+## Stage C4b (part 3): THIS PROJECT shows what plays
+
+ROADMAP "Samples in one place" (C4b), item 5 (first half); approved mockup `docs/mockups/v45_samples_unified.png`, section 2a.
+
+- **IN USE / ALL COPIED:** in the SAMPLES browser, THIS PROJECT for the sampler, a synth or the chord on ENGINE > SAMPLE opens on IN USE: only the files of `samples/` that play somewhere (the sampler of a scene or a brick in use, or a synth / the chord on ENGINE > SAMPLE). ALL COPIED shows every file ever copied there. Both show their count.
+- **WHERE IT PLAYS** replaces the FOLDER column there: "Sampler - scenes 1-3, 6", "Synth2 (SAMPLE) - scene 4", "Sampler - brick 4"; unused copies say "not used". FAVORITES and RECENT still find every copy.
+- `SampleBrowser::SampleUsage` (pure, tested). No project data changes; nothing is deleted (MOVE UNUSED TO TRASH is the next part).
+
 ## Stage C4b (part 2): one SAMPLES browser
 
 ROADMAP "Samples in one place" (C4b), items 2, 3 and the list view of item 4; approved mockup `docs/mockups/v45_samples_unified.png`, section 2. No project data changes.

@@ -16,6 +16,7 @@
 // the loader thread (AsyncLoader), and a late result is dropped when the browser was opened again meanwhile.
 #include "imgui.h"
 #include "app/AppState.h"
+#include "TrackStyle.h"
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -67,6 +68,53 @@ public:
         std::stable_sort(items.begin(), items.end(), [&](const Item& a, const Item& b) { const int c = key(a, b); return descending ? c > 0 : c < 0; });
     }
 
+    // C4b (g): where each file of samples/ plays: "Sampler - scenes 1, 2, 5; Synth2 (SAMPLE) - scene 3; Sampler - brick 4".
+    // Only scenes and bricks that are in use count (as SyncSceneSamples). Consecutive scenes are written as a range ("1-8").
+    static std::map<std::string, std::string> SampleUsage(const AppState& app) {
+        std::map<std::string, std::map<std::string, std::pair<std::vector<int>, std::vector<int>>>> use;   // file -> label -> (scenes, bricks)
+        auto add = [&](const std::string& file, const std::string& label, int slot) {
+            if (file.empty()) return;
+            auto& sb = use[file][label];
+            if (slot < kNumLiveScenes) { sb.first.push_back(slot + 1); return; }
+            for (int i = 0; i < app.project.songChainLength; ++i)
+                if (app.project.songChain[static_cast<size_t>(i)].patternIndex == slot) sb.second.push_back(i + 1);
+        };
+        for (int i = 0; i < kNumPatterns; ++i) {
+            if (!app.SlotInUse(i)) continue;
+            const Pattern& pt = app.project.patterns[static_cast<size_t>(i)];
+            add(pt.samplerPatch.file, TrackDisplayName(pt.tracks[static_cast<size_t>(kSamplerTrackIndex)]), i);
+            for (int k = 0; k <= kNumSynthTracks; ++k) {
+                const int ti = k < kNumSynthTracks ? kNumDrumTracks + k : kChordTrackIndex;
+                add(app.SynthSampleWanted(i, k), TrackDisplayName(pt.tracks[static_cast<size_t>(ti)]) + " (SAMPLE)", i);
+            }
+        }
+        auto runs = [](std::vector<int> v) {
+            std::sort(v.begin(), v.end()); v.erase(std::unique(v.begin(), v.end()), v.end());
+            std::string out;
+            for (size_t a = 0; a < v.size();) {
+                size_t b = a; while (b + 1 < v.size() && v[b + 1] == v[b] + 1) ++b;
+                if (!out.empty()) out += ", ";
+                out += std::to_string(v[a]); if (b > a) out += "-" + std::to_string(v[b]);
+                a = b + 1;
+            }
+            return std::make_pair(out, v.size());
+        };
+        std::map<std::string, std::string> out;
+        for (const auto& [file, labels] : use) {
+            std::string txt;
+            for (const auto& [label, sb] : labels) {
+                std::string part = label;
+                const auto sc = runs(sb.first), br = runs(sb.second);
+                if (sc.second) part += std::string(" - ") + (sc.second > 1 ? "scenes " : "scene ") + sc.first;
+                if (br.second) part += std::string(sc.second ? ", " : " - ") + (br.second > 1 ? "bricks " : "brick ") + br.first;
+                if (!txt.empty()) txt += "; ";
+                txt += part;
+            }
+            out[file] = txt;
+        }
+        return out;
+    }
+
 private:
     void Rebuild(AppState& app);
     void ScanKits(AppState& app);
@@ -97,7 +145,9 @@ private:
     std::vector<int> vis_;                     // indices into items_ shown, in order
     int sel_ = -1;
     bool scrollToSel_ = false, focusSearch_ = false, autoHear_ = false, dirty_ = true;
-    bool waitKit_ = false, waitLib_ = false;   // the last rebuild found the kit / the library still being read
+    bool waitKit_ = false, waitLib_ = false;
+    bool inUseOnly_ = true;                    // THIS PROJECT (sampler / synth): only the files that play (IN USE) or every copy (ALL COPIED)
+    int inUseCount_ = 0, copiedCount_ = 0;   // the last rebuild found the kit / the library still being read
     std::set<std::string> favs_;
     std::vector<std::string> recent_;          // newest first, at most 20
     // KITS: the files of the target drum in every kit folder, listed on the loader thread
