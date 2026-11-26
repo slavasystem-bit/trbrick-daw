@@ -88,6 +88,9 @@ void HandleShortcuts(AppState& app) {
     if (cmd && ImGui::IsKeyPressed(ImGuiKey_N, false)) { app.RequestDoc(AppState::DocAction::New); return; }
     if (cmd && ImGui::IsKeyPressed(ImGuiKey_O, false)) { app.docOpenDialog = true; return; }
     if (cmd && ImGui::IsKeyPressed(ImGuiKey_Q, false)) { app.RequestDoc(AppState::DocAction::Quit); return; }
+    const int frame = ImGui::GetFrameCount();   // C1 (UI-8): over the piano roll with notes selected / copied, Cmd+C / Cmd+V are for the notes
+    if (cmd && !shift && app.rollCopyFrame >= frame - 1 && ImGui::IsKeyPressed(ImGuiKey_C, false)) return;
+    if (cmd && !shift && app.rollPasteFrame >= frame - 1 && ImGui::IsKeyPressed(ImGuiKey_V, false)) return;
     if (cmd && ImGui::IsKeyPressed(ImGuiKey_C, false)) {
         if (shift) { app.CopyPattern(); app.SetStatus("SCENE COPIED"); }
         else app.CopyTrack(std::clamp(app.seqCursorTrack, 0, kNumTracks - 1));

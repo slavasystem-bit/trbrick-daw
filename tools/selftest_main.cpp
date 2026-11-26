@@ -4758,6 +4758,30 @@ int main(int argc, char** argv) {
         t.steps = snap;
         check(!DuplicateNotes(t, sel, 16) && AllNotes(t, 16).size() == 3, "u6: Cmd+D does nothing when the copy would not fit");
 
+        {   // C1 (UI-8): Cmd+C / Cmd+V of notes
+            t.steps = snap;   // notes at 0 (60), 4 (64), 8 (68), length 2, probability 70
+            std::vector<NoteRef> pick{{4, 64}, {8, 68}};
+            const NoteClip clip = CopyNotes(t, pick);
+            check(clip.size() == 2 && clip[0].relCol == 0 && clip[1].relCol == 4, "c1 ui-8: Cmd+C keeps the notes' places relative to the first one");
+            std::vector<NoteRef> pasted = PasteNotes(t, clip, 10, 16);
+            check(pasted.size() == 2 && NoteIsOn(t, 10, 64) && NoteIsOn(t, 14, 68) && t.steps[10].probability == 70 && NoteIsOn(t, 4, 64), "c1 ui-8: Cmd+V puts copies at the mouse column, the originals stay, each keeps its step");
+            t.steps = snap;
+            pasted = PasteNotes(t, clip, 14, 16);
+            check(pasted.size() == 2 && pasted[0].col == 11 && NoteIsOn(t, 15, 68), "c1 ui-8: a paste near the end is pulled back so the last note fits");
+            t.steps = snap;
+            check(PasteNotes(t, clip, 0, 4).empty() && AllNotes(t, 16).size() == 3, "c1 ui-8: a clip wider than the track pastes nothing");
+            Track ch; ch.type = TrackType::Chord; ch.length = 16;
+            ch.steps[2].active = true; ch.steps[2].chordSize = 1; ch.steps[2].chordNotes = {60, 0, 0, 0};
+            NoteClip one = CopyNotes(t, std::vector<NoteRef>{{0, 60}});
+            one[0].pitch = 64;
+            PasteNotes(ch, one, 2, 16);
+            check(ch.steps[2].chordSize == 2 && NoteIsOn(ch, 2, 60) && NoteIsOn(ch, 2, 64), "c1 ui-8: on a chord track a pasted note joins the chord of that step");
+            const std::string roll = slurp("src/ui_desktop/PianoRollPanel.cpp"), keys = slurp("src/ui_desktop/Shortcuts.cpp");
+            check(roll.find("noteClip_ = CopyNotes(t, sel_)") != std::string::npos && roll.find("PasteNotes(t, noteClip_, at, trackLen)") != std::string::npos && keys.find("app.rollCopyFrame >= frame - 1") != std::string::npos && keys.find("app.rollPasteFrame >= frame - 1") != std::string::npos, "c1 ui-8: over the roll Cmd+C / Cmd+V go to the notes, elsewhere to the track");
+            check(brickSrc.find("ImGui::IsKeyPressed(ImGuiKey_Delete) || ImGui::IsKeyPressed(ImGuiKey_Backspace)") != std::string::npos, "c1 ui-8: Backspace removes a brick too (Delete needs fn on a MacBook)");
+            t.steps = snap;
+        }
+
         // notes: chord track, only one note of a chord selected
         Track c; c.type = TrackType::Chord; c.length = 16;
         c.steps[0].active = true; c.steps[0].chordSize = 3; c.steps[0].chordNotes = {60, 64, 67, 71};

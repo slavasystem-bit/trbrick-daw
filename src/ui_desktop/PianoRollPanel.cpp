@@ -348,6 +348,26 @@ void PianoRollPanel::Draw(AppState& app, const LiveLayout& layout) {
     const bool rollHot = RollOwnsKeys(rollHovered, keysFocus_ && !popupUp, ImGui::GetIO().WantTextInput, moving_ || marquee_ || resizing_);
     const bool editHot = rollHot && rollHovered;   // Cmd+A / Delete / Cmd+D / Esc stay with the panel under the mouse (the bricks strip has them too)
     if (rollHot && !sel_.empty()) app.rollKeysFrame = ImGui::GetFrameCount();   // the arrow keys are for the selected notes, not for the instrument block
+    // C1 (UI-8): with the mouse over the roll, Cmd+C copies the selected notes and Cmd+V pastes them (Shortcuts leaves both to the roll then)
+    if (editHot && !sel_.empty()) app.rollCopyFrame = ImGui::GetFrameCount();
+    if (editHot && !noteClip_.empty()) app.rollPasteFrame = ImGui::GetFrameCount();
+    if (editHot && interaction::IsCmd() && !ImGui::GetIO().KeyShift) {
+        if (!sel_.empty() && ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+            noteClip_ = CopyNotes(t, sel_);
+            app.SetStatus(std::to_string(noteClip_.size()) + " NOTES COPIED (CMD+V PASTES WHERE THE MOUSE IS)");
+        } else if (!noteClip_.empty() && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+            int at = noteClip_.front().relCol;   // the mouse column on this page; off the grid: where the notes were copied from
+            {
+                const PageGeom g{origin.x + kLabelW, cellW, kCellGap, kGroupGap, base, kPageSteps, kGroup};
+                const float mx = ImGui::GetIO().MousePos.x - win.x + ImGui::GetScrollX();
+                if (mx >= g.x0) at = base + g.ColAtX(mx);
+            }
+            app.PushUndo();
+            std::vector<NoteRef> pasted = PasteNotes(t, noteClip_, at, trackLen);
+            if (pasted.empty()) { app.DropLastUndo(); app.SetStatus("THE COPIED NOTES DO NOT FIT THIS TRACK"); }
+            else { sel_ = pasted; keysFocus_ = true; app.SetStatus(std::to_string(sel_.size()) + " NOTES PASTED"); }
+        }
+    }
     if (rollHot) {
         const bool cmdKey = interaction::IsCmd(), shiftKey = ImGui::GetIO().KeyShift;
         if (editHot && cmdKey && ImGui::IsKeyPressed(ImGuiKey_A, false)) { sel_ = AllNotes(t, trackLen); keysFocus_ = true; app.SetStatus(std::to_string(sel_.size()) + " NOTES SELECTED"); }

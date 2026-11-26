@@ -125,7 +125,7 @@ void MenuBar::Draw(AppState& app) {
             }
             ImGui::Separator();
             const int tr = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
-            if (Item("Copy Track", "^C", "Copy the track under the cursor (the digits 1-0 or Cmd+arrows move the cursor).")) app.CopyTrack(tr);
+            if (Item("Copy Track", "^C", "Copy the track under the cursor (the digits 1-0 or Cmd+arrows move the cursor). Over the piano roll with notes selected, Cmd+C copies the notes.")) app.CopyTrack(tr);
             if (Item("Paste Track", "^V", "Paste it onto the track under the cursor (same kind of track only).", app.hasTrackClipboard)) {
                 SceneLock lock(app.sequencer.PatternMutex(), "MENU");
                 app.PasteTrack(tr);
