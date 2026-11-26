@@ -7077,6 +7077,8 @@ int main(int argc, char** argv) {
                 check(src.find("if (clicked && !hasWave && ImGui::IsItemClicked") != std::string::npos && src.find("if (g.begin) app.PushUndo();") != std::string::npos
                       && src.find("Undo only when something really moves") != std::string::npos && src.find("CLEAR ALL MARKS") != std::string::npos
                       && src.find("t.edit.start = g.start") != std::string::npos, "c4b d: waveform gestures on the sampler and the drums, one Undo per drag");
+                check(src.find("the card went away mid-drag") != std::string::npos && src.find("a mark by a line can be taken") != std::string::npos
+                      && src.find("hov && clicked && !hasWave ? vis::kCellHover") != std::string::npos, "c4b d (review): no stuck drag, the nearest handle wins, only an empty card lights up");
             }
             {   // C4b (v3): performance sets (Library/Favorites/sample_sets.txt)
                 namespace ss = samplesets;
