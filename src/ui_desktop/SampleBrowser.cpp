@@ -411,7 +411,10 @@ void SampleBrowser::Draw(AppState& app) {
         if (ToggleButton(lab, !inUseOnly_, ImVec2(0, 0), ToggleTab())) { inUseOnly_ = false; dirty_ = true; sel_ = 0; scrollToSel_ = true; }
         if (ImGui::IsItemHovered()) Hint("Every file ever copied into samples/ beside the project, also the ones nothing plays any more.");
         const char* trashLab = trashStage_ == 1 ? "LOOKING ...##sbTrash" : trashStage_ == 3 ? "MOVING ...##sbTrash" : "MOVE UNUSED TO TRASH...##sbTrash";
-        ImGui::SameLine(0, 18);
+        {   // at the right end of the row, as in the mockup
+            const float bw = ImGui::CalcTextSize("MOVE UNUSED TO TRASH...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX() + 18.0f, ImGui::GetWindowContentRegionMax().x - bw));
+        }
         ImGui::BeginDisabled(trashStage_ != 0 || copiedCount_ <= inUseCount_);
         if (ImGui::Button(trashLab)) {
             trashStage_ = 1;
@@ -718,6 +721,9 @@ void SampleBrowser::Draw(AppState& app) {
     if (favToggled) { SaveFavorites(); if (src_ == Source::Favorites) dirty_ = true; }
 
     // ---- MOVE UNUSED TO TRASH: the question (Esc = cancel; Return does nothing, a move to the Trash is never one key away) ----
+    if (trashStage_ == 2 && !app.TrashPlanStillValid()) {   // another project was opened meanwhile (a dropped file): the list is not its own
+        trashStage_ = 0; trashList_.clear(); app.SetStatus("NOTHING MOVED: ANOTHER PROJECT IS OPEN NOW");
+    }
     if (trashStage_ == 2 && !ImGui::IsPopupOpen("##sbTrashAsk")) ImGui::OpenPopup("##sbTrashAsk");
     if (ImGui::BeginPopupModal("##sbTrashAsk", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)) {
         const int nT = static_cast<int>(trashList_.size());
@@ -735,7 +741,8 @@ void SampleBrowser::Draw(AppState& app) {
             AppState* ap = &app;
             app.TrashSampleFiles(trashList_, [this, tok, ap](int moved, std::string err) {
                 ap->SetStatus(err.empty() ? "MOVED " + std::to_string(moved) + " UNUSED SAMPLE" + (moved == 1 ? "" : "S") + " TO THE TRASH"
-                                          : "MOVED " + std::to_string(moved) + " TO THE TRASH; NOT MOVED: " + err);
+                              : moved == 0 ? "NOTHING MOVED: " + err
+                                           : "MOVED " + std::to_string(moved) + " TO THE TRASH; NOT MOVED: " + err);
                 if (tok != trashToken_) return;
                 trashStage_ = 0; dirty_ = true; sel_ = 0;
             });
@@ -743,7 +750,7 @@ void SampleBrowser::Draw(AppState& app) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("CANCEL", ImVec2(110, 0)) || interaction::KeyCancel()) { trashStage_ = 0; trashList_.clear(); ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button("CANCEL", ImVec2(110, 0)) || interaction::KeyCancel() || trashStage_ != 2) { if (trashStage_ == 2) trashStage_ = 0; trashList_.clear(); ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
     const bool trashBusy = trashStage_ != 0;   // the question (or its answer) owns the keys

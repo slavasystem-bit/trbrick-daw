@@ -3323,6 +3323,8 @@ struct AppState {
             patch(pt.chordPatch);
         };
         for (const Pattern& pt : project.patterns) pattern(pt);
+        for (const SynthPatch& sp : project.baseSynthPatches) patch(sp);   // the sound a loaded file started with
+        patch(project.baseChordPatch);
         pattern(patternClipboard);   // a copied scene can be pasted back
         for (const auto* st : {&undoStack, &redoStack}) for (const UndoEntry& e : *st) {
             pattern(e.pattern); pattern(e.trackSound);
@@ -3336,37 +3338,57 @@ struct AppState {
     // thread). done(list, kept, error) runs on the UI thread: `list` may go to the Trash, `kept` are named only by a saved file.
     // A saved file that cannot be read stops it (error), so nothing is moved on a guess.
     void PlanTrashUnusedSamples(std::function<void(std::vector<std::string>, int, std::string)> done) {
-        const std::set<std::string> mem = SampleFilesNamedInMemory();
+        std::set<std::string> mem;   // folded: the Mac's disk ignores upper / lower case
+        for (const std::string& n : SampleFilesNamedInMemory()) mem.insert(cleanup::Fold(n));
         std::vector<std::string> cands;
-        for (const std::string& n : SampleNames()) if (!mem.count(n)) cands.push_back(n);
+        for (const std::string& n : SampleNames()) if (!mem.count(cleanup::Fold(n))) cands.push_back(n);
+        trashPlanGen_ = docGen_; trashPlanDir_ = SamplesDir();   // the plan belongs to this project only (review of C4b g2)
         if (cands.empty()) { done({}, 0, std::string()); return; }
         struct Plan { std::vector<std::string> list; int kept = 0; std::string err; };
         auto r = std::make_shared<Plan>();
         const std::string pp = projectPath;
+        const unsigned gen = docGen_;
+        const std::string dir = trashPlanDir_;
         loader.Post([r, cands, pp] {
-            bool unreadable = false;
-            const std::set<std::string> named = cleanup::NamedInFiles(cands, cleanup::FilesThatMayNameSamples(pp), &unreadable);
+            bool unreadable = false, unlisted = false;
+            const std::vector<std::string> files = cleanup::FilesThatMayNameSamples(pp, &unlisted);
+            if (unlisted) { r->err = "a folder of saved projects could not be read"; return; }
+            const std::set<std::string> named = cleanup::NamedInFiles(cands, files, &unreadable);
             if (unreadable) { r->err = "a saved project file could not be read"; return; }
             for (const std::string& c : cands) if (!named.count(c)) r->list.push_back(c);
             r->kept = static_cast<int>(named.size());
-        }, [r, done] { done(std::move(r->list), r->kept, r->err); });
+        }, [this, r, done, gen, dir] {
+            if (gen != docGen_ || dir != SamplesDir()) { done({}, 0, "another project is open now"); return; }
+            done(std::move(r->list), r->kept, r->err);
+        });
     }
-    // Step 2, after the confirmation: what memory names now is taken out again, the rest is moved to the Trash on the loader thread.
-    // done(moved, error) on the UI thread; the list of samples/ is read again afterwards.
+    // True while the last plan still belongs to the open project (the browser closes the question otherwise).
+    bool TrashPlanStillValid() const { return trashPlanGen_ == docGen_ && trashPlanDir_ == SamplesDir(); }
+    // Step 2, after the confirmation: refused when another project is open now or a sample is still being copied into samples/
+    // (a copy could reuse one of these files); what memory names now is taken out again (case ignored), the rest is moved to the
+    // Trash on the loader thread, except a file that is the same file on disk as one memory names. done(moved, error) on the UI thread.
     void TrashSampleFiles(std::vector<std::string> names, std::function<void(int, std::string)> done) {
-        const std::set<std::string> mem = SampleFilesNamedInMemory();
-        names.erase(std::remove_if(names.begin(), names.end(), [&](const std::string& n) { return mem.count(n) > 0 || n.find('/') != std::string::npos; }), names.end());
+        if (!TrashPlanStillValid()) { done(0, "another project is open now"); return; }
+        if (loader.Busy() > 0) { done(0, "a file is still being copied or read, try again in a moment"); return; }
+        std::set<std::string> mem; std::vector<std::string> memList;
+        for (const std::string& n : SampleFilesNamedInMemory()) { mem.insert(cleanup::Fold(n)); memList.push_back(n); }
+        names.erase(std::remove_if(names.begin(), names.end(), [&](const std::string& n) {
+            return mem.count(cleanup::Fold(n)) > 0 || n.empty() || n.find('/') != std::string::npos || n.find('\\') != std::string::npos || n == "." || n == "..";
+        }), names.end());
         struct Moved { int n = 0; std::string err; };
         auto r = std::make_shared<Moved>();
         const std::string dir = SamplesDir();
-        loader.Post([r, names, dir] {
+        loader.Post([r, names, dir, memList] {
             for (const std::string& n : names) {
+                if (cleanup::SameFileAsAny(dir, n, memList)) continue;   // another spelling of a name that plays
                 std::string e;
                 if (cleanup::MoveToTrash(dir + "/" + n, e)) ++r->n;
                 else if (r->err.empty()) r->err = n + ": " + e;
             }
         }, [this, r, done] { sampleNamesValid_ = false; done(r->n, r->err); });
     }
+    unsigned trashPlanGen_ = ~0u;
+    std::string trashPlanDir_;
     // The sampler of the EDITED scene changed (a knob): the engine follows when that scene is the played one.
     void PushEditedSamplerToEngine() { if (EditIsPlaying()) sequencer.ApplySceneSound(project.currentPattern); }
     // v44.52.1: SLICES mode: writes the slice notes (ROOT, ROOT+1 ...) on the sampler's steps so that the loop plays through in order

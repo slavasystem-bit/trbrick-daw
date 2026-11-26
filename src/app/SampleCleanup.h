@@ -23,46 +23,70 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <sys/stat.h>
 
 namespace t8::cleanup {
 
 inline bool EndsWith(const std::string& s, const std::string& suf) { return s.size() >= suf.size() && s.compare(s.size() - suf.size(), suf.size(), suf) == 0; }
+// The Mac's disk ignores upper / lower case ("Kick.wav" opens "kick.wav"), so names are compared folded (ASCII is enough: a name
+// that differs in more than that is still kept by the same-file check of step 2).
+inline std::string Fold(std::string s) { for (char& c : s) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a'); return s; }
 
-// Every saved file that may name a sample of the samples/ folder beside `projectPath`.
-inline std::vector<std::string> FilesThatMayNameSamples(const std::string& projectPath) {
+// Every saved file that may name a sample of the samples/ folder beside `projectPath`. A folder that exists but cannot be listed
+// sets *unlisted (the caller then moves nothing: a file it could not see might name a sample).
+inline std::vector<std::string> FilesThatMayNameSamples(const std::string& projectPath, bool* unlisted = nullptr) {
     namespace fs = std::filesystem;
     std::vector<std::string> out;
-    auto addDir = [&](const std::string& dir, const char* ext1, const char* ext2) {
+    auto addDir = [&](const std::string& dir, std::initializer_list<const char*> exts) {
         std::error_code ec;
-        if (dir.empty() || !fs::is_directory(dir, ec)) return;
-        for (const auto& e : fs::directory_iterator(dir, ec)) {
-            if (!e.is_regular_file(ec)) continue;
-            const std::string n = e.path().filename().string();
-            if (EndsWith(n, ext1) || (ext2 && EndsWith(n, ext2))) out.push_back(e.path().string());
+        if (dir.empty() || !fs::exists(dir, ec)) return;   // no such folder: nothing in it can name a sample
+        if (!fs::is_directory(dir, ec)) { if (unlisted) *unlisted = true; return; }
+        fs::directory_iterator it(dir, ec), end;
+        if (ec) { if (unlisted) *unlisted = true; return; }
+        for (; it != end; it.increment(ec)) {   // never throws on the loader thread
+            if (ec) { if (unlisted) *unlisted = true; return; }
+            std::error_code ec2;
+            if (!it->is_regular_file(ec2)) continue;
+            const std::string n = it->path().filename().string();
+            for (const char* x : exts) if (EndsWith(n, x)) { out.push_back(it->path().string()); break; }
         }
+        if (ec && unlisted) *unlisted = true;
     };
     const fs::path p(projectPath);
     const std::string folder = p.has_parent_path() ? p.parent_path().string() : std::string(".");
-    addDir(folder, ".t8proj", ".t8proj.bak");                                        // every project sharing this samples/ folder
-    addDir(ProjectBackupDir(projectPath), ".t8proj", nullptr);                          // the dated copies
-    addDir(fs::path(userdirs::RecoveryPathFor(projectPath)).parent_path().string(), ".t8proj", nullptr);   // unsaved work
-    addDir(userdirs::SynthPresetsDir(), ".t8syn", nullptr);                          // a preset on the SAMPLE engine names its file
+    addDir(folder, {".t8proj", ".t8proj.bak", ".t8proj.corrupt"});                  // every project sharing this samples/ folder (and a damaged one kept to repair)
+    addDir(ProjectBackupDir(projectPath), {".t8proj"});                             // the dated copies
+    addDir(fs::path(userdirs::RecoveryPathFor(projectPath)).parent_path().string(), {".t8proj"});   // unsaved work
+    addDir(userdirs::SynthPresetsDir(), {".t8syn"});                                // a preset on the SAMPLE engine names its file
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
     return out;
 }
 
-// The candidates whose name appears in any of `files` (read as text). A file that cannot be read keeps everything (*unreadable).
+// The candidates whose name appears in any of `files` (read as text, upper / lower case ignored). A file that cannot be read keeps
+// everything (*unreadable).
 inline std::set<std::string> NamedInFiles(const std::vector<std::string>& candidates, const std::vector<std::string>& files, bool* unreadable = nullptr) {
     std::set<std::string> named;
     for (const std::string& f : files) {
         std::ifstream in(f, std::ios::binary);
         if (!in) { if (unreadable) *unreadable = true; continue; }
         std::ostringstream ss; ss << in.rdbuf();
-        const std::string text = ss.str();
-        for (const std::string& c : candidates) if (!named.count(c) && text.find(c) != std::string::npos) named.insert(c);
+        const std::string text = Fold(ss.str());
+        for (const std::string& c : candidates) if (!named.count(c) && text.find(Fold(c)) != std::string::npos) named.insert(c);
     }
     return named;
+}
+
+// Step 2's last guard: true when `dir/name` is the same file on disk as any of `dir/keep` (another spelling of the same name on a
+// disk that ignores case, or a Unicode-normalised name). Compared by device and inode.
+inline bool SameFileAsAny(const std::string& dir, const std::string& name, const std::vector<std::string>& keep) {
+    struct stat a{};
+    if (::stat((dir + "/" + name).c_str(), &a) != 0) return false;
+    for (const std::string& k : keep) {
+        struct stat b{};
+        if (::stat((dir + "/" + k).c_str(), &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino) return true;
+    }
+    return false;
 }
 
 // Where the Trash is: macOS ~/.Trash; elsewhere $XDG_DATA_HOME/Trash or ~/.local/share/Trash ("files" + "info" inside). Empty = none.

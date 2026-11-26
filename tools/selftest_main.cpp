@@ -6839,6 +6839,29 @@ int main(int argc, char** argv) {
             if (oldX) setenv("XDG_DATA_HOME", keepX.c_str(), 1); else unsetenv("XDG_DATA_HOME");
             if (oldH) setenv("HOME", keepH.c_str(), 1); else unsetenv("HOME");
             check(moved == 0 && fs::exists(dir + "/prj/samples/c4bt_saved.wav") && fs::exists(dir + "/prj/p.t8proj"), "c4b: the move checks memory again and never leaves samples/");
+            // review of C4b g2: upper / lower case (the Mac's disk ignores it) and another project opened before the answer
+            WriteWavPCM16(dir + "/prj/samples/c4bt_case.wav", tone, 1, kSampleRate);
+            WriteWavPCM16(dir + "/prj/samples/c4bt_savedcase.wav", tone, 1, kSampleRate);
+            WriteWavPCM16(dir + "/prj/samples/c4bt_free.wav", tone, 1, kSampleRate);
+            { std::ofstream f(dir + "/prj/p.t8proj", std::ios::app); f << "sampler=C4BT_SavedCase.wav|60|0\n"; }
+            a.project.patterns[2].samplerPatch.file = "C4BT_Case.wav";   // what CopySamplerFile can leave: the disk has c4bt_case.wav
+            a.sampleNamesValid_ = false;
+            plan.clear(); err = "?";
+            a.PlanTrashUnusedSamples([&](std::vector<std::string> l, int, std::string e) { plan = std::move(l); err = e; });
+            const bool hasCase = std::find(plan.begin(), plan.end(), "c4bt_case.wav") != plan.end();
+            const bool hasSavedCase = std::find(plan.begin(), plan.end(), "c4bt_savedcase.wav") != plan.end();
+            check(err.empty() && !hasCase && !hasSavedCase && std::find(plan.begin(), plan.end(), "c4bt_free.wav") != plan.end(),
+                  "c4b: a name in memory or in a saved file keeps the file whatever its upper / lower case");
+            { std::error_code hl; fs::create_hard_link(dir + "/prj/samples/c4bt_free.wav", dir + "/prj/samples/C4BT_Other_Spelling.wav", hl); }   // one file, two names (as on a case-blind disk)
+            check(cleanup::SameFileAsAny(dir + "/prj/samples", "c4bt_free.wav", {"C4BT_Other_Spelling.wav"}) && !cleanup::SameFileAsAny(dir + "/prj/samples", "c4bt_free.wav", {"c4bt_case.wav"}),
+                  "c4b: step 2 knows two spellings of one file on disk");
+            fs::create_directories(dir + "/prj2/samples");
+            WriteWavPCM16(dir + "/prj2/samples/c4bt_free.wav", tone, 1, kSampleRate);
+            a.projectPath = dir + "/prj2/p.t8proj"; ++a.docGen_;                  // a dropped project opened while the question was up
+            moved = -1; std::string why;
+            a.TrashSampleFiles(plan, [&](int m, std::string e) { moved = m; why = e; });
+            check(!a.TrashPlanStillValid() && moved == 0 && why.find("another project") != std::string::npos && fs::exists(dir + "/prj2/samples/c4bt_free.wav") && fs::exists(dir + "/prj/samples/c4bt_free.wav"),
+                  "c4b: a plan made for one project never moves anything in another");
             fs::remove_all(dir);
         }
     }
