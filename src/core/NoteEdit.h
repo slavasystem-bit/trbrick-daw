@@ -129,4 +129,56 @@ inline bool DuplicateNotes(Track& t, std::vector<NoteRef>& sel, int trackLen) {
     return true;
 }
 
+// C1 (UI-8): Cmd+C / Cmd+V of selected notes in the piano roll. A copied note keeps its whole step (length, velocity, nudge ...) and
+// its place relative to the first copied column; pasting puts the first column at `atCol` (pulled back so the last note still fits).
+struct NoteClipNote { int relCol = 0; int pitch = 60; Step step; };
+using NoteClip = std::vector<NoteClipNote>;
+
+inline NoteClip CopyNotes(const Track& t, const std::vector<NoteRef>& sel) {
+    NoteClip clip;
+    if (sel.empty()) return clip;
+    int minC = kMaxSteps;
+    for (const NoteRef& n : sel) minC = std::min(minC, n.col);
+    for (const NoteRef& n : sel) {
+        if (n.col < 0 || n.col >= kMaxSteps || !NoteIsOn(t, n.col, n.pitch)) continue;
+        clip.push_back({n.col - minC, n.pitch, t.steps[static_cast<size_t>(n.col)]});
+    }
+    return clip;
+}
+
+// Returns the pasted notes (the new selection); empty when the clip is empty or wider than the track.
+inline std::vector<NoteRef> PasteNotes(Track& t, const NoteClip& clip, int atCol, int trackLen) {
+    std::vector<NoteRef> out;
+    if (clip.empty()) return out;
+    int span = 0;
+    for (const NoteClipNote& c : clip) span = std::max(span, c.relCol);
+    if (span >= trackLen) return out;
+    atCol = std::clamp(atCol, 0, trackLen - 1 - span);
+    for (const NoteClipNote& c : clip) {
+        const int tc = atCol + c.relCol;
+        Step& d = t.steps[static_cast<size_t>(tc)];
+        if (IsNoteTrackType(t.type)) {
+            d = c.step; d.note = static_cast<int8_t>(c.pitch); d.active = true;   // one note per step: the pasted one replaces what was there
+        } else {
+            if (!d.active || d.chordSize == 0) { d = c.step; d.chordSize = 0; }
+            bool have = false;
+            for (int i = 0; i < d.chordSize; ++i) if (d.chordNotes[static_cast<size_t>(i)] == c.pitch) have = true;
+            if (!have && d.chordSize < kMaxChordVoices) {
+                d.chordNotes[static_cast<size_t>(d.chordSize)] = static_cast<int8_t>(c.pitch);
+                d.chordSize++;
+                std::sort(d.chordNotes.begin(), d.chordNotes.begin() + d.chordSize);
+            }
+            d.active = d.chordSize > 0;
+        }
+        d.lengthSteps = static_cast<uint8_t>(std::clamp<int>(d.lengthSteps, 1, std::max(1, trackLen - tc)));
+        out.push_back({tc, c.pitch});
+    }
+    // only the notes that are really there: a full chord takes no more, and on a Synth track a later note in the same column
+    // replaced an earlier one
+    PruneNotes(t, out);
+    std::sort(out.begin(), out.end(), [](const NoteRef& a, const NoteRef& b) { return a.col != b.col ? a.col < b.col : a.pitch < b.pitch; });
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 } // namespace t8

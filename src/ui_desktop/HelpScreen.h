@@ -50,7 +50,7 @@ inline void DrawHelpScreen(AppState& app) {
             {"Home", "play the track from the first brick"},
             {"Cmd + Z    Shift + Cmd + Z", "undo    redo (also Cmd + Y)"},
             {"Cmd + S", "save the project"},
-            {"Cmd + C / V", "copy / paste the selected track  (+ Shift: the whole scene)"},
+            {"Cmd + C / V", "copy / paste the selected track  (+ Shift: the whole scene); over the piano roll: the selected notes"},
             {"[  and  ]", "previous / next scene"},
             {"1 ... 0   and   Cmd + left / right", "select an instrument"},
             {"Tab", "LIVE <-> TRACK"},
