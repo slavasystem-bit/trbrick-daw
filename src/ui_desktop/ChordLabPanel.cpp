@@ -54,7 +54,6 @@ Track& ChordLabPanel::JamTrack(AppState& app) { return app.StepTrack(app.project
 void ChordLabPanel::BeginEdit(AppState& app) {
     if (abBefore_) ListenAB(app, false);   // C2: a change always goes into the draft
     if (app.project.chordBankOn) app.PushUndo(); else app.StartChordDraft();
-    ++labEdits_;
     jam_ = std::clamp(app.project.chordSceneEdit, 0, kNumChordScenes - 1);
 }
 
@@ -241,7 +240,6 @@ void ChordLabPanel::Leave(AppState& app) {
     if (auditionUntil_ > 0.0) { app.engine.ChordAuditionOff(); auditionUntil_ = 0.0; }
     if (abBefore_) ListenAB(app, false);   // C2: leaving on A BEFORE puts the draft back
     opened_ = false;
-    labEdits_ = 0;
 }
 
 // C2: A BEFORE plays the scene's own chords, B DRAFT the draft slot. Only what is heard changes (no undo step, nothing is written):
@@ -249,7 +247,7 @@ void ChordLabPanel::Leave(AppState& app) {
 void ChordLabPanel::ListenAB(AppState& app, bool before) {
     if (before == abBefore_) return;
     if (before && jam_ < 0) return;
-    std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB A/B");
     if (before) {
         abSlot_ = jam_;
         app.project.chordBankOn = false;
@@ -263,15 +261,15 @@ void ChordLabPanel::ListenAB(AppState& app, bool before) {
     app.RefreshChordLive(true);
 }
 
-// C2: UNDO ALL takes back every change made in CHORD LAB since it was opened (the draft included), one Undo at a time.
+// C2: UNDO ALL takes back every undo step made since CHORD LAB was opened (the draft, KEEP IN SCENE, a throw, sound edits, redos),
+// one Undo at a time down to the marker taken at open. Steps from before the lab was opened are never touched.
 void ChordLabPanel::UndoAll(AppState& app) {
     if (abBefore_) ListenAB(app, false);
     int n = 0;
     {
         SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
-        while (labEdits_ > 0 && app.Undo()) { --labEdits_; ++n; }
+        n = app.UndoBackTo(labMark_);
     }
-    labEdits_ = 0;
     selBlock_ = -1;
     app.SetStatus(n > 0 ? "CHORD LAB: " + std::to_string(n) + " CHANGE" + (n == 1 ? "" : "S") + " TAKEN BACK" : "CHORD LAB: NOTHING TO TAKE BACK");
 }
@@ -380,10 +378,11 @@ void ChordLabPanel::DrawHeader(AppState& app, ImDrawList* dl, ImVec2 o, float W,
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint(has ? "Write the draft into this scene's own chord track, in the key it was built in. One undo step; the chord slot keeps its copy." : "Nothing to keep yet: change the loop and a draft starts.");
     ImGui::SameLine(0, 8);
-    ImGui::BeginDisabled(labEdits_ == 0);
+    const int labSteps = app.UndoStepsSince(labMark_);
+    ImGui::BeginDisabled(labSteps == 0);
     if (ImGui::Button("UNDO ALL", ImVec2(92, 0))) UndoAll(app);
     ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("Take back every change made in CHORD LAB since it was opened (%d step%s), the draft included.", labEdits_, labEdits_ == 1 ? "" : "s");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("Take back every change made in CHORD LAB since it was opened (%d step%s), the draft included.", labSteps, labSteps == 1 ? "" : "s");
     ImGui::SameLine(0, 8);
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.86f, 0.50f, 0.12f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.10f, 0.07f, 0.03f, 1.0f));
@@ -520,7 +519,7 @@ void ChordLabPanel::DrawWhatFits(AppState& app, ImDrawList* dl, ImVec2 a, float 
 }
 
 void ChordLabPanel::Draw(AppState& app, float W, float H) {
-    if (!opened_) { opened_ = true; Rebuild(app); selBlock_ = -1; labEdits_ = 0; abBefore_ = false; }
+    if (!opened_) { opened_ = true; Rebuild(app); selBlock_ = -1; labMark_ = app.UndoMark(); abBefore_ = false; }
     if (!abBefore_) {   // which chords are shown: the edited slot (bank on) or the scene's own (bank off, nothing changed yet)
         const int now = app.project.chordBankOn ? std::clamp(app.project.chordSceneEdit, 0, kNumChordScenes - 1) : -1;
         if (now != jam_) { jam_ = now; selBlock_ = -1; }

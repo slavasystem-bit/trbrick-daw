@@ -733,6 +733,27 @@ int main(int argc, char** argv) {
         app.project.songChainLength = 1;
         check(app.Undo() && app.project.songChainLength == 0, "undo: chain edits are undoable");
 
+        {   // C2 review: UNDO ALL goes back to a marker, never into the work done before it (Cmd+Z / redo / sound steps in between)
+            app.undoStack.clear(); app.redoStack.clear();
+            Track& t0 = app.project.patterns[0].tracks[0];
+            t0.steps[5].active = false; t0.steps[6].active = false; t0.steps[7].active = false;
+            app.PushUndo(); t0.steps[5].active = true;                    // before the lab
+            const uint64_t mark = app.UndoMark();
+            check(app.UndoStepsSince(mark) == 0 && app.UndoBackTo(mark) == 0 && t0.steps[5].active, "undo mark: nothing after the marker, nothing undone");
+            app.PushUndo(); t0.steps[6].active = true;                    // in the lab
+            app.Undo();                                                   // Cmd+Z in the lab
+            app.Redo();                                                   // and back
+            const float cut = app.project.patterns[0].synthPatches[0].cutoffHz;
+            app.PushSoundUndo(); app.project.patterns[0].synthPatches[0].cutoffHz = cut + 300.0f;   // a sound edit in the lab
+            app.PushUndo(); t0.steps[7].active = true;
+            check(app.UndoStepsSince(mark) == 3, "undo mark: the redo, the sound step and the edit count as lab steps");
+            check(app.UndoBackTo(mark) == 3 && t0.steps[5].active && !t0.steps[6].active && !t0.steps[7].active &&
+                  nearlyEqual(app.project.patterns[0].synthPatches[0].cutoffHz, cut, 0.01f),
+                  "undo mark: every lab step is taken back and the step from before the marker stays");
+            check(app.UndoBackTo(mark) == 0 && app.Undo() && !t0.steps[5].active, "undo mark: the earlier step is still there for Cmd+Z");
+            app.undoStack.clear(); app.redoStack.clear();
+        }
+
         // a failed project open must not blank the current project
         app.project.name = "KeepMe";
         std::string savedPath = app.projectPath;
@@ -5625,6 +5646,16 @@ int main(int argc, char** argv) {
                   why.find("2 of the 3 notes") != std::string::npos && why.find("G rubs against G#") != std::string::npos,
                   "c2: the sentence names the leading tone, the voice moves, the notes held and the rub (G against G#)");
             check(LabAdvise(pal, slot, 9, kScaleAeolian, LabAdviceMode::Best) .size() == pal.size(), "c2: the list holds every chord of the palette, the same each time");
+            {   // review of C2: the same notes under another name count as the same chord (Cm7 right after Eb6)
+                LabChord eb6; eb6.root = 3; eb6.iv = {0, 4, 7, 9}; eb6.name = "Eb6";
+                LabChord cm7; cm7.root = 0; cm7.iv = {0, 3, 7, 10}; cm7.name = "Cm7";
+                LabSlot s6; s6.prev = &eb6;
+                const LabAdvice a6 = LabAdviseOne(cm7, s6, 0, kScaleAeolian);
+                LabSlot sNone;
+                const LabAdvice aFree = LabAdviseOne(cm7, sNone, 0, kScaleAeolian);
+                check(LabSameChord(eb6, cm7) && a6.fnFit < aFree.fnFit * 0.6f && a6.fnWords.find("the same notes as before") != std::string::npos,
+                      "c2: Cm7 after Eb6 is the same 4 notes: it is marked down and named as such");
+            }
             std::ifstream pin("src/ui_desktop/ChordLabPanel.cpp");
             const std::string lab((std::istreambuf_iterator<char>(pin)), std::istreambuf_iterator<char>());
             check(lab.find("WHAT FITS IN BAR %d") != std::string::npos && lab.find("\"BEST\", \"SMOOTH\", \"MORE TENSION\", \"NEW COLOUR\"") != std::string::npos &&
@@ -5633,8 +5664,9 @@ int main(int argc, char** argv) {
             check(lab.find("\"A BEFORE\", \"B DRAFT\"") != std::string::npos && lab.find("KEEP IN SCENE %02d") != std::string::npos && lab.find("\"UNDO ALL\"") != std::string::npos &&
                   lab.find("the tension line") != std::string::npos && lab.find("FnFill(fn)") != std::string::npos,
                   "c2 ui: header A / B, KEEP, UNDO ALL; palette and loop coloured by function; the tension line over the loop");
-            check(lab.find("void ChordLabPanel::UndoAll") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB\");\n        while (labEdits_ > 0 && app.Undo())") != std::string::npos,
-                  "c2 ui: UNDO ALL takes back only the lab's own steps, under the scene lock");
+            check(lab.find("void ChordLabPanel::UndoAll") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB\");\n        n = app.UndoBackTo(labMark_);") != std::string::npos &&
+                  lab.find("labMark_ = app.UndoMark();") != std::string::npos,
+                  "c2 ui: UNDO ALL goes back to the marker taken at open, under the scene lock");
         }
         // melody: bass A A F F A F (on the beat) + a D passing note
         auto patp = std::make_unique<Pattern>(); Pattern& pat = *patp; pat.stepsPerBeat = 4; pat.masterLength = 16;

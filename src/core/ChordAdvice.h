@@ -107,7 +107,8 @@ struct LabSlot {
 };
 
 inline unsigned LabMask(const LabChord& c) { unsigned m = 0; for (int pc : c.Pcs()) m |= 1u << pc; return m; }
-inline bool LabSameChord(const LabChord& a, const LabChord& b) { return a.root == b.root && LabMask(a) == LabMask(b); }
+// The same notes, whatever the name: Cm7 after Eb6 changes nothing that is heard.
+inline bool LabSameChord(const LabChord& a, const LabChord& b) { return LabMask(a) == LabMask(b); }
 
 // The pull towards the next chord as a fact: the chord holds the note a half step under the next root (a leading tone), or its root is a
 // fifth above the next root.
@@ -139,8 +140,8 @@ inline LabAdvice LabAdviseOne(const LabChord& c, const LabSlot& slot, int keyRoo
     if (same) a.fnFit *= 0.5f;            // nothing changes there
     else if (sameRoot) a.fnFit *= 0.75f;  // the bass stays: only the colour changes
     a.fnWords = LabFnName(a.fn);
-    if (slot.next && LabSameChord(c, *slot.next)) a.fnWords += " \xC2\xB7 the same as the next";
-    else if (slot.prev && LabSameChord(c, *slot.prev)) a.fnWords += " \xC2\xB7 the same as before";
+    if (slot.next && LabSameChord(c, *slot.next)) a.fnWords += " \xC2\xB7 the same notes as the next";
+    else if (slot.prev && LabSameChord(c, *slot.prev)) a.fnWords += " \xC2\xB7 the same notes as before";
     else if (sameRoot) a.fnWords += std::string(" \xC2\xB7 same root as ") + (slot.prev && c.root == slot.prev->root ? slot.prev->name : slot.next->name);
     else if (a.fn == LabFn::Tension && slot.next && LabLeadsInto(c, *slot.next)) a.fnWords += " \xC2\xB7 wants " + slot.next->name;
     else if (a.fn == LabFn::Tension) a.fnWords += " \xC2\xB7 open, floats";

@@ -61,7 +61,7 @@ private:
     int adviceSel_ = 0;                  // the card whose sentence is shown
     bool abBefore_ = false;              // C2: A BEFORE is being heard (the draft waits in abSlot_)
     int abSlot_ = 0;
-    int labEdits_ = 0;                   // C2: undo steps made in CHORD LAB since it was opened (UNDO ALL)
+    uint64_t labMark_ = 0;               // C2: the undo marker taken when CHORD LAB was opened (UNDO ALL goes back to it)
     std::function<void(AppState&)> soundBody_;
     int defLen_ = 1;                     // new block: 0 half a bar, 1 a bar, 2 two bars
     int dragRow_ = -1, dragCol_ = -1;    // a palette chip being dragged towards the loop
