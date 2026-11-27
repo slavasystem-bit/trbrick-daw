@@ -5656,6 +5656,15 @@ int main(int argc, char** argv) {
         check(vfd::ParseTyped("90", bpm, &typed) && nearlyEqual(typed, 90.0f, 0.001f), "u1a: typed value is read");
         check(vfd::ParseTyped("9999", bpm, &typed) && nearlyEqual(typed, 300.0f, 0.001f), "u1a: typed value is clamped");
         check(!vfd::ParseTyped("abc", bpm, &typed) && !vfd::ParseTyped("", bpm, &typed), "u1a: garbage is rejected");
+        {   // C2 part 3 (review of #50): a field that drags a log position takes a typed number in its unit
+            t8::desktop::ValueSpec cut; cut.lo = 0.0f; cut.hi = 1.0f; cut.unit = " Hz";
+            cut.fromTyped = [](float hz) { return std::log(std::clamp(hz, 100.0f, 18000.0f) / 100.0f) / std::log(180.0f); };
+            cut.toTyped = [](float pos) { return 100.0f * std::pow(180.0f, pos); };
+            float pos = 0.0f;
+            check(vfd::ParseTyped("800", cut, &pos) && nearlyEqual(cut.toTyped(pos), 800.0f, 1.0f) &&
+                  vfd::ParseTyped("2000 Hz", cut, &pos) && nearlyEqual(cut.toTyped(pos), 2000.0f, 2.0f),
+                  "c2 ui: 800 typed into CUTOFF is 800 Hz, not 18 kHz (fromTyped)");
+        }
 
         AppState app;
         app.engine.Init(kSampleRate);
@@ -5844,7 +5853,7 @@ int main(int argc, char** argv) {
         const std::string panel = slurp("src/ui_desktop/ChordLabPanel.cpp"), coreSrc = slurp("src/core/ChordLab.h"), ctx = slurp("src/ui_desktop/ContextPanel.cpp"), edit = slurp("src/ui_desktop/ChordEditor.h");
         check(coreSrc.find("LabNextChords") == std::string::npos && panel.find("LabNextChords") == std::string::npos && panel.find("\"NEXT\"") == std::string::npos, "v44.46: the NEXT prediction is gone");
         check(coreSrc.find("LabFunction") == std::string::npos, "v44.46: WHY has no sentence about what a chord wants");
-        check(panel.find("\"JAM\", \"SOUND\"") != std::string::npos && panel.find("soundBody_") != std::string::npos, "v44.46: CHORD LAB has a JAM | SOUND switch");
+        check(panel.find("\"JAM\", \"SOUND\"") == std::string::npos && panel.find("BACK TO THE JAM") != std::string::npos && panel.find("soundBody_") != std::string::npos, "v44.46 / C2 part 3: the whole chord instrument is one press away in CHORD LAB (ALL KNOBS..., BACK TO THE JAM)");
         check(panel.find("LabMelodyFromRange(pat, SrcTracks(), b.start") != std::string::npos && panel.find("RefreshMatch(app,") != std::string::npos, "v44.46: MATCH is read under every block and for the selected block");
         check(ctx.find("BlockBegin(\"PROGRESSION\")") == std::string::npos && ctx.find("BlockBegin(\"CUSTOM CHORDS\")") == std::string::npos && ctx.find("OPEN CHORD LAB") != std::string::npos, "v44.46: PROGRESSION and CUSTOM CHORDS are gone from the CHORDS tab, CHORD LAB opens from it");
         check(ctx.find("c.quality") == std::string::npos && edit.find("LabPcName(sp.root)") != std::string::npos, "v44.46: one way to name a chord (no CMIN next to Cm)");
@@ -5934,9 +5943,23 @@ int main(int argc, char** argv) {
             check(lab.find("app.sequencer.QueueLiveChord(notes, cnt, 0.85f);") != std::string::npos && lab.find("Place(app, liveChord_, app.sequencer.LiveChordStart(), app.sequencer.LiveChordRecLen());") != std::string::npos &&
                   lab.find("REC WHAT I PLAY") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB LIVE\");") != std::string::npos,
                   "c2 ui: a click while the loop plays queues a live chord under the lock; REC WHAT I PLAY writes it where it sounded");
-            check(lab.find("void ChordLabPanel::DrawPlay") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB PLAY\");\n        app.PushUndo();") != std::string::npos &&
+            check(lab.find("float ChordLabPanel::DrawPlay") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB PLAY\");\n        app.PushUndo();") != std::string::npos &&
                   lab.find("ChordPerfEvents(c, t, t + 1.0") != std::string::npos,
                   "c2 ui: PLAY edits the scene's ChordPlay as one undo step under the lock, and draws the same events the sequencer plays");
+            {   // C2 part 3: the short SOUND column under PLAY edits the same values as the instrument block, under the lock, one undo step a gesture
+                std::ifstream cin2("src/ui_desktop/ContextPanel.cpp");
+                const std::string cx((std::istreambuf_iterator<char>(cin2)), std::istreambuf_iterator<char>());
+                const size_t f = cx.find("bool ContextPanel::DrawChordSoundColumn");
+                const std::string col = f == std::string::npos ? std::string() : cx.substr(f, 9000);
+                check(!col.empty() && col.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB SOUND\");") != std::string::npos &&
+                      col.find("\"CUTOFF\", \"ATTACK\", \"RELEASE\", \"WIDTH\", \"REVERB\", \"LEVEL\"") != std::string::npos &&
+                      col.find("app.EditedPatch(true, 0)") != std::string::npos && col.find("app.PushEditedPatchToEngine(true, 0)") != std::string::npos &&
+                      col.find("&Mixer::TrackState::reverbSend, &Track::reverbSend") != std::string::npos && col.find("&Mixer::TrackState::volume, &Track::volume") != std::string::npos &&
+                      col.find("if (r.started) app.PushUndo();") != std::string::npos && col.find("if (r.cancelled) app.DropLastUndo();") != std::string::npos &&
+                      col.find("ApplyPresetToTrack(app, ti, n)") != std::string::npos && col.find("ALL KNOBS...") != std::string::npos &&
+                      lab.find("SOUND \\xC2\\xB7 THE CHORD INSTRUMENT") != std::string::npos && lab.find("soundColumn_(app,") != std::string::npos,
+                      "c2 ui: SOUND under PLAY: preset, < >, ALL KNOBS... and six knobs on the chord instrument's own values, one undo step a gesture, under the lock");
+            }
         }
         // melody: bass A A F F A F (on the beat) + a D passing note
         auto patp = std::make_unique<Pattern>(); Pattern& pat = *patp; pat.stepsPerBeat = 4; pat.masterLength = 16;

@@ -154,6 +154,7 @@ void DrawShellFrame(AppState& app, ShellPanels& p, const DesktopFonts& fonts) {
                     p.contextPanel.ShowChordSound();
                     p.contextPanel.Draw(a, keys);
                 });
+                p.chordLabPanel.SetSoundColumn([&](AppState& a, ImVec2 at, float w) { return p.contextPanel.DrawChordSoundColumn(a, at, w); });
                 p.chordLabPanel.Draw(app, ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y);
                 ImGui::EndChild();
                 ImGui::PopStyleVar();

@@ -375,16 +375,11 @@ void ChordLabPanel::DrawHeader(AppState& app, ImDrawList* dl, ImVec2 o, float W,
     std::string kn = LabKeyName(key, scale);
     for (char& ch : kn) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
     pill(kn.c_str(), IM_COL32(24, 60, 52, 255), vis::kTeal);
-    {   // v44.46: the sound of the chords is one switch away, in the place of the whole lab (the loop keeps playing)
+    if (soundView_) {   // C2 part 3: ALL KNOBS... shows the whole instrument of the chords in the place of the lab (the loop keeps playing)
         ImGui::SetCursorScreenPos(ImVec2(x, o.y));
-        int v = soundView_ ? 1 : 0;
-        static const char* const kView[2] = {"JAM", "SOUND"};
-        if (Segmented("##lview", &v, kView, 2, 64.0f)) {
-            soundView_ = v == 1;
-            if (soundView_) app.seqCursorTrack = kChordTrackIndex;
-        }
-        if (ImGui::IsItemHovered()) Hint("JAM: the palette, the loop and what fits.  SOUND: the sound of the chord instrument (preset, oscillators, filter, envelope, EQ, FX) while the loop keeps playing.");
-        x += 2 * 64.0f + 14.0f;
+        if (ImGui::Button("< BACK TO THE JAM", ImVec2(150, 0))) soundView_ = false;
+        if (ImGui::IsItemHovered()) Hint("Back to the palette, the loop, what fits, PLAY and the short SOUND column.");
+        x += 150.0f + 14.0f;
     }
     if (jam_ < 0 && !abBefore_ && !soundView_) Text(dl, ImVec2(x + 4, o.y + 7), vis::kTextDim, "nothing is changed yet: your first change starts a draft", 12.0f);
 
@@ -552,7 +547,8 @@ void ChordLabPanel::DrawWhatFits(AppState& app, ImDrawList* dl, ImVec2 a, float 
 
 // C2: PLAY, how the chords of the scene sound (the scene's ChordPlay, applied by the sequencer while it plays: core/ChordPerform.h).
 // Every change is one undo step of the scene; it never starts a draft (the chords stay as they are, only the playing changes).
-void ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot) {
+// Returns the y under what it drew (the SOUND column goes there).
+float ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot) {
     const int scene = SceneShown(app);
     Pattern& pat = app.project.patterns[static_cast<size_t>(scene)];
     ChordPlay cp = pat.chordPlay;
@@ -636,12 +632,12 @@ void ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, f
 
     // what the chord of this place sounds like through PLAY (the same events the sequencer plays), over up to two bars
     const float py = oy + 92.0f, ph = std::min(110.0f, h - (py - a.y) - 22.0f);
-    if (ph < 40.0f) return;
+    if (ph < 40.0f) return py;
     const ImVec2 pa(a.x, py), pb(a.x + w, py + ph);
     dl->AddRectFilled(pa, pb, IM_COL32(22, 24, 31, 255), 6.0f);
     dl->AddRect(pa, pb, vis::kLine, 6.0f);
     int bi = slot.block >= 0 ? slot.block : (blocks.empty() ? -1 : 0);
-    if (bi < 0) { Text(dl, ImVec2(pa.x + 10, pa.y + ph * 0.5f - 7), vis::kTextDim, "put a chord in the loop to see it played", 11.5f); return; }
+    if (bi < 0) { Text(dl, ImVec2(pa.x + 10, pa.y + ph * 0.5f - 7), vis::kTextDim, "put a chord in the loop to see it played", 11.5f); return pb.y; }
     const Blk& b = blocks[static_cast<size_t>(bi)];
     const Step& st = jam.steps[static_cast<size_t>(b.start)];
     ChordPerf c;
@@ -664,7 +660,7 @@ void ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, f
             else close(e.voice, e.at);
         });
     for (int v = 0; v < kMaxChordVoices; ++v) close(v, c.span);
-    if (bars.empty()) return;
+    if (bars.empty()) return pb.y;
     int lo = 127, hi = 0;
     for (const NoteBar& nb : bars) { lo = std::min(lo, nb.note); hi = std::max(hi, nb.note); }
     const int rows = std::max(1, hi - lo + 1);
@@ -684,6 +680,7 @@ void ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, f
     char cap[96];
     std::snprintf(cap, sizeof cap, "%s \xC2\xB7 %s", LabChordFromNotes(st.chordNotes.data(), st.chordSize).name.c_str(), ChordPlayModeName(pat.chordPlay.mode));
     Text(dl, ImVec2(pa.x, pb.y + 4), vis::kTextDim, cap, 11.0f);
+    return pb.y + 20.0f;
 }
 
 void ChordLabPanel::Draw(AppState& app, float W, float H) {
@@ -716,7 +713,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         ImGui::Dummy(ImVec2(W, H));
         return;
     }
-    // C2: HARMONY and THE LOOP on the left, WHAT FITS in the middle, PLAY on the right (a short SOUND column follows in part 3)
+    // C2: HARMONY and THE LOOP on the left, WHAT FITS in the middle, PLAY and under it the short SOUND column on the right
     const float playW = std::clamp(W * 0.22f, 260.0f, 400.0f);
     const float leftW = std::clamp((W - playW) * 0.57f, 480.0f, 900.0f);
     const float midX = leftW + 20.0f, playX = W - playW, midW = std::max(280.0f, playX - 20.0f - midX);
@@ -1001,7 +998,14 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
 
     // ---- 3 WHAT FITS
     DrawWhatFits(app, dl, ImVec2(o.x + midX, o.y + top + 4.0f), midW, H - top - 8.0f, jt, blocks, slot);
-    DrawPlay(app, dl, ImVec2(o.x + playX, o.y + top + 4.0f), playW - 2.0f, H - top - 8.0f, jt, blocks, slot);
+    const float soundH = soundColumn_ ? 112.0f : 0.0f;
+    const float playEnd = DrawPlay(app, dl, ImVec2(o.x + playX, o.y + top + 4.0f), playW - 2.0f, H - top - 8.0f - soundH, jt, blocks, slot);
+    if (soundColumn_) {   // 5 SOUND: the preset and six knobs of the chord instrument, under PLAY
+        const ImVec2 sa(o.x + playX, std::min(playEnd + 12.0f, o.y + H - soundH));
+        Text(dl, sa, vis::kTextDim, "SOUND \xC2\xB7 THE CHORD INSTRUMENT", 12.0f);
+        dl->AddLine(ImVec2(sa.x + TextW("SOUND \xC2\xB7 THE CHORD INSTRUMENT", 12.0f) + 8, sa.y + 7), ImVec2(sa.x + playW - 2.0f, sa.y + 7), vis::kLine, 1.0f);
+        if (soundColumn_(app, ImVec2(sa.x, sa.y + 22.0f), playW - 2.0f)) { soundView_ = true; app.seqCursorTrack = kChordTrackIndex; }
+    }
 
     ImGui::PopFont();
     ImGui::SetCursorScreenPos(ImVec2(o.x, o.y));

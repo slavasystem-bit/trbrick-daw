@@ -32,6 +32,10 @@ class ContextPanel {
 public:
     void Draw(AppState& app, const DpadKeys& keys);
     void ShowChordSound() { chordTab_ = 1; }   // v44.46: CHORD LAB's SOUND view draws the chord instrument's SOUND tabs
+    // C2 part 3: the short SOUND column of CHORD LAB: the preset of the chord instrument (< >, the browser), ALL KNOBS... and six knobs
+    // (CUTOFF, ATTACK, RELEASE of the patch; WIDTH, REVERB, LEVEL of the chord track). The same values the instrument block edits.
+    // Returns true when ALL KNOBS... was pressed (CHORD LAB then shows the whole instrument block).
+    bool DrawChordSoundColumn(AppState& app, ImVec2 at, float width);
 
 private:
     // ---- per-frame cell bookkeeping (see ParamCell.h) ----

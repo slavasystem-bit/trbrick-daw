@@ -1401,6 +1401,121 @@ void ContextPanel::DrawChords(AppState& app, int ti) {
     // (the chord track's sends / insert FX / length live in the SOUND view)
 }
 
+// C2 part 3: the 0..1 positions of the SOUND column's CUTOFF (log, 100 Hz..18 kHz) and ATTACK / RELEASE (square root, 0..2000 ms)
+namespace {
+float ChordCutoffPos(float hz) { return std::log(std::clamp(hz, 100.0f, 18000.0f) / 100.0f) / std::log(180.0f); }
+float ChordCutoffHz(float pos) { return 100.0f * std::pow(180.0f, std::clamp(pos, 0.0f, 1.0f)); }
+float ChordEnvPos(float ms) { return std::sqrt(std::clamp(ms / 2000.0f, 0.0f, 1.0f)); }
+float ChordEnvMs(float pos) { pos = std::clamp(pos, 0.0f, 1.0f); return 2000.0f * pos * pos; }
+} // namespace
+
+// C2 part 3: CHORD LAB's SOUND column. Drawn by CHORD LAB in place of nothing else of this panel, so the browser is drawn here too.
+bool ContextPanel::DrawChordSoundColumn(AppState& app, ImVec2 a, float w) {
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB SOUND");
+    const int ti = kChordTrackIndex, slot = kNumSynthTracks;
+    const int total = static_cast<int>(AllSynthPresets().size() + app.CustomSynthPresetNamesCached().size());
+    const int cur = presetIdx_[slot] < total ? presetIdx_[slot] : -1;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    bool all = false;
+    ImGui::PushID("##labsound");
+    ImGui::SetCursorScreenPos(a);
+    {   // the preset: the same button as in the instrument block (opens the browser), then < > and ALL KNOBS...
+        const float arrowW = 30.0f, allW = 104.0f;
+        const float bw = std::max(60.0f, w - 2.0f * arrowW - allW - 12.0f);
+        const PresetBrowser::Item* it = cur >= 0 ? browser_.Find(app, cur) : nullptr;
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        const float bh = ImGui::GetFrameHeight();
+        if (ImGui::InvisibleButton("##lpreset", ImVec2(bw, bh))) browser_.Open(app, ti, cur);
+        const bool hov = ImGui::IsItemHovered();
+        const ImVec2 p1(p0.x + bw, p0.y + bh);
+        dl->AddRectFilled(p0, p1, hov ? vis::kCellHover : vis::kCell, 4.0f);
+        dl->AddRect(p0, p1, hov ? vis::kAccent : vis::kLineHi, 4.0f);
+        dl->AddCircleFilled(ImVec2(p0.x + 10, p0.y + bh * 0.5f), 3.5f, it ? PresetBrowser::CategoryColor(it->category) : vis::kTextDim);
+        ImGui::PushClipRect(ImVec2(p0.x + 20, p0.y), ImVec2(p1.x - 16, p1.y), true);
+        dl->AddText(ImVec2(p0.x + 20, p0.y + (bh - ImGui::GetTextLineHeight()) * 0.5f), it ? vis::kText : vis::kTextDim, it ? it->name.c_str() : "- own sound -");
+        ImGui::PopClipRect();
+        dl->AddTriangleFilled(ImVec2(p1.x - 14, p0.y + bh * 0.5f - 2), ImVec2(p1.x - 6, p0.y + bh * 0.5f - 2), ImVec2(p1.x - 10, p0.y + bh * 0.5f + 3), vis::kTextDim);
+        if (hov) Hint("The sound of the chords: open the preset browser (categories, search, favorites). The loop keeps playing.");
+        ImGui::SameLine(0, 4);
+        if (ImGui::Button("<##lprev", ImVec2(arrowW, 0))) { const int n = browser_.Step(app, cur, -1); if (n >= 0) ApplyPresetToTrack(app, ti, n); }
+        if (ImGui::IsItemHovered()) Hint("The preset before (in the category the browser was left on).");
+        ImGui::SameLine(0, 4);
+        if (ImGui::Button(">##lnext", ImVec2(arrowW, 0))) { const int n = browser_.Step(app, cur, +1); if (n >= 0) ApplyPresetToTrack(app, ti, n); }
+        if (ImGui::IsItemHovered()) Hint("The next preset (in the category the browser was left on).");
+        ImGui::SameLine(0, 4);
+        if (ImGui::Button("ALL KNOBS...", ImVec2(allW, 0))) all = true;
+        if (ImGui::IsItemHovered()) Hint("The whole instrument of the chords: oscillators, filter, envelope, EQ, FX. The loop keeps playing.");
+    }
+
+    // six knobs: the drag edits a 0..1 position (CUTOFF on a log scale, ATTACK / RELEASE on a square-root one, as the instrument block shows them)
+    SynthPatch& patch = app.EditedPatch(true, 0);
+    Mixer::TrackState& mt = app.EditMixer().tracks[ti];
+    const bool fm = patch.engineType == SynthEngineType::FM;
+    const float ky = a.y + ImGui::GetFrameHeight() + 10.0f;
+    const float cw = (w - 5.0f * 5.0f) / 6.0f;
+    static const char* const kCap[6] = {"CUTOFF", "ATTACK", "RELEASE", "WIDTH", "REVERB", "LEVEL"};
+    char txt[6][24];
+    float v[6];
+    v[0] = ChordCutoffPos(patch.cutoffHz);
+    v[1] = ChordEnvPos(patch.attack * 1000.0f);
+    v[2] = ChordEnvPos(patch.release * 1000.0f);
+    v[3] = mt.width; v[4] = mt.reverbSend; v[5] = mt.volume;
+    if (patch.cutoffHz >= 1000.0f) std::snprintf(txt[0], sizeof txt[0], "%.1f k", patch.cutoffHz / 1000.0f);
+    else std::snprintf(txt[0], sizeof txt[0], "%d Hz", static_cast<int>(patch.cutoffHz + 0.5f));
+    std::snprintf(txt[1], sizeof txt[1], "%d ms", static_cast<int>(patch.attack * 1000.0f + 0.5f));
+    std::snprintf(txt[2], sizeof txt[2], "%d ms", static_cast<int>(patch.release * 1000.0f + 0.5f));
+    for (int k = 3; k < 6; ++k) std::snprintf(txt[k], sizeof txt[k], "%d %%", static_cast<int>(v[k] * 100.0f + 0.5f));
+    static const char* const kHint[6] = {
+        "CUTOFF: how bright the chords are (the filter of the chord instrument). Lower = darker, softer.",
+        "ATTACK: how fast a chord comes in. Longer = it swells in, like a pad.",
+        "RELEASE: how long a chord rings after it lets go.",
+        "WIDTH: how wide the chords sit in stereo. 0 % = mono, 100 % = as is, 200 % = extra wide.",
+        "REVERB: how much of the chords goes to the reverb of the project.",
+        "LEVEL: how loud the chord track is (its fader in the mixer).",
+    };
+    // one size for the six captions: 11 px, smaller only when RELEASE (the longest) would not fit
+    const float relW = ImGui::GetFont()->CalcTextSizeA(11.0f, FLT_MAX, 0.0f, "RELEASE").x;
+    const float capSize = std::clamp(11.0f * cw / std::max(1.0f, relW), 8.0f, 11.0f);
+    for (int k = 0; k < 6; ++k) {
+        const float x = a.x + k * (cw + 5.0f);
+        const bool on = !(k == 0 && fm);
+        dl->AddText(nullptr, capSize, ImVec2(x, ky), vis::kTextDim, kCap[k]);
+        ImGui::SetCursorScreenPos(ImVec2(x, ky + 16.0f));
+        ValueSpec sp;
+        if (k < 3) {   // typed in Hz / ms (the review of #50 found 800 typed into CUTOFF giving 18 kHz)
+            sp.lo = 0.0f; sp.hi = 1.0f; sp.step = 0.004f; sp.wheel = 0.02f; sp.text = on ? txt[k] : "-"; sp.unit = k == 0 ? " Hz" : " ms";
+            if (k == 0) { sp.toTyped = ChordCutoffHz; sp.fromTyped = ChordCutoffPos; }
+            else { sp.toTyped = ChordEnvMs; sp.fromTyped = ChordEnvPos; }
+        }
+        else { sp.lo = 0.0f; sp.hi = k == 3 ? 2.0f : 1.0f; sp.step = 0.005f; sp.wheel = 0.01f; sp.scale = 100.0f; sp.unit = " %"; sp.text = txt[k]; }
+        sp.def = k == 0 ? std::log(9.0f) / std::log(180.0f) : k == 1 ? std::sqrt(0.0025f) : k == 2 ? 0.2f : k == 3 ? 1.0f : k == 4 ? 0.0f : 0.8f;
+        float nv = v[k];
+        char id[16]; std::snprintf(id, sizeof id, "##lk%d", k);
+        const ValueResult r = ValueField(id, &nv, sp, cw, on);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { if (on) Hint("%s", kHint[k]); else Hint("This FM sound has no filter: CUTOFF does nothing here."); }
+        if (r.started) app.PushUndo();
+        if (r.changed) {
+            switch (k) {
+                case 0: patch.cutoffHz = std::clamp(ChordCutoffHz(nv), 100.0f, 18000.0f); break;
+                case 1: patch.attack = std::clamp(ChordEnvMs(nv) / 1000.0f, 0.001f, 2.0f); break;
+                case 2: patch.release = std::clamp(ChordEnvMs(nv) / 1000.0f, 0.01f, 2.0f); break;
+                case 3: SetTrackFloatField(app, ti, &Mixer::TrackState::width, &Track::width, nv, 0.0f, 2.0f); break;
+                case 4: SetTrackFloatField(app, ti, &Mixer::TrackState::reverbSend, &Track::reverbSend, nv, 0.0f, 1.0f); break;
+                default: SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, nv, 0.0f, 1.0f); break;
+            }
+            if (k < 3) { app.PushEditedPatchToEngine(true, 0); presetIdx_[slot] = -1; }
+        }
+        if (r.cancelled) app.DropLastUndo();
+    }
+    ImGui::PopID();
+    {   // the preset browser (the instrument block is not drawn while CHORD LAB shows its columns)
+        const int bt = browser_.TrackIndex();
+        const int bslot = bt >= 0 ? (IsChordTrack(bt) ? kNumSynthTracks : SynthSlotForTrack(bt)) : 0;
+        browser_.Draw(app, bt >= 0 ? presetIdx_[bslot] : -1, [&](int idx) { if (bt >= 0) ApplyPresetToTrack(app, bt, idx); });
+    }
+    return all;
+}
+
 // ===========================================================================
 // entry point
 // ===========================================================================
