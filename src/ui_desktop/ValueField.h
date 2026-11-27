@@ -52,7 +52,17 @@ struct ValueSpec {
     float meter = -1.0f;        // bar: level meter along the bottom edge (0..1.3), < 0 = none
     ImU32 color = vis::kAccent; // bar: fill colour (the track's colour)
     float height = 0.0f;        // 0 = the frame height
+    // Box look (the MASTER FX knobs, C3): a square that fills from the bottom; drag up / down; the number is drawn by the caller.
+    bool box = false;
 };
+
+// A box knob of `size` (C3): the whole height is the whole range, like the old MASTER FX knobs.
+inline ValueSpec BoxSpec(float lo, float hi, float def, float height) {
+    ValueSpec s; s.lo = lo; s.hi = hi; s.def = def; s.box = true; s.height = height;
+    s.step = height > 1.0f ? (hi - lo) / height : 0.01f;
+    s.wheel = (hi - lo) / 50.0f;
+    return s;
+}
 
 // A fader: drag = 1:1 along the bar, so the whole width is the whole range.
 inline ValueSpec BarSpec(float lo, float hi, float def, float width) {
@@ -153,7 +163,7 @@ inline ValueResult ValueField(const char* id, float* value, const ValueSpec& sp,
                 r.finished = true;
                 st->SetInt(kSkip, 1);
             } else {
-                float acc = st->GetFloat(kAcc, 0.0f) + (sp.bar ? io.MouseDelta.x : io.MouseDelta.x - io.MouseDelta.y);
+                float acc = st->GetFloat(kAcc, 0.0f) + (sp.bar ? io.MouseDelta.x : sp.box ? -io.MouseDelta.y : io.MouseDelta.x - io.MouseDelta.y);
                 st->SetFloat(kAcc, acc);
                 const ImVec2 dd = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left, 0.0f);
                 if (st->GetInt(kMoved, 0) || std::sqrt(dd.x * dd.x + dd.y * dd.y) >= interaction::kDragThresholdPx) {
@@ -174,10 +184,16 @@ inline ValueResult ValueField(const char* id, float* value, const ValueSpec& sp,
             const float v = WheelValue(*value, n, interaction::IsFine(), sp);
             if (v != *value) { r.started = r.changed = r.finished = true; *value = v; }
         }
+        if (hovered) interaction::NoteValueHover(wid);   // C3: the mouse over a value + Up / Down = one step (Shift = fine), like a wheel notch
+        if (hovered && !active) {
+            if (const int n = interaction::ArrowSteps(wid)) {
+                const float v = WheelValue(*value, n, interaction::IsFine(), sp);
+                if (v != *value) { r.started = r.changed = r.finished = true; *value = v; }
+            }
+        }
         if (hovered || active) {
             interaction::ValueCursor();
-            HintGestures(sp.bar ? "Drag: change   Shift: finer   Wheel: step   Double-click: type   Option+click: default"
-                                : "Drag: change   Shift: finer   Wheel: step   Double-click: type   Option+click: default");
+            HintGestures("Drag: change   Shift: finer   Wheel or Up / Down: step   Double-click: type   Option+click: default");
         }
     }
 
@@ -206,6 +222,15 @@ inline ValueResult ValueField(const char* id, float* value, const ValueSpec& sp,
             dl->AddRectFilled(ImVec2(p0.x, my), ImVec2(p1.x, my + 2.0f), vis::kInset);
             dl->AddRectFilled(ImVec2(p0.x, my), ImVec2(p0.x + width * m, my + 2.0f), mc);
         }
+        ImGui::PopID();
+        return r;
+    }
+    if (sp.box) {
+        const float norm = sp.hi > sp.lo ? std::clamp((*value - sp.lo) / (sp.hi - sp.lo), 0.0f, 1.0f) : 0.0f;
+        dl->AddRectFilled(p0, p1, enabled ? (hovered && !active ? vis::kCellHover : vis::kCell) : vis::kInset, 4.0f);
+        const float fh = (p1.y - p0.y) * norm;
+        if (fh > 0.5f) dl->AddRectFilled(ImVec2(p0.x, p1.y - fh), p1, !enabled ? vis::kLineHi : active ? vis::kAccentHi : vis::kAccent, 4.0f);
+        dl->AddRect(p0, p1, hovered || active ? vis::kAccent : vis::kLineHi, 4.0f);
         ImGui::PopID();
         return r;
     }
