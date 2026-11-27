@@ -438,6 +438,16 @@ std::string SoundPartText(const Pattern& pat, int part) {
     return o.str();
 }
 
+// C4b (e): a kit in the project's own folder is "samples/kits/<kit>"; a name that would climb out of it ("..", a deeper path) is
+// dropped, so a hand-edited file never reads a folder elsewhere on the disk. Factory kits ("kits/...") are kept as they are.
+static std::string SafeKitFolder(const std::string& v) {
+    static const std::string pre = "samples/kits/";
+    if (v.rfind(pre, 0) != 0) return v;
+    const std::string kit = v.substr(pre.size());
+    if (kit.empty() || kit == "." || kit == ".." || kit.find_first_of("/\\") != std::string::npos) return std::string();
+    return v;
+}
+
 // Crash-safe save: the project is written to "<path>.tmp", checked, flushed
 // to disk, and only then swapped in with rename() (atomic on POSIX). The file
 // being replaced is kept as "<path>.bak". A power cut or crash mid-write can
@@ -808,7 +818,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
         else if (key == "name") t.name = val;
         else if (key == "length") t.length = std::atoi(val.c_str());
         else if (key == "useOwnLength") t.useOwnLength = std::atoi(val.c_str()) != 0;
-        else if (key == "trackKit") t.kitFolder = val;
+        else if (key == "trackKit") t.kitFolder = SafeKitFolder(val);
         else if (key == "defaultVariant") t.defaultVariant = static_cast<uint8_t>(std::clamp(std::atoi(val.c_str()), 0, 15));
         else if (key == "grooveOn") t.grooveOn = std::atoi(val.c_str()) != 0;
         else if (key == "trackSwing") t.swing = std::stof(val) < 0.0f ? -1.0f : std::clamp(std::stof(val), 0.0f, 0.75f);
@@ -909,7 +919,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
         if (section == "project") {
             if (key == "format") fileFormat = std::atoi(val.c_str());
             else if (key == "name") project.name = val;
-            else if (key == "kitFolder") project.kitFolder = val;
+            else if (key == "kitFolder") { project.kitFolder = SafeKitFolder(val); if (project.kitFolder.empty()) project.kitFolder = Project{}.kitFolder; }
             else if (key == "currentPattern") project.currentPattern = std::atoi(val.c_str());
             else if (key == "trackSound") { project.trackSoundMask = std::clamp(std::atoi(val.c_str()), 0, 255); }
             else if (key == "sceneLink") {   // v44.58
@@ -1146,7 +1156,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
             else if (key == "bpm") pat.bpm = std::stof(val);
             else if (key == "swing") pat.swing = std::stof(val);
             else if (key == "stepsPerBeat") pat.stepsPerBeat = ClampGrid(std::atoi(val.c_str()));
-            else if (key == "kitFolder") pat.kitFolder = val;
+            else if (key == "kitFolder") pat.kitFolder = SafeKitFolder(val);
             else if (key == "sampler") pat.samplerPatch = SamplerFromString(val);   // v44.50
             else if (key == "params") pat.params = ParamsFromString(val);
             else if (key == "ownSound") {

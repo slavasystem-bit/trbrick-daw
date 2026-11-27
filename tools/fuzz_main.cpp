@@ -25,7 +25,7 @@ static const char* kOpNames[] = {"ToggleStep","RandomizeDrums","RandomizeMelodic
     "LoopAll","ToStart","Undo","Redo","CopyPastePattern","CopyPasteTrack","CopyInstrument","MatchLevelPanEq","ClearInstrument","ClearPattern","Genre","Drop","Mutes",
     "AdjustToScale","SnapToScale","KeyScale","LaunchScene","SynthPreset","LiveChord","ChordSettings","EditScene","BrickLevels","ParamRow","MatchLevel","SelectBrick",
     "Starter","SaveLoad","Style","Sampler","SynthSample","NextBar","EuclidKeep",
-    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged","FillSample","ChordPlay"};
+    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged","FillSample","DrumSample","ChordPlay"};
 constexpr int kNumOps = sizeof(kOpNames) / sizeof(kOpNames[0]);
 
 static int Check(AppState& a, const char* op, unsigned seed, int n) {
@@ -344,7 +344,15 @@ int main(int argc, char** argv) {
                 }
                 a.sequencer.RefreshArrangement();
                 break; }
-            case 73: {   // C2: the PLAY layer of a scene, anything in range (a damaged file is the ReopenDamaged op's business)
+            case 73: {   // C4b (e): a file added to a drum (into the project's own copy of the kit), a factory kit, a project kit that is gone
+                const int tr = R(kNumDrumTracks);
+                switch (R(4)) {
+                case 0: case 1: a.seqCursorTrack = tr; a.AssignSampleToSlot(R(2) ? "selftest_tmp_fuzz/src/fz_a.wav" : "selftest_tmp_fuzz/src/fz_b.wav"); break;
+                case 2: { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); a.CurrentPattern().kitFolder = R(2) ? "samples/kits/gone" : "kits/electro"; } a.SyncSceneKits(); break;   // missing: silence, no crash
+                default: { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); a.CurrentPattern().tracks[static_cast<size_t>(tr)].kitFolder = R(2) ? std::string() : "samples/kits/electro"; } a.SyncSceneKits(); break;
+                }
+                break; }
+            case 74: {   // C2: the PLAY layer of a scene, anything in range (a damaged file is the ReopenDamaged op's business)
                 ChordPlay& cp = p.patterns[static_cast<size_t>(R(kNumPatterns))].chordPlay;
                 cp.mode = static_cast<uint8_t>(R(kNumChordPlayModes)); cp.rate = static_cast<uint8_t>(R(kNumChordPlayRates));
                 cp.gate = static_cast<uint8_t>(10 + R(91)); cp.octaves = static_cast<uint8_t>(1 + R(3));

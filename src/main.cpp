@@ -285,7 +285,7 @@ int main(int argc, char** argv) {
     SyncLibraryKits(SamplesRoot(), "kits");   // v44.51: kit folders from <samples>/Kits/ appear in the kit list (copied, never changed)
     app.engine.Init(engineRate);
     app.recorder.Init(engineRate);
-    int loadedSlots = app.engine.GetKit()->LoadFromFolder(app.project.kitFolder, engineRate);
+    int loadedSlots = app.engine.GetKit()->LoadFromFolder(app.KitDiskPath(app.project.kitFolder), engineRate);   // C4b (e): a project kit is beside the project file
     if (loadedSlots < kNumDrumTracks) {
         std::fprintf(stderr,
             "WARNING: only %d/%d drum samples loaded from \"%s\" -- drums will be silent.\n"

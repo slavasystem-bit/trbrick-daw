@@ -307,5 +307,8 @@ closed hat -9. Every kit has 2-3 takes of kick, snare and perc (`kick_2.wav` ...
 - **`kits/acid_v2/`** -- hard-driven 909-leaning kit with a 54 Hz kick, 909 hats and clap, 808 cowbell and tom as perc.
   (The older `kits/acid/` stays.)
 
-Your own samples: drop a `.wav` on the window with a drum track selected. The current kit is copied into `kits/mykit` (then
-`mykit_2` ...), the slot gets your file (any rate / bit depth, converted on load), and the project switches to that kit.
+Your own samples: drop a `.wav` / `.aif` on the window with a drum track selected (or take a library file for it in the SAMPLES
+browser). The current kit is copied into the project's own folder, `samples/kits/<kit>` beside the project file (once; SAVE AS
+copies it along), your file is ADDED as the drum's next take (`snare_3.wav` ...; nothing is replaced, any rate / bit depth is
+converted on load, at most 8 takes per drum), and the drum plays it. One Undo brings the previous kit and sample back. Factory
+kits are never touched; older private kits (`kits/mykit`, `mykit_2` ...) keep working.
