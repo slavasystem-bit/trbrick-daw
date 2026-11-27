@@ -37,6 +37,7 @@ static void CloseOrphanPopups(AppState& app) {
 void DrawShellFrame(AppState& app, ShellPanels& p, const DesktopFonts& fonts) {
     ImGuiIO& io = ImGui::GetIO();
     CloseOrphanPopups(app);
+    interaction::ClaimArrowsForHoveredValue();   // C3: the value under the mouse takes Up / Down this frame (before anything reads them)
     HandleShortcuts(app);
     app.RunPasteRequest();   // C4b (e): a paste from the track menu, outside the scene lock
     app.TickKeyFollow();

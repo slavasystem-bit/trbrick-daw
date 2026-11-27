@@ -150,7 +150,7 @@ void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, flo
         if (keys_.up) key += mul;
         if (keys_.down) key -= mul;
     }
-    if (r.clicked) selCell_ = idx;
+    if (r.clicked || r.hoverStarted) selCell_ = idx;   // C3: the cell under the mouse takes Up / Down
     if (r.activated || key != 0) pendingUndo_ = true;
     steps += key;
     if (steps != 0) {
@@ -167,7 +167,7 @@ int ContextPanel::DiscreteCell(const char* id, const char* cap, const char* text
     bool sel = (idx == selCell_);
     ParamCellResult r = ParamCell(id, cap, text, -1.0f, sel, &accum_[std::min(idx, 95)], 9.0f, cellSize_, dim);
     int steps = r.steps;
-    if (r.clicked) selCell_ = idx;
+    if (r.clicked || r.hoverStarted) selCell_ = idx;   // C3: the cell under the mouse takes Up / Down
     if (sel) {
         if (keys_.up) steps += 1;
         if (keys_.down) steps -= 1;
@@ -208,7 +208,7 @@ void ContextPanel::PatchCell(AppState& app, int ti, int paramIndex) {
         }
         steps = dir * n;
     }
-    if (r.clicked) selCell_ = idx;
+    if (r.clicked || r.hoverStarted) selCell_ = idx;   // C3: the cell under the mouse takes Up / Down
     if (sel) {
         int mul = (keys_.coarse && norm >= 0.0f) ? 5 : 1;
         if (keys_.up) steps += mul;

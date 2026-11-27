@@ -60,7 +60,6 @@
 #include <set>
 #include <algorithm>
 #include <cstdio>
-#include <filesystem>
 #include <chrono>
 #include "core/ChordSpec.h"
 #include "core/SampleLibrary.h"
@@ -5748,6 +5747,34 @@ int main(int argc, char** argv) {
                       "c3 code: editing a scene that is not playing does not change the sound of the playing one");
                 da.sequencer.Stop();
             }
+        }
+        {   // C3 (the person, 27.11): MASTER FX knobs follow the same rules; the mouse over any value + Up / Down = a step
+            auto slurp4 = [](const char* path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+            const std::string vf = slurp4("src/ui_desktop/ValueField.h"), kw = slurp4("src/ui_desktop/KnobWidgets.h"), fp = slurp4("src/ui_desktop/FxPanel.cpp"),
+                              sh = slurp4("src/ui_desktop/Shell.cpp"), pc = slurp4("src/ui_desktop/ParamCell.h"), cx = slurp4("src/ui_desktop/ContextPanel.cpp");
+            check(vf.find("interaction::NoteValueHover(wid)") != std::string::npos && vf.find("interaction::ArrowSteps(wid)") != std::string::npos &&
+                  sh.find("interaction::ClaimArrowsForHoveredValue();") != std::string::npos &&
+                  sh.find("interaction::ClaimArrowsForHoveredValue();") < sh.find("HandleShortcuts(app);"),
+                  "c3 keys: the value under the mouse takes Up / Down for the frame, before anything else reads them");
+            check(kw.find("ValueField(id, &v, sp, size.x)") != std::string::npos && kw.find("MouseDelta") == std::string::npos,
+                  "c3 keys: a MASTER FX knob is a ValueField (drag from where it is, Shift, Option+click, wheel, Up / Down, typing)");
+            size_t calls = 0, withDef = 0;
+            for (size_t at = fp.find("KnobAbsolute("); at != std::string::npos; at = fp.find("KnobAbsolute(", at + 1)) {
+                ++calls;
+                const std::string call = fp.substr(at, fp.find(';', at) - at);
+                if (call.find("kFxDef.") != std::string::npos || call.find("kChainDef.") != std::string::npos) ++withDef;
+            }
+            check(calls >= 11 && withDef == calls, "c3 keys: every MASTER FX knob has its default for Option+click");
+            check(pc.find("res.hoverStarted = hovered") != std::string::npos && cx.find("if (r.clicked || r.hoverStarted) selCell_ = idx;") != std::string::npos,
+                  "c3 keys: in the instrument block Up / Down change the cell under the mouse");
+            bool noOwnDrag = true; std::string who;
+            for (const auto& e : std::filesystem::directory_iterator("src/ui_desktop")) {
+                const std::string name = e.path().filename().string();
+                if (name == "ValueField.h" || name == "ParamCell.h") continue;
+                const std::string txt = slurp4(e.path().string().c_str());
+                if (txt.find("MouseDelta") != std::string::npos || txt.find("SliderFloat(") != std::string::npos || txt.find("DragFloat(") != std::string::npos) { noOwnDrag = false; who += " " + name; }
+            }
+            check(noOwnDrag, "c3 keys: no control drags a value its own way (only ValueField and the instrument cell read the mouse movement)" + who);
         }
 
         AppState app;
