@@ -30,6 +30,7 @@
 #include "KitFolders.h"
 #include <filesystem>
 #include <fstream>
+#include <cstring>
 #include <set>
 #include "FilePicker.h"
 #include "AsyncLoader.h"
@@ -4113,6 +4114,67 @@ struct AppState {
         SetStatus("CHOOSE YOUR SAMPLES FOLDER IN THE FILE WINDOW");
         return true;
     }
+    // C4b (e): every kit name the open document can still reach: the project, the undo / redo steps and the clipboards (so an Undo
+    // after SAVE AS, or a paste, never names a kit that stayed behind). `fn` may rename it in place.
+    template <class Fn> void ForEachKitName(Fn&& fn) {
+        auto pat = [&](Pattern& p) { fn(p.kitFolder); for (int t = 0; t < kNumDrumTracks; ++t) fn(p.tracks[static_cast<size_t>(t)].kitFolder); };
+        fn(project.kitFolder);
+        for (Pattern& p : project.patterns) pat(p);
+        for (std::vector<UndoEntry>* st : {&undoStack, &redoStack})
+            for (UndoEntry& e : *st) { pat(e.pattern); pat(e.trackSound); for (auto& b : e.bulk) pat(b.second); }
+        pat(patternClipboard);
+        fn(trackClipboard.kitFolder);
+    }
+    // Same bytes? (size first; only the kits' small .wav files are compared)
+    static bool SameFileBytes(const std::filesystem::path& a, const std::filesystem::path& b) {
+        std::error_code ec;
+        const auto sa = std::filesystem::file_size(a, ec); if (ec) return false;
+        const auto sb = std::filesystem::file_size(b, ec); if (ec || sa != sb) return false;
+        std::ifstream fa(a, std::ios::binary), fb(b, std::ios::binary);
+        if (!fa || !fb) return false;
+        char ba[65536], bb[65536];
+        while (fa && fb) {
+            fa.read(ba, sizeof ba); fb.read(bb, sizeof bb);
+            if (fa.gcount() != fb.gcount() || std::memcmp(ba, bb, static_cast<size_t>(fa.gcount())) != 0) return false;
+        }
+        return fa.eof() && fb.eof();
+    }
+    // The kits inside the project's folder (samples/kits/<kit>) go beside the new file. Projects in one folder share samples/, so
+    // the new folder may already hold a kit of that name with OTHER takes under the same file names (chh_3.wav): then the kit is
+    // copied under a free name (<kit>_2 ...) and the document is pointed at it, so it keeps playing exactly its own samples.
+    // A kit there that only holds the same files (or fewer of them) is used and filled up.
+    void CopyProjectKitsTo(const std::string& from, const std::string& to) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        std::set<std::string> kits;   // "samples/kits/<kit>"
+        ForEachKitName([&](std::string& k) { if (IsProjectKit(k)) kits.insert(k); });
+        auto fits = [&](const fs::path& src, const fs::path& dst) {   // every file already in dst is the same file in src
+            if (!fs::exists(dst, ec)) return true;
+            if (!fs::is_directory(dst, ec)) return false;
+            for (const auto& f : fs::directory_iterator(dst, ec)) {
+                if (!f.is_regular_file(ec)) continue;
+                if (!SameFileBytes(src / f.path().filename(), f.path())) return false;
+            }
+            return true;
+        };
+        std::map<std::string, std::string> renamed;
+        for (const std::string& k : kits) {
+            const fs::path src = fs::path(from) / k.substr(8);   // "kits/<kit>" under samples/
+            if (!fs::is_directory(src, ec)) continue;
+            std::string name = k;
+            for (int n = 2; !fits(src, fs::path(to) / name.substr(8)) && n < 1000; ++n) name = k + "_" + std::to_string(n);
+            const fs::path dst = fs::path(to) / name.substr(8);
+            if (!fits(src, dst)) continue;   // no free name (999 copies): leave the document as it is
+            fs::create_directories(dst, ec);
+            for (const auto& f : fs::directory_iterator(src, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), dst / f.path().filename(), fs::copy_options::skip_existing, ec);
+            if (name != k) renamed[k] = name;
+        }
+        if (!renamed.empty()) {
+            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            ForEachKitName([&](std::string& k) { auto it = renamed.find(k); if (it != renamed.end()) k = it->second; });
+        }
+        if (!kits.empty()) kitsDirty_ = true;   // read again from the new folder
+    }
     // SAVE AS into another folder: the samples the project uses are copied beside the new file (nothing is moved or deleted).
     void CopySamplesTo(const std::string& newProjectPath) {
         namespace fs = std::filesystem;
@@ -4130,19 +4192,7 @@ struct AppState {
             fs::create_directories(fs::path(to) / "transitions", ec);
             for (const auto& f : fs::directory_iterator(tfrom, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), fs::path(to) / "transitions" / f.path().filename(), fs::copy_options::skip_existing, ec);
         }
-        {   // C4b (e): the kits inside the project's folder that the project plays (samples/kits/<kit>)
-            std::set<std::string> kits;
-            auto addKit = [&](const std::string& k) { if (IsProjectKit(k)) kits.insert(k.substr(8)); };   // "kits/<kit>" under samples/
-            addKit(project.kitFolder);
-            for (const Pattern& pt : project.patterns) { addKit(pt.kitFolder); for (int t = 0; t < kNumDrumTracks; ++t) addKit(pt.tracks[static_cast<size_t>(t)].kitFolder); }
-            for (const std::string& k : kits) {
-                const fs::path src = fs::path(from) / k, dst = fs::path(to) / k;
-                if (!fs::is_directory(src, ec)) continue;
-                fs::create_directories(dst, ec);
-                for (const auto& f : fs::directory_iterator(src, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), dst / f.path().filename(), fs::copy_options::skip_existing, ec);
-            }
-            if (!kits.empty()) kitsDirty_ = true;   // read again from the new folder
-        }
+        CopyProjectKitsTo(from, to);   // C4b (e)
         if (files.empty()) return;
         fs::create_directories(to, ec);
         for (const std::string& f : files) fs::copy_file(fs::path(from) / f, fs::path(to) / f, fs::copy_options::skip_existing, ec);

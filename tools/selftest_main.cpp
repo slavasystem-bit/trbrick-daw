@@ -2491,6 +2491,31 @@ int main(int argc, char** argv) {
             Project lp;
             check(SaveProject(da.project, pdir + "/p.t8proj", false) && LoadProject(lp, pdir + "/p.t8proj") && lp.patterns[0].kitFolder == "samples/kits/electro",
                   "c4b e: the project file names its own kit relative to its folder (samples/kits/electro)");
+            {   // review of #47: SAVE AS into a folder whose samples/kits/electro holds ANOTHER take under the same file name
+                const std::string pdir3 = pdir + "/third", ours = pdir + "/samples/kits/electro", theirs = pdir3 + "/samples/kits/electro";
+                fs::create_directories(theirs, ec);
+                std::string last;
+                for (const auto& f : fs::directory_iterator(ours, ec)) { fs::copy_file(f.path(), theirs + "/" + f.path().filename().string(), fs::copy_options::overwrite_existing, ec); const std::string n = f.path().filename().string(); if (n.rfind("chh_", 0) == 0 && (last.empty() || n.size() > last.size() || (n.size() == last.size() && n > last))) last = n; }
+                std::vector<float> other(30000, 0.25f);
+                WriteWavPCM24(theirs + "/" + last, other, 1, 48000);   // the other project's take, same name
+                da.CopySamplesTo(pdir3 + "/q.t8proj");
+                bool undoOld = false;
+                for (const auto& e : da.undoStack) if (e.pattern.kitFolder == "samples/kits/electro") undoOld = true;
+                check(da.CurrentPattern().kitFolder == "samples/kits/electro_2" && !undoOld && fs::is_directory(pdir3 + "/samples/kits/electro_2"),
+                      "c4b e: SAVE AS next to a different kit of the same name copies ours under a free name and points the project (and Undo) at it");
+                check(AppState::SameFileBytes(ours + "/" + last, pdir3 + "/samples/kits/electro_2/" + last) && !AppState::SameFileBytes(ours + "/" + last, theirs + "/" + last),
+                      "c4b e: the moved project keeps its own take; the other project's kit is untouched");
+            }
+            {   // a kit there with only our own files (one missing): used as it is and filled up, no second copy
+                da.CurrentPattern().kitFolder = "samples/kits/electro";
+                const std::string pdir4 = pdir + "/fourth", ours = pdir + "/samples/kits/electro", same = pdir4 + "/samples/kits/electro";
+                fs::create_directories(same, ec);
+                int n = 0; std::string skipped;
+                for (const auto& f : fs::directory_iterator(ours, ec)) { if (n++ == 0) { skipped = f.path().filename().string(); continue; } fs::copy_file(f.path(), same + "/" + f.path().filename().string(), ec); }
+                da.CopySamplesTo(pdir4 + "/q.t8proj");
+                check(da.CurrentPattern().kitFolder == "samples/kits/electro" && !fs::exists(pdir4 + "/samples/kits/electro_2") && fs::exists(same + "/" + skipped),
+                      "c4b e: a kit there with exactly our files is used as it is (the missing file is added)");
+            }
             da.seqCursorTrack = 6;
             check(!da.AssignSampleToSlot("selftest_tmp_drop.wav"), "drop: a synth track refuses a sample");
             fs::remove_all(pdir, ec); std::remove("selftest_tmp_drop.wav");
