@@ -31,6 +31,7 @@ cmake -S . -B build-x86_64 -DCMAKE_BUILD_TYPE=Release          # у хмарі; 
 cd build-x86_64 && make -j8 trbrick_daw t8_selftest t8_fuzz t8_audit
 cd .. && ./build-x86_64/t8_selftest            # має закінчитися ALL CHECKS PASSED (запускати з кореня проєкту: кіти шукаються відносно нього)
 ./build-x86_64/t8_fuzz --seeds 30              # invariant failures 0 (--threads дуже повільний)
+tools/run_tests.sh build-x86_64 uitest         # справжній екран без вікна (обхід + випадкові кліки): UI TEST PASSED
 ./build-x86_64/t8_audit
 ```
 

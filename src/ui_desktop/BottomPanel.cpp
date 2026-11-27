@@ -413,9 +413,10 @@ void BottomPanel::DrawRandomKit(AppState& app) {
             int& mode = app.rndDensityMode[melodicIndex];
             mode = std::clamp(mode, 0, 2);
             static const char* kModeLabel[3] = {"SIMPLE", "COMPLEX", "RHYTHM"};
-            if (mode == 2) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.36f, 0.10f, 1.0f));
+            const bool rhythm = mode == 2;   // TEST-5: the click below changes `mode`; push and pop must follow the same value
+            if (rhythm) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.36f, 0.10f, 1.0f));
             if (ImGui::Button(kModeLabel[mode], ImVec2(68, btnH - 2))) mode = (mode + 1) % 3;
-            if (mode == 2) ImGui::PopStyleColor();
+            if (rhythm) ImGui::PopStyleColor();
             if (ImGui::IsItemHovered()) Hint("What RANDOM writes on this part:\nSIMPLE / COMPLEX = a melody (fewer / more notes)\nRHYTHM = a rhythmic figure with a chosen number of notes per bar, even one (a bass line).\nSet it up in the OCT window. Click to switch.");
         } else if (complexFlag != nullptr) {
             if (ImGui::Button(*complexFlag ? "COMPLEX" : "SIMPLE", ImVec2(68, btnH - 2))) *complexFlag = !*complexFlag;

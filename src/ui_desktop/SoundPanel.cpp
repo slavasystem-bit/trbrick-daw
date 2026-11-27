@@ -58,6 +58,7 @@ void SoundPanel::DrawModeRow(AppState& app) {
 }
 
 void SoundPanel::DrawScopeRow(AppState& app) {
+    SceneLock lock(app.sequencer.PatternMutex(), "SOUND SCOPE");   // TEST-5 found it: the WHOLE TRACK / THIS BRICK and kit choices change the scene
     const int slot = EditedBrickSlot(app);
     const int t = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
     ImGui::AlignTextToFramePadding();
