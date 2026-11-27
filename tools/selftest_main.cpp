@@ -3306,8 +3306,15 @@ int main(int argc, char** argv) {
                     ph.patterns[1].fill.beats = static_cast<uint8_t>(kFillHalfBeat);
                     check(SaveProject(ph, "selftest_arr.t8proj"), "fill c4b: save a 1/2 BEAT fill");
                     Project pr; check(LoadProject(pr, "selftest_arr.t8proj"), "fill c4b: load it");
-                    check(pr.songChain[1].fill.beats == kFillHalfBeat && pr.patterns[static_cast<size_t>(pr.songChain[1].patternIndex)].fill.beats != 99 && pr.patterns[1].fill.beats == kFillHalfBeat,
+                    check(pr.songChain[1].fill.beats == kFillHalfBeat && pr.patterns[1].fill.beats == kFillHalfBeat,
                           "fill c4b: 1/2 BEAT on a brick and on a scene survives a save / load");
+                    {   // review of PR 44: a 0 in a file from before format 10 is not half a beat (it was never written; it reads as 1 beat, as before)
+                        std::ifstream in("selftest_arr.t8proj"); std::string t((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
+                        const size_t at = t.find("format=10"); if (at != std::string::npos) t.replace(at, 9, "format=9");
+                        { std::ofstream out("selftest_arr.t8proj", std::ios::trunc); out << t; }
+                        Project po; check(LoadProject(po, "selftest_arr.t8proj") && po.songChain[1].fill.beats == 1 && po.patterns[1].fill.beats == 1,
+                                          "fill c4b: a fill length of 0 in a format 9 file reads as 1 beat");
+                    }
                 }
                 std::remove("selftest_arr.t8proj"); std::remove("selftest_arr.t8proj.bak");
                 // --- energy

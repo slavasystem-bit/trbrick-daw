@@ -1062,7 +1062,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
                     cs.muteMask = static_cast<uint16_t>(m & kMuteAllTracks);
                     cs.fillMode = static_cast<FillMode>(std::clamp(fm, 0, 2));
                     FillRule r; r.when = static_cast<FillWhen>(std::clamp(fw, 0, kNumFillWhen - 1)); r.kind = static_cast<FillKind>(std::clamp(fk, 0, kNumFillKinds - 1));
-                    r.beats = static_cast<uint8_t>(std::clamp(fb, 0, 8));   /* 0 = half a beat */ r.everyBars = static_cast<uint8_t>(std::clamp(fe, 1, 16)); r.breakIndex = static_cast<uint8_t>(std::clamp(fi, 0, 255));
+                    r.beats = static_cast<uint8_t>(std::clamp(fb, fileFormat >= 10 ? 0 : 1, 8));   /* 0 = half a beat (format 10+) */ r.everyBars = static_cast<uint8_t>(std::clamp(fe, 1, 16)); r.breakIndex = static_cast<uint8_t>(std::clamp(fi, 0, 255));
                     cs.fill = NormalizeFill(r);
                     cs.riser = static_cast<int8_t>(std::clamp(rs, -1, 127));
                     cs.riserBars = static_cast<uint8_t>(std::clamp(rb, 1, 16));
@@ -1169,7 +1169,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
                 int a = 0, b = 0, c = 2, d = 4, e = 0;
                 if (std::sscanf(val.c_str(), "%d,%d,%d,%d,%d", &a, &b, &c, &d, &e) == 5) {
                     FillRule r; r.when = static_cast<FillWhen>(std::clamp(a, 0, kNumFillWhen - 1)); r.kind = static_cast<FillKind>(std::clamp(b, 0, kNumFillKinds - 1));
-                    r.beats = static_cast<uint8_t>(std::clamp(c, 0, 8));   /* 0 = half a beat */ r.everyBars = static_cast<uint8_t>(std::clamp(d, 1, 16)); r.breakIndex = static_cast<uint8_t>(std::clamp(e, 0, 255));
+                    r.beats = static_cast<uint8_t>(std::clamp(c, fileFormat >= 10 ? 0 : 1, 8));   /* 0 = half a beat (format 10+) */ r.everyBars = static_cast<uint8_t>(std::clamp(d, 1, 16)); r.breakIndex = static_cast<uint8_t>(std::clamp(e, 0, 255));
                     pat.fill = NormalizeFill(r);
                 }
             }
