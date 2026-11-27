@@ -25,7 +25,7 @@ static const char* kOpNames[] = {"ToggleStep","RandomizeDrums","RandomizeMelodic
     "LoopAll","ToStart","Undo","Redo","CopyPastePattern","CopyPasteTrack","CopyInstrument","MatchLevelPanEq","ClearInstrument","ClearPattern","Genre","Drop","Mutes",
     "AdjustToScale","SnapToScale","KeyScale","LaunchScene","SynthPreset","LiveChord","ChordSettings","EditScene","BrickLevels","ParamRow","MatchLevel","SelectBrick",
     "Starter","SaveLoad","Style","Sampler","SynthSample","NextBar","EuclidKeep",
-    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged","FillSample","DrumSample","ChordPlay"};
+    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged","FillSample","DrumSample","ChordPlay","LabLiveChord"};
 constexpr int kNumOps = sizeof(kOpNames) / sizeof(kOpNames[0]);
 
 static int Check(AppState& a, const char* op, unsigned seed, int n) {
@@ -358,6 +358,12 @@ int main(int argc, char** argv) {
                 cp.gate = static_cast<uint8_t>(10 + R(91)); cp.octaves = static_cast<uint8_t>(1 + R(3));
                 cp.order = static_cast<uint8_t>(R(kNumChordPlayOrders)); cp.smooth = R(2) != 0;
                 if (R(6) == 0) cp = ChordPlay{};
+                break; }
+            case 75: {   // C2: a chord clicked in CHORD LAB while the loop plays (queued for the next beat; a stop drops it)
+                int8_t nn[6]; const int cnt = 1 + R(6);
+                for (int i = 0; i < cnt; ++i) nn[i] = static_cast<int8_t>(36 + R(48));
+                std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex());
+                a.sequencer.QueueLiveChord(nn, cnt, 0.85f);
                 break; }
             case 60:   // v44.49: a style with a random set of parts, on whatever grid, length and key the scene has
                 a.styleBeat = R(4) != 0; a.styleSound = R(2) != 0; a.styleNotes = R(4) != 0; a.styleTempo = R(4) == 0;
