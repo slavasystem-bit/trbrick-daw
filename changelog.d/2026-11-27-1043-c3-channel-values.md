@@ -1,0 +1,10 @@
+## Stage C3 part 2 (CODE-2): channel values in one place in the code
+
+Nothing changes on screen. A mixer channel's values (level, pan, the two sends, the insert FX, autopan, width / spread and the channel EQ) were listed by hand in 7 places, so a new value missed in one of them was not saved, not copied or not undone.
+
+- **`core/ChannelMix.h`:** `struct ChannelMix` holds the 20 values; a scene's `Track` and the audio mixer's `Mixer::TrackState` both inherit it, so the two copies always hold the same values and `Mixer::SyncChannel` copies a channel in one assignment. `kChannelFields` is the one list with each value's file key, range, default and part of the strip (`kChLevel`, `kChPan`, `kChSends`, `kChInserts`, `kChStereo`, `kChEq`); a `static_assert` fails the build when a value has no row.
+- Walk that list now: saving and loading (same keys and order, files stay byte for byte the same), the repair of a damaged file, MATCH LEVEL (`MatchInstrumentLevel`, `MatchLevelPanEq`), MIX LAB's A / B snapshot and the UI setter.
+- **One UI setter, `SetChannelValue`**, replaces `SetTrackFloatField` (32 calls with both copies named by hand and their own range) and five unused setters. It takes the range from the list.
+- **Fix:** turning a channel knob (EQ, sends, insert FX, width...) of a scene you were only editing while another scene played changed the sound of the playing scene until the next scene change; the setter now writes the audio mixer only when the edited scene is the playing one.
+- **Fix:** a damaged (not a number) width, spread or EQ value in a project file was not repaired on load; every channel value is now checked.
+- 11 new `t8_selftest` checks: one row per value with the struct defaults; the UI clamp; copying part of a strip; MIX LAB A / B; every value through save and load by its old key; a damaged EQ / width repaired; a knob of the playing scene is heard, a knob of a scene that is not playing leaves the playing scene alone. The format-key guard (DATA-1) now also reads the keys from `kChannelFields`.

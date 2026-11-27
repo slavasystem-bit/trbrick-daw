@@ -1,6 +1,6 @@
 #pragma once
 // Small shared mutators for the one piece of state every mouse panel in
-// TR-Brick DAW touches: a track's volume/pan/mute/solo. There are two
+// TR-Brick DAW touches: a track's channel values and mute/solo. There are two
 // copies of this data on purpose (Mixer::TrackState is what the audio
 // thread actually reads every block; Track::volume/pan/mute/solo in the
 // Pattern is what gets saved to the .t8proj file and restored on load),
@@ -17,20 +17,17 @@
 
 namespace t8::desktop {
 
-inline void SetTrackVolume(AppState& app, int trackIndex, float volume01) {
-    if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-    app.PushUndo();
-    auto& mt = app.EditMixer().tracks[trackIndex];
-    mt.volume = std::clamp(volume01, 0.0f, 1.0f);
-    app.CurrentPattern().tracks[trackIndex].volume = mt.volume;
-}
-
-inline void SetTrackPan(AppState& app, int trackIndex, float pan) {
-    if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-    app.PushUndo();
-    auto& mt = app.EditMixer().tracks[trackIndex];
-    mt.pan = std::clamp(pan, -1.0f, 1.0f);
-    app.CurrentPattern().tracks[trackIndex].pan = mt.pan;
+// C3 part 2 (CODE-2): THE way the UI changes one channel value (volume, pan, a send, an insert, the EQ...): kept in the
+// value's range (kChannelFields, ChannelMix.h), written to the edited scene's Track (the saved copy) and, only when that
+// scene is also the one playing, to the audio-thread mixer. (Before, the generic setter wrote the audio mixer even while
+// another scene played, so turning an EQ knob of a scene you were only editing changed the sound of the playing one.)
+// No undo push here -- the caller decides (one push per gesture, not per frame). Returns the value as kept.
+inline float SetChannelValue(AppState& app, int trackIndex, float ChannelMix::*field, float value) {
+    if (trackIndex < 0 || trackIndex >= kNumTracks) return value;
+    const float v = ClampChannelValue(field, value);
+    app.CurrentPattern().tracks[trackIndex].*field = v;
+    if (app.EditIsPlaying()) app.engine.GetMixer().tracks[trackIndex].*field = v;
+    return v;
 }
 
 // v44.38: on TRACK (a brick) mute is WHO PLAYS and solo = every other instrument off (see AppState::SetMuteScene); on LIVE the flags of the scene.
@@ -54,42 +51,6 @@ inline void SetMasterVolume(AppState& app, float volume) {
     app.PushSoundUndo();
     app.project.masterVolume = std::clamp(volume, 0.0f, 1.2f);
     app.engine.GetMixer().masterVolume = app.project.masterVolume;
-}
-
-// Per-track FX sends/drive -- same dual-write pattern as volume/pan above
-// (Mixer::TrackState for the audio thread, Track for persistence), reachable as a live mouse knob.
-inline void SetTrackReverbSend(AppState& app, int trackIndex, float send01) {
-    if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-    app.PushUndo();
-    auto& mt = app.EditMixer().tracks[trackIndex];
-    mt.reverbSend = std::clamp(send01, 0.0f, 1.0f);
-    app.CurrentPattern().tracks[trackIndex].reverbSend = mt.reverbSend;
-}
-inline void SetTrackDelaySend(AppState& app, int trackIndex, float send01) {
-    if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-    app.PushUndo();
-    auto& mt = app.EditMixer().tracks[trackIndex];
-    mt.delaySend = std::clamp(send01, 0.0f, 1.0f);
-    app.CurrentPattern().tracks[trackIndex].delaySend = mt.delaySend;
-}
-inline void SetTrackDrive(AppState& app, int trackIndex, float drive01) {
-    if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-    app.PushUndo();
-    auto& mt = app.EditMixer().tracks[trackIndex];
-    mt.insertDrive = std::clamp(drive01, 0.0f, 1.0f);
-    app.CurrentPattern().tracks[trackIndex].insertDrive = mt.insertDrive;
-}
-
-// Generic dual-write for any float field that exists under the same name on
-// both Mixer::TrackState and Track (EQ tilt, chorus, autopan, ...). No undo
-// push here -- the caller decides (one push per gesture, not per frame).
-inline void SetTrackFloatField(AppState& app, int trackIndex,
-                               float Mixer::TrackState::*mixerField, float Track::*trackField,
-                               float value, float lo, float hi) {
-    if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-    float v = std::clamp(value, lo, hi);
-    app.engine.GetMixer().tracks[trackIndex].*mixerField = v;
-    app.CurrentPattern().tracks[trackIndex].*trackField = v;
 }
 
 // Switches the live scene and re-syncs the audio-thread mixer copy

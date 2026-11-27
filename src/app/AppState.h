@@ -724,29 +724,14 @@ struct AppState {
         const Track src = project.patterns[srcScene].tracks[trackIndex];
         std::array<bool, kNumPatterns> inChain{};
         for (int i = 0; i < project.songChainLength; ++i) inChain[static_cast<size_t>(std::clamp(project.songChain[static_cast<size_t>(i)].patternIndex, 0, kNumPatterns - 1))] = true;
-        auto same = [&](const Track& t) {
-            if (t.volume != src.volume) return false;
-            if (!withMix) return true;
-            return t.pan == src.pan && t.delaySend == src.delaySend && t.reverbSend == src.reverbSend && t.insertDrive == src.insertDrive &&
-                   t.insertEqTilt == src.insertEqTilt && t.insertChorus == src.insertChorus && t.autopanRate == src.autopanRate &&
-                   t.autopanDepth == src.autopanDepth && t.width == src.width && t.spread == src.spread &&
-                   t.eqHpfHz == src.eqHpfHz && t.eqHpfSlope == src.eqHpfSlope && t.eqLowDb == src.eqLowDb && t.eqLowHz == src.eqLowHz &&
-                   t.eqMidDb == src.eqMidDb && t.eqMidHz == src.eqMidHz && t.eqMidQ == src.eqMidQ && t.eqHighDb == src.eqHighDb && t.eqHighHz == src.eqHighHz;
-        };
+        const uint8_t parts = withMix ? kChAll : kChLevel;   // C3 part 2: the parts of the strip, see ChannelMix
         int changed = 0;
         for (int sc = 0; sc < kNumPatterns; ++sc) {
             if (sc == srcScene || !SlotInUse(sc) || (onlyChain && !inChain[static_cast<size_t>(sc)])) continue;
             Track& d = project.patterns[sc].tracks[trackIndex];
-            if (same(d)) continue;
+            if (SameChannel(d, src, parts)) continue;
             PushUndoForScene(sc);
-            d.volume = src.volume;
-            if (withMix) {
-                d.pan = src.pan; d.delaySend = src.delaySend; d.reverbSend = src.reverbSend; d.insertDrive = src.insertDrive;
-                d.insertEqTilt = src.insertEqTilt; d.insertChorus = src.insertChorus; d.autopanRate = src.autopanRate; d.autopanDepth = src.autopanDepth;
-                d.width = src.width; d.spread = src.spread;
-                d.eqHpfHz = src.eqHpfHz; d.eqHpfSlope = src.eqHpfSlope; d.eqLowDb = src.eqLowDb; d.eqLowHz = src.eqLowHz;
-                d.eqMidDb = src.eqMidDb; d.eqMidHz = src.eqMidHz; d.eqMidQ = src.eqMidQ; d.eqHighDb = src.eqHighDb; d.eqHighHz = src.eqHighHz;
-            }
+            CopyChannel(d, src, parts);
             if (sc == sequencer.PlayPatternIndex()) engine.GetMixer().SyncFromPattern(project.patterns[sc]);
             ++changed;
         }
@@ -762,19 +747,14 @@ struct AppState {
         const Track src = project.patterns[srcScene].tracks[trackIndex];
         std::array<bool, kNumPatterns> inChain{};
         for (int i = 0; i < project.songChainLength; ++i) inChain[static_cast<size_t>(std::clamp(project.songChain[static_cast<size_t>(i)].patternIndex, 0, kNumPatterns - 1))] = true;
-        auto same = [&](const Track& t) {
-            return t.volume == src.volume && t.pan == src.pan && t.eqHpfHz == src.eqHpfHz && t.eqHpfSlope == src.eqHpfSlope && t.eqLowDb == src.eqLowDb && t.eqLowHz == src.eqLowHz &&
-                   t.eqMidDb == src.eqMidDb && t.eqMidHz == src.eqMidHz && t.eqMidQ == src.eqMidQ && t.eqHighDb == src.eqHighDb && t.eqHighHz == src.eqHighHz;
-        };
+        constexpr uint8_t parts = kChLevel | kChPan | kChEq;
         int changed = 0;
         for (int sc = 0; sc < kNumPatterns; ++sc) {
             if (sc == srcScene || !SlotInUse(sc) || (onlyChain && !inChain[static_cast<size_t>(sc)])) continue;
             Track& d = project.patterns[sc].tracks[trackIndex];
-            if (same(d)) continue;
+            if (SameChannel(d, src, parts)) continue;
             PushUndoForScene(sc);
-            d.volume = src.volume; d.pan = src.pan;
-            d.eqHpfHz = src.eqHpfHz; d.eqHpfSlope = src.eqHpfSlope; d.eqLowDb = src.eqLowDb; d.eqLowHz = src.eqLowHz;
-            d.eqMidDb = src.eqMidDb; d.eqMidHz = src.eqMidHz; d.eqMidQ = src.eqMidQ; d.eqHighDb = src.eqHighDb; d.eqHighHz = src.eqHighHz;
+            CopyChannel(d, src, parts);
             if (sc == sequencer.PlayPatternIndex()) engine.GetMixer().SyncFromPattern(project.patterns[sc], true);
             ++changed;
         }
