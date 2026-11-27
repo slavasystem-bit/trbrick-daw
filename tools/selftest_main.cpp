@@ -41,6 +41,7 @@
 #include <sstream>
 #include "app/MixLab.h"
 #include "core/ChordLab.h"
+#include "core/ChordAdvice.h"
 #include "core/MixAnalysis.h"
 #include "ui_desktop/MixerSync.h"
 #include "core/UserDirs.h"
@@ -5595,6 +5596,46 @@ int main(int argc, char** argv) {
         auto palC = BuildLabPalette(0, kScaleIonian, false);
         bool hasFm = false; for (const LabChord& c : palC) if (c.row == 3 && c.name == "Fm") hasFm = true;
         check(hasFm, "chord lab: C major borrows Fm");
+        {   // C2 (CHORD LAB v2): what fits in a place of the loop
+            const LabChord* am = find(0, 0); const LabChord* f = find(0, 5); const LabChord* g = find(0, 6); const LabChord* dm = find(0, 3); const LabChord* em = find(0, 4);
+            const LabChord* e7 = nullptr; for (const LabChord& c : pal) if (c.row == 3 && c.name == "E7") e7 = &c;
+            check(am && f && g && dm && em && e7 &&
+                  LabFunctionOf(*am, 9, kScaleAeolian) == LabFn::Home && LabFunctionOf(*find(0, 2), 9, kScaleAeolian) == LabFn::Home &&
+                  LabFunctionOf(*dm, 9, kScaleAeolian) == LabFn::Away && LabFunctionOf(*f, 9, kScaleAeolian) == LabFn::Away &&
+                  LabFunctionOf(*em, 9, kScaleAeolian) == LabFn::Tension && LabFunctionOf(*g, 9, kScaleAeolian) == LabFn::Tension &&
+                  LabFunctionOf(*e7, 9, kScaleAeolian) == LabFn::Tension,
+                  "c2: A minor: Am C home, Dm F away, Em G E7 tension");
+            const LabChord* vi = nullptr; for (const LabChord& c : palC) if (c.row == 0 && c.col == 5) vi = &c;
+            check(vi && LabFunctionOf(*vi, 0, kScaleIonian) == LabFn::Home, "c2: in a major key vi (Am in C) is home");
+            const LabVoiceMove fe = LabVoices(f->Pcs(), e7->Pcs());
+            check(fe.semitones == 3 && fe.half == 3 && fe.stay == 0 && fe.added == 1, "c2: F to E7: three voices move a half step, one voice is added");
+            const LabVoiceMove ac = LabVoices(am->Pcs(), find(0, 2)->Pcs());
+            check(ac.stay == 2 && ac.semitones == 2, "c2: Am to C: two voices stay, one moves a whole step");
+            LabSlot slot; slot.prev = f; slot.next = am;
+            slot.melody.Add(52, 2.0); slot.melody.Add(52, 2.0); slot.melody.Add(55, 1.0);   // the bass plays E E G
+            const std::vector<LabAdvice> adv = LabAdvise(pal, slot, 9, kScaleAeolian, LabAdviceMode::Best);
+            const LabAdvice* aE7 = nullptr; for (const LabAdvice& a : adv) if (a.chord == e7) aE7 = &a;
+            check(aE7 && aE7->fnFit == 1.0f && aE7->covered == 2 && aE7->total == 3 && aE7->fnWords.find("wants Am") != std::string::npos,
+                  "c2: before Am, E7 is tension that wants Am and holds 2 of the 3 bass notes (E E, not G)");
+            check(!adv.empty() && LabFunctionOf(*adv[0].chord, 9, kScaleAeolian) == LabFn::Tension, "c2: BEST before the home chord starts with a tension chord");
+            const std::vector<LabAdvice> sm = LabAdvise(pal, slot, 9, kScaleAeolian, LabAdviceMode::Smooth);
+            check(sm.size() == adv.size() && sm[0].voiceFit >= sm[sm.size() - 1].voiceFit, "c2: SMOOTH puts the chords with the least voice movement first");
+            const std::string why = LabAdviceSentence(*aE7, slot, 9, kScaleAeolian);
+            check(why.find("G# is a half step under A") != std::string::npos && why.find("3 voices move a half step") != std::string::npos &&
+                  why.find("2 of the 3 notes") != std::string::npos && why.find("G rubs against G#") != std::string::npos,
+                  "c2: the sentence names the leading tone, the voice moves, the notes held and the rub (G against G#)");
+            check(LabAdvise(pal, slot, 9, kScaleAeolian, LabAdviceMode::Best) .size() == pal.size(), "c2: the list holds every chord of the palette, the same each time");
+            std::ifstream pin("src/ui_desktop/ChordLabPanel.cpp");
+            const std::string lab((std::istreambuf_iterator<char>(pin)), std::istreambuf_iterator<char>());
+            check(lab.find("WHAT FITS IN BAR %d") != std::string::npos && lab.find("\"BEST\", \"SMOOTH\", \"MORE TENSION\", \"NEW COLOUR\"") != std::string::npos &&
+                  lab.find("LabAdvise(pal_, ls, key, scale") != std::string::npos && lab.find("LabAdviceSentence(") != std::string::npos,
+                  "c2 ui: WHAT FITS lists the chords for one place of the loop in four modes, with the sentence");
+            check(lab.find("\"A BEFORE\", \"B DRAFT\"") != std::string::npos && lab.find("KEEP IN SCENE %02d") != std::string::npos && lab.find("\"UNDO ALL\"") != std::string::npos &&
+                  lab.find("the tension line") != std::string::npos && lab.find("FnFill(fn)") != std::string::npos,
+                  "c2 ui: header A / B, KEEP, UNDO ALL; palette and loop coloured by function; the tension line over the loop");
+            check(lab.find("void ChordLabPanel::UndoAll") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB\");\n        while (labEdits_ > 0 && app.Undo())") != std::string::npos,
+                  "c2 ui: UNDO ALL takes back only the lab's own steps, under the scene lock");
+        }
         // melody: bass A A F F A F (on the beat) + a D passing note
         auto patp = std::make_unique<Pattern>(); Pattern& pat = *patp; pat.stepsPerBeat = 4; pat.masterLength = 16;
         Track& bs = pat.tracks[kNumDrumTracks]; bs.type = TrackType::Synth;

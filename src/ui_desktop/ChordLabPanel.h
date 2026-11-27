@@ -5,6 +5,8 @@
 // CHAIN makes the scene a brick, and TRACK is where the brick is arranged. The rules behind the palette are in core/ChordLab.h.
 #include "app/AppState.h"
 #include "core/ChordLab.h"
+#include "core/ChordAdvice.h"
+#include "imgui.h"
 #include <functional>
 #include <vector>
 
@@ -22,7 +24,6 @@ private:
 
     void BeginEdit(AppState& app);
     void Rebuild(AppState& app);
-    void Match(AppState& app);
     void RefreshMatch(AppState& app, int blockStart, int blockLen);
     std::vector<int> SrcTracks() const;
     int SceneShown(const AppState& app) const;
@@ -35,6 +36,12 @@ private:
     void Split(AppState& app, int blockIndex);
     void DeleteBlock(AppState& app, int blockIndex);
     void StartFrom(AppState& app, int progression);
+    void ListenAB(AppState& app, bool before);
+    void UndoAll(AppState& app);
+    struct Slot { int start = 0, len = 1; int block = -1; };   // the place of the loop WHAT FITS is about (a block, or the room after the last one)
+    Slot AdviceSlot(const AppState& app, const Track& jam, const std::vector<Blk>& blocks) const;
+    void DrawHeader(AppState& app, ImDrawList* dl, ImVec2 o, float W, int scene);
+    void DrawWhatFits(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot);
     void ClearJam(AppState& app);
     Track& JamTrack(AppState& app);
     std::vector<Blk> Blocks(const Track& tr) const;
@@ -48,11 +55,13 @@ private:
     int selRow_ = -1, selCol_ = -1;      // the chord shown in WHY
     int selBlock_ = -1;
     int srcMask_ = 1;                    // bit 0 BASS, bit 1 SYNTH 2, bit 2 SYNTH 3
-    int barsMode_ = 2;                   // 0 bar 1, 1 bars 1-2, 2 all bars of the scene
-    LabMelody mel_;
-    bool matched_ = false;
-    bool scopeBlock_ = false;            // the notes MATCH reads are those under the selected block (not the whole scene)
+    LabMelody mel_;                      // the notes under the place WHAT FITS is about
     bool soundView_ = false;             // JAM | SOUND switch
+    int adviceMode_ = 0;                 // C2: BEST / SMOOTH / MORE TENSION / NEW COLOUR
+    int adviceSel_ = 0;                  // the card whose sentence is shown
+    bool abBefore_ = false;              // C2: A BEFORE is being heard (the draft waits in abSlot_)
+    int abSlot_ = 0;
+    int labEdits_ = 0;                   // C2: undo steps made in CHORD LAB since it was opened (UNDO ALL)
     std::function<void(AppState&)> soundBody_;
     int defLen_ = 1;                     // new block: 0 half a bar, 1 a bar, 2 two bars
     int dragRow_ = -1, dragCol_ = -1;    // a palette chip being dragged towards the loop
