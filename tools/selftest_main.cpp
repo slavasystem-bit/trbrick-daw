@@ -104,6 +104,16 @@ void operator delete[](void* p, std::size_t) noexcept { ::operator delete(p); }
 
 static bool nearlyEqual(float a, float b, float eps) { return std::fabs(a - b) < eps; }
 
+// The screen moved from main.cpp into ui_desktop/Shell.cpp (TEST-5): the source ratchets about the shell read both files.
+static std::string shellSrc() {
+    std::string out;
+    for (const char* path : {"src/main.cpp", "src/ui_desktop/Shell.cpp"}) {
+        std::ifstream in(path);
+        out += std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+    return out;
+}
+
 int main(int argc, char** argv) {
     std::string kitFolder = argc > 1 ? argv[1] : "kits/808";
     std::string outWav = argc > 2 ? argv[2] : "selftest_out.wav";
@@ -4014,7 +4024,7 @@ int main(int argc, char** argv) {
             std::remove(path.c_str());
         }
         {   // the editor follows the tab; the scene arrows step bricks on TRACK and live scenes on LIVE (source ratchets: the UI is not linked here)
-            const std::string mainSrc = slurp("src/main.cpp"), sync = slurp("src/ui_desktop/MixerSync.h"), head = slurp("src/ui_desktop/HeaderPanel.cpp"), keys = slurp("src/ui_desktop/Shortcuts.cpp");
+            const std::string mainSrc = shellSrc(), sync = slurp("src/ui_desktop/MixerSync.h"), head = slurp("src/ui_desktop/HeaderPanel.cpp"), keys = slurp("src/ui_desktop/Shortcuts.cpp");
             check(count(mainSrc, "ShowTab(app, 1);") == 1 && count(mainSrc, "ShowTab(app, 2);") == 1, "s1a: each tab tells the editor where it is");
             check(sync.find("inline void ShowTab") != std::string::npos && sync.find("inline void StepScene") != std::string::npos && head.find("StepScene(app, -1, true)") != std::string::npos && keys.find("StepScene(app, dir, false)") != std::string::npos,
                   "s1a: the header arrows and [ ] go through one stepper");
@@ -4084,7 +4094,7 @@ int main(int argc, char** argv) {
             std::remove(path.c_str());
         }
         // the UI: tabs, label, buttons (source ratchets)
-        const std::string mainSrc = slurp("src/main.cpp"), seqSrc = slurp("src/ui_desktop/SequencerPanel.cpp"), chainSrc = slurp("src/ui_desktop/ChainPanel.cpp"), brickSrc = slurp("src/ui_desktop/BricksPanel.cpp");
+        const std::string mainSrc = shellSrc(), seqSrc = slurp("src/ui_desktop/SequencerPanel.cpp"), chainSrc = slurp("src/ui_desktop/ChainPanel.cpp"), brickSrc = slurp("src/ui_desktop/BricksPanel.cpp");
         check(mainSrc.find("ImGuiCol_TabSelectedOverline") != std::string::npos && seqSrc.find("BRICK %d  NOTES") != std::string::npos && seqSrc.find("LIVE  SCENE %02d") != std::string::npos, "s1b: the tabs and the editor label say where you are");
         check(chainSrc.find("TakeSceneSoundToTrack") != std::string::npos && brickSrc.find("UpdateBrickFromLive") != std::string::npos, "s1b: TAKE SOUND TO TRACK and UPDATE FROM LIVE are on screen");
     }
@@ -4176,7 +4186,7 @@ int main(int argc, char** argv) {
             std::remove(path.c_str());
         }
         // the UI (source ratchets)
-        const std::string mainSrc = slurp("src/main.cpp"), spSrc = slurp("src/ui_desktop/SoundPanel.cpp"), brSrc = slurp("src/ui_desktop/BricksPanel.cpp"), cm = slurp("CMakeLists.txt");
+        const std::string mainSrc = shellSrc(), spSrc = slurp("src/ui_desktop/SoundPanel.cpp"), brSrc = slurp("src/ui_desktop/BricksPanel.cpp"), cm = slurp("CMakeLists.txt");
         check(cm.find("SoundPanel.cpp") != std::string::npos && mainSrc.find("soundPanel.DrawModeRow(app)") != std::string::npos && mainSrc.find("drawContextBlock(restH)") != std::string::npos, "s2: the TRACK screen has the NOTES | SOUND | MIX strip and the instrument block");
         check(spSrc.find("WHOLE TRACK") != std::string::npos && spSrc.find("THIS BRICK ONLY") != std::string::npos && spSrc.find("APPLY TO ALL BRICKS") != std::string::npos && brSrc.find("pat.ownSound >> t") != std::string::npos, "s2: the scope switch, APPLY TO ALL BRICKS and the own-sound dot in the cells are on screen");
     }
@@ -4283,7 +4293,7 @@ int main(int argc, char** argv) {
             fsys::remove_all(dir);
         }
         // the UI (source ratchets): move, click removes, the break is a choice, the rows are taller
-        const std::string brickSrc = slurp("src/ui_desktop/BricksPanel.cpp"), mainSrc = slurp("src/main.cpp");
+        const std::string brickSrc = slurp("src/ui_desktop/BricksPanel.cpp"), mainSrc = shellSrc();
         check(brickSrc.find("Drag::FillMove") != std::string::npos && brickSrc.find("Drag::TransMove") != std::string::npos && brickSrc.find("FILL REMOVED") != std::string::npos && brickSrc.find("TRANSITION MOVED") != std::string::npos, "v44.25: fills and transitions can be moved and removed by click");
         check(brickSrc.find("AllDrumBreaks") != std::string::npos && brickSrc.find("BREAK: RANDOM") != std::string::npos, "v44.25: a break is picked by name, RANDOM is one choice");
         check(brickSrc.find("kLaneRowMin = 30.0f") != std::string::npos && mainSrc.find("editorNeed") != std::string::npos, "v44.25: the lane rows are taller");
@@ -4614,7 +4624,7 @@ int main(int argc, char** argv) {
                 lab.Join();
             }
             // source checks
-            const std::string ml = slurp("src/ui_desktop/MixLabPanel.cpp"), mn = slurp("src/main.cpp"), mb = slurp("src/ui_desktop/MenuBar.cpp");
+            const std::string ml = slurp("src/ui_desktop/MixLabPanel.cpp"), mn = shellSrc(), mb = slurp("src/ui_desktop/MenuBar.cpp");
             check(ml.find("MIX LAB") != std::string::npos && ml.find("WHO KEEPS THE SPACE") != std::string::npos && ml.find("TONAL BALANCE") != std::string::npos && ml.find("KEEP FIXES") != std::string::npos && ml.find("UNDO ALL") != std::string::npos && ml.find("SHOW IT") != std::string::npos && ml.find("TRY IT") != std::string::npos, "mix lab: the tab has the frequency map, spots with SHOW IT / TRY IT, tonal balance, the priority list and A/B with KEEP FIXES / UNDO ALL");
             check(mn.find("MIX LAB") != std::string::npos && mb.find("MIX LAB") != std::string::npos, "mix lab: reachable from the tab bar and the View menu");
             {   // v44.42: level, pan and EQ of one instrument into every scene and brick
@@ -4815,7 +4825,7 @@ int main(int argc, char** argv) {
         check(rollSrc.find("ImGuiKey_UpArrow)) dp = shiftKey ? 12 : 1") != std::string::npos && rollSrc.find("ImGuiKey_DownArrow)) dp = shiftKey ? -12 : -1") != std::string::npos
               && rollSrc.find("ImGuiKey_RightArrow)) dc = shiftKey") != std::string::npos && rollSrc.find("ImGuiKey_LeftArrow)) dc = shiftKey") != std::string::npos,
               "roll keys: up / down = a semitone, Shift = an octave; left / right = a step, Shift = a beat (source ratchet)");
-        check(slurp("src/main.cpp").find("app.rollKeysFrame >= ImGui::GetFrameCount() - 1") != std::string::npos,
+        check(shellSrc().find("app.rollKeysFrame >= ImGui::GetFrameCount() - 1") != std::string::npos,
               "roll keys: the instrument block leaves the arrows to the selected notes (source ratchet)");
     }
 
@@ -4878,7 +4888,7 @@ int main(int argc, char** argv) {
         std::remove(path.c_str());
         // the UI: the browser is drawn on TRACK too
         auto slurp = [](const std::string& path2) { std::ifstream in(path2); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
-        const std::string mainSrc = slurp("src/main.cpp"), soundSrc = slurp("src/ui_desktop/SoundPanel.cpp");
+        const std::string mainSrc = shellSrc(), soundSrc = slurp("src/ui_desktop/SoundPanel.cpp");
         check(mainSrc.find("bottomPanel.DrawBrowsers(app)") != std::string::npos && soundSrc.find("THIS DRUM") != std::string::npos && soundSrc.find("OWN KIT") != std::string::npos, "v44.26: the kit browser works on TRACK, THIS DRUM / OWN KIT is on screen");
     }
 
@@ -5206,7 +5216,7 @@ int main(int argc, char** argv) {
         auto slurp = [](const std::string& path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
         auto count = [](const std::string& hay, const std::string& needle) { int n = 0; for (size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + 1)) ++n; return n; };
         check(!fs::exists("src/ui_desktop/FilePanel.cpp") && !fs::exists("src/ui_desktop/FilePanel.h"), "u8c: the FILE drawer is gone");
-        const std::string mb = slurp("src/ui_desktop/MenuBar.cpp"), mainSrc = slurp("src/main.cpp");
+        const std::string mb = slurp("src/ui_desktop/MenuBar.cpp"), mainSrc = shellSrc();
         bool menusOk = true;
         for (const char* m : {"BeginMenu(\"File\")", "BeginMenu(\"Edit\")", "BeginMenu(\"View\")", "BeginMenu(\"Library\")", "BeginMenu(\"Settings\")"})
             menusOk = menusOk && count(mb, m) == 1;
@@ -5531,7 +5541,7 @@ int main(int argc, char** argv) {
 
     {   // v44.45: everything fits and is called the same
         auto slurp = [](const std::string& path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
-        const std::string mainSrc = slurp("src/main.cpp"), lab = slurp("src/ui_desktop/MixLabPanel.cpp"), seqSrc = slurp("src/ui_desktop/SequencerPanel.cpp");
+        const std::string mainSrc = shellSrc(), lab = slurp("src/ui_desktop/MixLabPanel.cpp"), seqSrc = slurp("src/ui_desktop/SequencerPanel.cpp");
         const std::string hdr = slurp("src/ui_desktop/HeaderPanel.cpp"), menu = slurp("src/ui_desktop/MenuBar.cpp"), chain = slurp("src/ui_desktop/ChainPanel.cpp");
         check(mainSrc.find("ww / 1440.0f") != std::string::npos, "v44.45: automatic zoom starts below 1440 points (the header needs them)");
         check(mainSrc.find("EmptyTrackChild") != std::string::npos && mainSrc.find("emptyTrack") != std::string::npos, "v44.45: an empty TRACK shows an empty state, not the scene editor");
@@ -7385,7 +7395,7 @@ int main(int argc, char** argv) {
     }
     {   // C1 (UI-1, UI-4, UI-9): the shell -- two tabs, three tools that open the same way, keys, header, PITCH without a hidden mode
         auto slurp = [](const std::string& path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
-        const std::string mn = slurp("src/main.cpp"), keys = slurp("src/ui_desktop/Shortcuts.cpp"), head = slurp("src/ui_desktop/HeaderPanel.cpp"), menu = slurp("src/ui_desktop/MenuBar.cpp");
+        const std::string mn = shellSrc(), keys = slurp("src/ui_desktop/Shortcuts.cpp"), head = slurp("src/ui_desktop/HeaderPanel.cpp"), menu = slurp("src/ui_desktop/MenuBar.cpp");
         check(mn.find("BeginTabItem(\"MIX LAB\"") == std::string::npos && mn.find("###tabLive") != std::string::npos && mn.find("###tabTrack") != std::string::npos, "c1 ui-1: the only tabs are LIVE and TRACK");
         check(mn.find("toolButton(\"MIX LAB\", \"M\"") != std::string::npos && mn.find("toolButton(\"CHORD LAB\", \"C\"") != std::string::npos && mn.find("toolButton(\"MASTER FX\", \"F\"") != std::string::npos, "c1 ui-1: three tool buttons with their keys in the tab row");
         check(mn.find("drawTool(availY - headerH - sp)") != std::string::npos && mn.find("BeginPopup(\"MasterFxPopover\")") == std::string::npos && head.find("MasterFxPopover") == std::string::npos, "c1 ui-1: every tool opens under the header (MASTER FX is no popover)");

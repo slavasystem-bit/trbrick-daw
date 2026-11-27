@@ -73,6 +73,8 @@ jobs:
         run: tools/run_tests.sh build-x86_64 selftest
       - name: t8_fuzz --seeds 30
         run: tools/run_tests.sh build-x86_64 fuzz --seeds 30
+      - name: t8_uitest (the real screen, toured and clicked, no window)
+        run: tools/run_tests.sh build-x86_64 uitest --seeds 12
       - name: Tests left no files in the repo
         run: |
           if [ -n "$(git status --porcelain --ignored -- . ':!build-x86_64')" ]; then
@@ -92,14 +94,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake g++ libsdl2-dev libasound2-dev
-      - name: Build t8_selftest and t8_fuzz with sanitizers
+      - name: Build t8_selftest, t8_fuzz and t8_uitest with sanitizers
         run: |
           cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O1 -g" -DT8_SANITIZE=address,undefined -DT8_WERROR=ON
-          cmake --build build-asan --target t8_selftest t8_fuzz -j"$(nproc)"
+          cmake --build build-asan --target t8_selftest t8_fuzz t8_uitest -j"$(nproc)"
       - name: t8_selftest (sanitizers)
         run: tools/run_tests.sh build-asan selftest
       - name: t8_fuzz --seeds 10 (sanitizers)
         run: tools/run_tests.sh build-asan fuzz --seeds 10
+      - name: t8_uitest --seeds 4 (sanitizers)
+        run: tools/run_tests.sh build-asan uitest --seeds 4
 
   threads:
     name: Thread race check (TSan)
@@ -137,3 +141,5 @@ jobs:
           cmake --build build-mac -j"$(sysctl -n hw.ncpu)"
       - name: t8_selftest
         run: tools/run_tests.sh build-mac selftest
+      - name: t8_uitest
+        run: tools/run_tests.sh build-mac uitest --seeds 6

@@ -134,9 +134,8 @@ add_library(t8imgui STATIC
     "${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp"
 )
 target_include_directories(t8imgui PUBLIC "${IMGUI_DIR}" "${IMGUI_DIR}/backends")
-add_executable(trbrick_daw
-    src/main.cpp
-    src/app/SynthParams.cpp
+# every panel of the screen: the program and the UI test (TEST-5) build the same files
+set(T8_UI_SOURCES
     src/ui_desktop/DesktopTheme.cpp
     src/ui_desktop/HeaderPanel.cpp
     src/ui_desktop/MenuBar.cpp
@@ -158,6 +157,12 @@ add_executable(trbrick_daw
     src/ui_desktop/PianoRollPanel.cpp
     src/ui_desktop/MixLabPanel.cpp
     src/ui_desktop/ChordLabPanel.cpp
+    src/ui_desktop/Shell.cpp
+)
+add_executable(trbrick_daw
+    src/main.cpp
+    src/app/SynthParams.cpp
+    ${T8_UI_SOURCES}
 )
 target_include_directories(trbrick_daw PRIVATE src)
 target_link_libraries(trbrick_daw PRIVATE t8imgui)
@@ -180,4 +185,27 @@ elseif(TARGET SDL2::SDL2)
 else()
     target_include_directories(trbrick_daw PRIVATE ${SDL2_INCLUDE_DIRS})
     target_link_libraries(trbrick_daw PRIVATE t8core ${SDL2_LIBRARIES})
+endif()
+
+# ---- t8_uitest (audit TEST-5): the real screen (DrawShellFrame) drawn with no window, toured and clicked at random ----
+# Its own copy of ImGui with every IM_ASSERT on, also in Release (tools/uitest_imconfig.h); the panels are compiled with it.
+add_library(t8imgui_checked STATIC
+    "${IMGUI_DIR}/imgui.cpp"
+    "${IMGUI_DIR}/imgui_draw.cpp"
+    "${IMGUI_DIR}/imgui_tables.cpp"
+    "${IMGUI_DIR}/imgui_widgets.cpp"
+)
+target_include_directories(t8imgui_checked PUBLIC "${IMGUI_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+target_compile_definitions(t8imgui_checked PUBLIC IMGUI_USER_CONFIG="uitest_imconfig.h")
+add_executable(t8_uitest tools/uitest_main.cpp src/app/SynthParams.cpp ${T8_UI_SOURCES})
+target_include_directories(t8_uitest PRIVATE src)
+target_link_libraries(t8_uitest PRIVATE t8imgui_checked)
+t8_tool(t8_uitest)
+if(TARGET SDL2::SDL2-static)
+    target_link_libraries(t8_uitest PRIVATE t8core SDL2::SDL2-static)
+elseif(TARGET SDL2::SDL2)
+    target_link_libraries(t8_uitest PRIVATE t8core SDL2::SDL2)
+else()
+    target_include_directories(t8_uitest PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(t8_uitest PRIVATE t8core ${SDL2_LIBRARIES})
 endif()
