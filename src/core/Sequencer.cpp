@@ -33,7 +33,7 @@ void Sequencer::Init(AudioEngine* engine, Project* project) {
 }
 
 void Sequencer::Play() {
-    std::lock_guard<SceneMutex> lock(patternMutex_);
+    SceneLock lock(patternMutex_, "Sequencer::Play");
     playing_ = true;
     globalTick_ = 0;
     chordBaseTick_ = 0;
@@ -48,7 +48,7 @@ void Sequencer::Play() {
 }
 
 void Sequencer::Stop() {
-    std::lock_guard<SceneMutex> lock(patternMutex_);
+    SceneLock lock(patternMutex_, "Sequencer::Stop");
     playing_ = false;
     pinnedPlay_.store(-1);
     pendingScene_.store(-1);
@@ -77,7 +77,7 @@ void Sequencer::Stop() {
 }
 
 void Sequencer::Panic() {
-    std::lock_guard<SceneMutex> lock(patternMutex_);
+    SceneLock lock(patternMutex_, "Sequencer::Panic");
     pendingRatchets_.clear();
     for (int s = 0; s < kNumSynthTracks; ++s) {
         engine_->SynthNoteOff(s);
@@ -91,7 +91,7 @@ void Sequencer::Panic() {
 }
 
 void Sequencer::PlayChainFrom(int pos, bool loopBrick) {
-    std::lock_guard<SceneMutex> lock(patternMutex_);
+    SceneLock lock(patternMutex_, "Sequencer::PlayChainFrom");
     if (!project_ || project_->songChainLength <= 0) { if (!playing_) Play(); return; }
     if (playing_) Stop();   // a clean restart: held notes are released, the clock goes back to the first step
     songLoopStep_.store(loopBrick);
@@ -275,7 +275,7 @@ void Sequencer::StartChord(const Pattern& p, std::array<int8_t, 6> cNotes, int c
 }
 
 void Sequencer::FireTick(int tick) {
-    std::lock_guard<SceneMutex> lock(patternMutex_);
+    SceneLock lock(patternMutex_, "Sequencer::FireTick");
     ApplyRepeaterRequest(false, tick);
     // Queued chord-scene launch (see LaunchChordScene)
     {
@@ -842,7 +842,7 @@ void Sequencer::AdvanceSongChain() {
 }
 
 void Sequencer::FireRatchetEvent(const RatchetEvent& ev) {
-    std::lock_guard<SceneMutex> lock(patternMutex_);
+    SceneLock lock(patternMutex_, "Sequencer::FireRatchetEvent");
     if (ev.isDrum) {
         engine_->TriggerDrum(ev.drumSlot, ev.velocity, ev.drumVariant, ev.drumParams);
     } else if (ev.isSampler) {

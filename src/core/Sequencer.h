@@ -209,7 +209,7 @@ public:
     // rather than waiting for the current bar to finish.
     // v44.10: `startPos` is the chain step to start from (0 = the first).
     void SetSongModeActive(bool active, int startPos = 0) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::SetSongModeActive");
         songModeActive_ = active;
         pinnedPlay_.store(-1);
         pendingScene_.store(-1);
@@ -257,7 +257,7 @@ public:
     // has (so a chain of scenes with the same sound never disturbs a sounding note), the kick settings with the mixer values,
     // and the kit as an already-built bank (AppState prepares those on the UI thread: SetSceneBanks), swapped with one atomic store.
     void ApplySceneSound(int p) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::ApplySceneSound");
         if (!project_ || !engine_) return;
         p = std::clamp(p, 0, kNumPatterns - 1);
         const Pattern& pat = project_->patterns[static_cast<size_t>(p)];
@@ -291,20 +291,20 @@ public:
     // The kit banks per scene (null = the default bank). Called by AppState whenever a scene's kit changes; the banks must stay
     // referenced by the caller's cache too, so the audio thread never drops the last reference.
     void SetSceneBanks(const std::array<DrumKit::BankPtr, kNumPatterns>& banks, const DrumKit::BankPtr& def) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::SetSceneBanks");
         sceneBanks_ = banks; defaultBank_ = def; kitsManaged_ = true;
         if (project_ && engine_) ApplySceneSound(PlayPatternIndex());
     }
     // v44.50: the sample per scene (null = none). Called by AppState whenever a scene's sample or sampler settings change; the samples stay
     // referenced by the caller's cache for the whole session, so the audio thread never drops the last reference.
     void SetSceneSamples(const std::array<SamplePtr, kNumPatterns>& samples) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::SetSceneSamples");
         sceneSamples_ = samples; samplesManaged_ = true;
         if (project_ && engine_) ApplySceneSound(PlayPatternIndex());
     }
     // v44.53: the samples of the SAMPLE engines per scene: [scene][0..2 = synths, 3 = chord] (null = none)
     void SetSceneSynthSamples(const std::array<std::array<SamplePtr, kNumSynthTracks + 1>, kNumPatterns>& samples) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::SetSceneSynthSamples");
         sceneSynthSamples_ = samples;
         if (project_ && engine_) ApplySceneSound(PlayPatternIndex());
     }
@@ -314,7 +314,7 @@ public:
     static constexpr int kMaxFillSamples = 32;
     struct FillSampleEntry { char name[FillRule::kSampleMax] = {}; SamplePtr sample; };
     void SetFillSamples(const std::array<FillSampleEntry, kMaxFillSamples>& table) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::SetFillSamples");
         fillSamples_ = table;
     }
     static bool SamePatch(const SynthPatch& a, const SynthPatch& b) { return std::memcmp(&a, &b, sizeof(SynthPatch)) == 0; }
@@ -331,7 +331,7 @@ public:
     // v44.51: LIVE -> TRACK while the jam plays: the editor moves to a brick's scene, the player stays on the scene it was playing. Cleared
     // by Stop, by song mode, and by PlayHere / the next launch from LIVE (ReleasePin: playback follows the edited scene again).
     void PinPlayToCurrent() {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::PinPlayToCurrent");
         if (playing_.load() && project_ && !(songModeActive_ && project_->songChainLength > 0)) pinnedPlay_.store(project_->currentPattern);
     }
     void ReleasePin() { pinnedPlay_.store(-1); }
@@ -340,7 +340,7 @@ public:
     void SetPinRaw(int p) { pinnedPlay_.store(p); }
     // v44.58: EDIT mode on LIVE: the editor goes to scene `p`, the player stays on the scene it plays (pin it first).
     void PinPlayToPlaying() {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::PinPlayToPlaying");
         if (playing_.load() && project_ && !(songModeActive_ && project_->songChainLength > 0) && pinnedPlay_.load() < 0) pinnedPlay_.store(project_->currentPattern);
     }
     bool IsPinned() const { return pinnedPlay_.load() >= 0; }
@@ -361,7 +361,7 @@ public:
     int PendingScene() const { return pendingScene_.load(); }
     void ClearPendingScene() { pendingScene_.store(-1); }
     void LaunchScene(int p) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::LaunchScene");
         if (!project_) return;
         p = std::clamp(p, 0, kNumPatterns - 1);
         if (!playing_.load() || launchQuant_.load() == 0 || songModeActive_) {
@@ -376,7 +376,7 @@ public:
     // v44.54: a bar hook. While armed, FireTick calls it once on the next bar line (tick % StepsPerBar() == 0), under the pattern lock, on the
     // audio thread, and disarms it. The app uses it to apply the LIVE switches queued with NEXT BAR (mute / solo / groups).
     // SetBarHook and ArmBarHook take the pattern lock; the hook itself must not block or allocate.
-    void SetBarHook(std::function<void()> fn) { std::lock_guard<SceneMutex> lock(patternMutex_); barHook_ = std::move(fn); }
+    void SetBarHook(std::function<void()> fn) { SceneLock lock(patternMutex_, "Sequencer::SetBarHook"); barHook_ = std::move(fn); }
     void ArmBarHook(bool on) { barHookArmed_.store(on); }
     bool BarHookArmed() const { return barHookArmed_.load(); }
     // Ticks until the next bar line (0 when exactly on it); for the UI countdown.
@@ -399,7 +399,7 @@ public:
     // released exactly on the boundary (or tied into the new one when both steps are
     // legato / full-length), so launching never cuts into the sound early.
     void LaunchChordScene(int c) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::LaunchChordScene");
         if (!project_) return;
         c = std::clamp(c, 0, kNumChordScenes - 1);
         if (!playing_.load() || launchQuant_.load() == 0) {
@@ -413,7 +413,7 @@ public:
     }
     // Jump straight to a chord scene (bank switched on, project loaded, ...).
     void SetChordSceneNow(int c) {
-        std::lock_guard<SceneMutex> lock(patternMutex_);
+        SceneLock lock(patternMutex_, "Sequencer::SetChordSceneNow");
         pendingChordScene_.store(-1);
         ApplyChordScene(std::clamp(c, 0, kNumChordScenes - 1), false);
     }
@@ -481,7 +481,7 @@ public:
     bool FillActiveNow() const { return fillActiveUi_.load(); }
     FillKind FillKindNow() const { return static_cast<FillKind>(fillKindCur_.load()); }
     // After the chain step's overlays were edited while it plays: take the new mute mask at once.
-    void RefreshArrangement() { std::lock_guard<SceneMutex> lock(patternMutex_); ApplyStepOverlay(); }
+    void RefreshArrangement() { SceneLock lock(patternMutex_, "Sequencer::RefreshArrangement"); ApplyStepOverlay(); }
 
     // For UI playhead display: which step index each track is currently on.
     int GlobalTick() const { return globalTick_; }

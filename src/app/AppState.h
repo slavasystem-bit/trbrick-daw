@@ -124,7 +124,7 @@ struct AppState {
     // the current key. Takes the pattern lock itself.
     int chdLiveKey_ = -1, chdLiveScale_ = -1;
     void RefreshChordLive(bool relock = false) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "RefreshChordLive");
         if (chdLiveSlot < 0 || chdLiveSlot >= kNumCustomChordSlots) { sequencer.ClearChordLive(); chdLiveKey_ = -1; return; }
         if (relock || project.chordsFollowKey || chdLiveKey_ < 0) {
             chdLiveKey_ = project.randomizerKeyRoot;
@@ -706,7 +706,7 @@ struct AppState {
         if (srcScene < 0 || srcScene >= kNumPatterns || dstScene < 0 || dstScene >= kNumPatterns ||
             srcTrack < 0 || srcTrack >= kNumTracks || dstTrack < 0 || dstTrack >= kNumTracks) return false;
         if (srcScene == dstScene && srcTrack == dstTrack) return false;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "CopyInstrument");
         const Track src = project.patterns[srcScene].tracks[srcTrack];
         Track& dst = project.patterns[dstScene].tracks[dstTrack];
         if (dst.type != src.type) { SetStatus("CAN'T COPY: TRACK TYPE MISMATCH"); return false; }
@@ -729,7 +729,7 @@ struct AppState {
     // scenes changed; each gets its own undo entry (Undo takes it back while that scene is edited).
     int MatchInstrumentLevel(int srcScene, int trackIndex, bool onlyChain, bool withMix) {
         if (srcScene < 0 || srcScene >= kNumPatterns || trackIndex < 0 || trackIndex >= kNumTracks) return 0;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "MatchInstrumentLevel");
         const Track src = project.patterns[srcScene].tracks[trackIndex];
         std::array<bool, kNumPatterns> inChain{};
         for (int i = 0; i < project.songChainLength; ++i) inChain[static_cast<size_t>(std::clamp(project.songChain[static_cast<size_t>(i)].patternIndex, 0, kNumPatterns - 1))] = true;
@@ -767,7 +767,7 @@ struct AppState {
     // MatchInstrumentLevel with withMix). Returns how many scenes changed; each gets its own undo entry.
     int MatchLevelPanEq(int srcScene, int trackIndex, bool onlyChain) {
         if (srcScene < 0 || srcScene >= kNumPatterns || trackIndex < 0 || trackIndex >= kNumTracks) return 0;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "MatchLevelPanEq");
         const Track src = project.patterns[srcScene].tracks[trackIndex];
         std::array<bool, kNumPatterns> inChain{};
         for (int i = 0; i < project.songChainLength; ++i) inChain[static_cast<size_t>(std::clamp(project.songChain[static_cast<size_t>(i)].patternIndex, 0, kNumPatterns - 1))] = true;
@@ -794,7 +794,7 @@ struct AppState {
     // With the chord bank on, the chords of the EDITED scene live in the bank, so that is what gets cleared there.
     bool ClearInstrument(int scene, int trackIndex) {
         if (scene < 0 || scene >= kNumPatterns || trackIndex < 0 || trackIndex >= kNumTracks) return false;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "ClearInstrument");
         PushUndoForScene(scene);
         Pattern& pat = project.patterns[scene];
         if (trackIndex == kChordTrackIndex && project.chordBankOn && scene == project.currentPattern) {
@@ -864,7 +864,7 @@ struct AppState {
     // Switch the bank on (slot 0 is seeded from the chords this scene already has, so
     // nothing is lost) or off (the pattern's own chord track plays again).
     void SetChordBank(bool on) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SetChordBank");
         if (on == project.chordBankOn) return;
         {   // v44.44: the step remembers the bank switch itself (before, Undo left the bank as it was)
             bool anyContent = false;
@@ -901,7 +901,7 @@ struct AppState {
     }
     void EditChordSceneOnly(int c) { project.chordSceneEdit = std::clamp(c, 0, kNumChordScenes - 1); RefreshChordLive(true); }
     void CopyPatternChordsToScene(int c) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "CopyPatternChordsToScene");
         c = std::clamp(c, 0, kNumChordScenes - 1);
         PushUndo();
         const Track& src = CurrentPattern().tracks[kChordTrackIndex];
@@ -916,7 +916,7 @@ struct AppState {
     bool CommitChordSlotToScene(int slot, int scene) {
         slot = std::clamp(slot, 0, kNumChordScenes - 1);
         if (scene < 0 || scene >= kNumPatterns || ChordSceneEmpty(slot)) return false;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "CommitChordSlotToScene");
         PushUndoForScene(scene);
         const ChordScene& cs = project.chordScenes[static_cast<size_t>(slot)];
         Track& dst = project.patterns[static_cast<size_t>(scene)].tracks[kChordTrackIndex];
@@ -930,7 +930,7 @@ struct AppState {
     // empty slot (the draft starts from what you hear), the bank goes on and that slot is edited and sounds. When every slot is in
     // use the slot that was edited last is used as it is. Returns the slot. The caller makes its change right after, in the same step.
     int StartChordDraft() {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "StartChordDraft");
         if (project.chordBankOn) return std::clamp(project.chordSceneEdit, 0, kNumChordScenes - 1);
         int slot = -1;
         for (int c = 0; c < kNumChordScenes; ++c) if (ChordSceneEmpty(c)) { slot = c; break; }
@@ -953,14 +953,14 @@ struct AppState {
         return slot;
     }
     void ClearChordScene(int c) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "ClearChordScene");
         c = std::clamp(c, 0, kNumChordScenes - 1);
         PushUndo();
         ChordScene fresh; project.chordScenes[c] = fresh;
         SetStatus("CHORD SCENE " + std::to_string(c + 1) + " CLEARED");
     }
     void DuplicateChordScene(int from, int to) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "DuplicateChordScene");
         from = std::clamp(from, 0, kNumChordScenes - 1); to = std::clamp(to, 0, kNumChordScenes - 1);
         if (from == to) return;
         PushUndo();
@@ -1026,10 +1026,10 @@ struct AppState {
     }
     // Puts the slow starter groove (core/StarterGroove.h) into the edited scene; one undo step.
     void LoadStarterGroove() {
-        std::lock_guard<SceneMutex> outer(sequencer.PatternMutex());   // v44.44: the undo copy is taken under the lock too
+        SceneLock outer(sequencer.PatternMutex(), "LoadStarterGroove");   // v44.44: the undo copy is taken under the lock too
         PushUndo();
         {
-            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            SceneLock lock(sequencer.PatternMutex(), "LoadStarterGroove");
             Pattern& pat = CurrentPattern();
             ApplyStarterGroove(pat, StepTrack(pat, kChordTrackIndex));
             SyncMixer(pat);
@@ -1065,7 +1065,7 @@ struct AppState {
     int CopySceneToBrickSlot(int src, bool fromLive = false, uint16_t* muteMaskOut = nullptr, StepParams* paramsOut = nullptr) {
         const int dst = FreeBrickSlot();
         if (dst < 0 || src < 0 || src >= kNumPatterns) return -1;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "CopySceneToBrickSlot");
         project.patterns[static_cast<size_t>(dst)] = project.patterns[static_cast<size_t>(src)];
         // v44.38: a brick has one mute (its mask): what the scene had muted / soloed becomes WHO PLAYS, the scene flags are cleared
         if (muteMaskOut) *muteMaskOut = SceneMuteMask(project.patterns[static_cast<size_t>(dst)]);
@@ -1126,7 +1126,7 @@ struct AppState {
         if (scene < 0 || scene >= kNumPatterns) return -1;
         const std::vector<int> slots = ChainSlots(scene);
         PushSoundUndo(true, slots);
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "TakeSceneSoundToTrack");
         const Pattern src = project.patterns[static_cast<size_t>(scene)];
         CopyAllParts(TrackSound(), src);
         project.trackSoundMask = kSoundAll;
@@ -1142,7 +1142,7 @@ struct AppState {
         const int slot = project.songChain[static_cast<size_t>(idx)].patternIndex;
         const int live = AppState::IsBrickSlot(project.currentPattern) ? project.liveScene : project.currentPattern;
         if (!IsBrickSlot(slot) || live < 0 || live >= kNumLiveScenes) return false;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "UpdateBrickFromLive");
         PushUndoForScene(slot);
         Pattern& d = project.patterns[static_cast<size_t>(slot)];
         const Pattern old = d;
@@ -1169,7 +1169,7 @@ struct AppState {
     int SyncBrickSound() {
         const int slot = project.currentPattern;
         if (!IsBrickSlot(slot) || !SlotInUse(slot) || project.trackSoundMask == 0) return 0;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SyncBrickSound");
         Pattern& cur = project.patterns[static_cast<size_t>(slot)];
         Pattern& hold = TrackSound();
         int moved = 0;
@@ -1195,7 +1195,7 @@ struct AppState {
     // WHOLE TRACK / Follow track: the brick gives up its own sound for the part and takes the track's. One undo step.
     bool FollowTrackSound(int slot, int part) {
         if (!IsBrickSlot(slot) || part < 0 || part >= kNumParts || !PartIsOwn(slot, part)) return false;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "FollowTrackSound");
         PushUndoForScene(slot);
         Pattern& bp = project.patterns[static_cast<size_t>(slot)];
         CopyPart(bp, TrackSound(), part);
@@ -1210,7 +1210,7 @@ struct AppState {
         const std::vector<int> others = ChainSlots(slot);
         std::vector<int> all = others; all.push_back(slot);
         PushSoundUndo(true, all);
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "ApplySoundToAllBricks");
         const Pattern src = project.patterns[static_cast<size_t>(slot)];
         CopyPart(TrackSound(), src, part);
         project.trackSoundMask = kSoundAll;
@@ -1390,7 +1390,7 @@ struct AppState {
     // v44.51: no longer done by switching to the LIVE tab; only PlayHere() (the tab bar button) calls it.
     void LeaveTrackForLive() {
         if (!sequencer.IsSongModeActive()) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "LeaveTrackForLive");
         sequencer.SetSongModeActive(false);
     }
     // v44.51: what plays right now, whatever tab is shown: the jam (a LIVE scene) or the track.
@@ -1417,7 +1417,7 @@ struct AppState {
     void TickTransport() {
         if (!sequencer.IsPlaying() && sequencer.IsSongModeActive()) sequencer.SetSongModeActive(false);
         if (!sequencer.IsPlaying() && !queuedSwitches_.empty()) {   // v44.54: stopped with switches waiting for a bar line: they take effect now
-            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            SceneLock lock(sequencer.PatternMutex(), "TickTransport");
             if (!queuedSwitches_.empty()) {
                 const int sc = project.currentPattern;
                 for (auto& q : queuedSwitches_) if (q.scene != sc) q.scene = -1;   // another scene is edited: its flags are not touched by the queue
@@ -1896,7 +1896,7 @@ struct AppState {
     }
     int ApplyEuclid(int ti, int hits, int steps, int rotate) {
         if (ti < 0 || ti >= kNumTracks) return 0;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "ApplyEuclid");
         Pattern& pat = CurrentPattern();
         Track& t = StepTrack(pat, ti);
         if (t.type == TrackType::Chord) { SetStatus("EUCLID: NOT FOR THE CHORD TRACK (ROTATE WORKS)"); return 0; }
@@ -1925,7 +1925,7 @@ struct AppState {
     }
     int EuclidMelodyOn(int ti, int hits, int steps, int rotate) {
         if (ti < 0 || ti >= kNumTracks) return 0;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "EuclidMelodyOn");
         Pattern& pat = CurrentPattern();
         Track& t = StepTrack(pat, ti);
         if (t.type == TrackType::Chord) { SetStatus("EUCLID: NOT FOR THE CHORD TRACK (ROTATE WORKS)"); return 0; }
@@ -1950,7 +1950,7 @@ struct AppState {
     }
     void EuclidMelodyOff(int ti) {
         if (ti < 0 || ti >= kNumTracks) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "EuclidMelodyOff");
         Pattern& pat = CurrentPattern();
         Track& t = StepTrack(pat, ti);
         if (!t.euclidOn) return;
@@ -1971,7 +1971,7 @@ struct AppState {
     // ROTATE: the whole figure of a track slides `shift` steps round its length (any track, chord track too). One undo step.
     void RotateTrack(int ti, int shift) {
         if (ti < 0 || ti >= kNumTracks) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "RotateTrack");
         Pattern& pat = CurrentPattern();
         Track& t = StepTrack(pat, ti);
         const int len = std::clamp(t.useOwnLength ? t.length : pat.masterLength, 1, kMaxSteps);
@@ -1987,7 +1987,7 @@ struct AppState {
     // header's key / scale. Undoable. Returns how many notes moved.
     int SnapTrackToScale(int trackIndex) {
         if (trackIndex < kNumDrumTracks || trackIndex >= kNumTracks) return 0;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SnapTrackToScale");
         PushUndo();
         Track& t = StepTrack(CurrentPattern(), trackIndex);
         const int key = project.randomizerKeyRoot, sc = project.randomizerScale;
@@ -2079,7 +2079,7 @@ struct AppState {
         return k >= 0 && (k != project.randomizerKeyRoot || sc != project.randomizerScale);
     }
     void AdjustChordsToScale(bool includeMelody) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "AdjustChordsToScale");
         PushUndo();
         int n = AdjustSceneToScale(CurrentPattern(), includeMelody);
         if (project.chordBankOn) n += AdjustChordSceneToScale(EditChordScene());
@@ -2096,7 +2096,7 @@ struct AppState {
         if (k == followSeenKey_ && sc == followSeenScale_) return;
         followSeenKey_ = k; followSeenScale_ = sc;
         if (!project.chordsFollowKey) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "TickKeyFollow");
         PushUndo();
         for (Pattern& p : project.patterns) AdjustSceneToScale(p, false);
         if (project.chordBankOn) for (ChordScene& cs : project.chordScenes) AdjustChordSceneToScale(cs);
@@ -2617,7 +2617,7 @@ struct AppState {
     // A scene change (launch, chain step, song mode on / off) loads the new scene's flags into the mixer.
     void SetMuteScene(int trackIndex, bool mute, int scene = -1) {
         if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SetMuteScene");
         if (scene < 0 || scene >= kNumPatterns) scene = project.currentPattern;
         if (const int b = BrickOfSlot(scene); b >= 0) { SetBrickTrackMuted(b, trackIndex, mute); return; }   // v44.38: a brick has one mute, WHO PLAYS
         const int grp = SceneGroupOf(scene);   // v44.58: linked scenes share mute and solo - the change is made in every scene of the group
@@ -2630,7 +2630,7 @@ struct AppState {
     }
     void SetSoloScene(int trackIndex, bool solo, int scene = -1) {
         if (trackIndex < 0 || trackIndex >= kNumTracks) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SetSoloScene");
         if (scene < 0 || scene >= kNumPatterns) scene = project.currentPattern;
         if (const int b = BrickOfSlot(scene); b >= 0) { SetBrickTrackSolo(b, trackIndex, solo); return; }   // v44.38: solo = every other instrument off, in WHO PLAYS
         const int grp = SceneGroupOf(scene);   // v44.58: see SetMuteScene
@@ -2839,7 +2839,7 @@ struct AppState {
     // `scene` joins the group of `ref` (a new group when `ref` stands alone); it takes the mute and solo of `ref`, which are the ones heard
     void LinkScenes(int scene, int ref) {
         if (scene < 0 || ref < 0 || scene >= kNumLiveScenes || ref >= kNumLiveScenes || scene == ref) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "LinkScenes");
         int g = SceneGroupOf(ref);
         if (g == 0) { std::array<bool, 256> used{}; for (uint8_t v : project.sceneLink) used[v] = true; for (g = 1; g < 255 && used[static_cast<size_t>(g)]; ++g) {} project.sceneLink[static_cast<size_t>(ref)] = static_cast<uint8_t>(g); }
         project.sceneLink[static_cast<size_t>(scene)] = static_cast<uint8_t>(g);
@@ -2853,7 +2853,7 @@ struct AppState {
     }
     void UnlinkScene(int scene) {
         if (scene < 0 || scene >= kNumLiveScenes) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "UnlinkScene");
         project.sceneLink[static_cast<size_t>(scene)] = 0;
         NormalizeLinks();
     }
@@ -2862,7 +2862,7 @@ struct AppState {
     void ToggleSceneLink(int scene) {
         const int ref = project.currentPattern;
         if (scene < 0 || scene >= kNumLiveScenes || ref >= kNumLiveScenes) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "ToggleSceneLink");
         PushLinkUndo();
         if (scene == ref || ScenesLinked(scene, ref)) {
             UnlinkScene(scene);
@@ -2875,7 +2875,7 @@ struct AppState {
     // Leave the group, as one undo step (the LINK button's UNLINK, the menu's "Leave its link group").
     void UnlinkSceneUndoable(int scene) {
         if (SceneGroupOf(scene) == 0) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "UnlinkSceneUndoable");
         PushLinkUndo();
         UnlinkScene(scene);
         SetStatus("SCENE " + std::to_string(scene + 1) + " IS NOT LINKED ANY MORE - CMD+Z UNDOES");
@@ -2915,7 +2915,7 @@ struct AppState {
     // One undo step. Returns how many scenes are in the group.
     int LinkSelectedScenes() {
         if (SceneSelCount() < 2) return 0;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "LinkSelectedScenes");
         int ref = -1;
         if (project.currentPattern < kNumLiveScenes && ((sceneSel >> project.currentPattern) & 1u)) ref = project.currentPattern;
         else for (int i = 0; i < kNumLiveScenes; ++i) if ((sceneSel >> i) & 1u) { ref = i; break; }
@@ -2940,7 +2940,7 @@ struct AppState {
     bool SceneIsHeldApart() const { return sequencer.IsPlaying() && !sequencer.IsSongModeActive() && sequencer.PlayPatternIndex() != project.currentPattern && project.currentPattern < kNumLiveScenes; }
     void SelectSceneForEdit(int scene) {
         if (scene < 0 || scene >= kNumLiveScenes) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SelectSceneForEdit");
         if (!sequencer.IsPlaying() || sequencer.IsSongModeActive()) { sequencer.LaunchScene(scene); return; }
         sequencer.PinPlayToPlaying();
         project.currentPattern = scene;
@@ -2952,7 +2952,7 @@ struct AppState {
     // (With LAUNCH = NOW the first click has already started the scene; CLICK: OPEN is the way to prepare a scene silently.)
     void OpenScenePad(int scene) {
         if (scene < 0 || scene >= kNumLiveScenes) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "OpenScenePad");
         if (sequencer.PendingScene() == scene) sequencer.ClearPendingScene();
         SelectSceneForEdit(scene);
     }
@@ -2961,7 +2961,7 @@ struct AppState {
     // playback at once, off the grid. Stopped or in song mode only the edited scene changes, as before. One undo step empties the slot again.
     void DuplicateSceneAsNew(int src, int dst) {
         if (src < 0 || src >= kNumLiveScenes || dst < 0 || dst >= kNumLiveScenes || src == dst) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "DuplicateSceneAsNew");
         PushUndoForScene(dst);
         project.patterns[dst] = project.patterns[src];
         if (sequencer.IsPlaying() && !sequencer.IsSongModeActive()) { SelectSceneForEdit(dst); return; }
@@ -2997,7 +2997,7 @@ struct AppState {
     // clicked scene is launched as usual.
     void LaunchScenePad(int scene) {
         if (scene < 0 || scene >= kNumLiveScenes) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "LaunchScenePad");
         if (SceneIsHeldApart()) {
             project.currentPattern = sequencer.PlayPatternIndex();
             sequencer.ReleasePin();
@@ -3017,6 +3017,7 @@ struct AppState {
     struct ArmScope {
         AppState& a; std::unique_lock<SceneMutex> lock; bool on = false; int cur = 0, pin = -1;
         ArmScope(AppState& app, int scene) : a(app), lock(app.sequencer.PatternMutex()) {
+            app.sequencer.PatternMutex().NameHolder("ArmScope");
             if (scene >= 0) { on = true; cur = a.project.currentPattern; pin = a.sequencer.PinRaw(); a.sequencer.SetPinRaw(a.sequencer.PlayPatternIndex()); a.project.currentPattern = scene; }
         }
         ~ArmScope() { if (on) { a.project.currentPattern = cur; a.sequencer.SetPinRaw(pin); } }
@@ -3078,19 +3079,19 @@ struct AppState {
     }
     // Is this switch waiting for the bar line? (for the pulsing outline)
     bool SwQueued(QueuedSwitch::Kind kind, uint16_t arg = 0) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SwQueued");
         for (const auto& q : queuedSwitches_) if (q.kind == kind && q.arg == arg && q.scene == project.currentPattern) return true;
         return false;
     }
     int SwQueuedCount() {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SwQueuedCount");
         int n = 0;
         for (const auto& q : queuedSwitches_) if (q.scene == project.currentPattern) ++n;
         return n;
     }
     // The one entry point of the LIVE panel (brick = -1) for mute / solo / group / drop / keep.
     void LiveSwitch(QueuedSwitch::Kind kind, uint16_t arg = 0) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "LiveSwitch");
         if (!SwitchesCanQueue()) { DispatchSwitch(kind, arg); return; }
         for (size_t i = 0; i < queuedSwitches_.size(); ++i) {
             const auto& q = queuedSwitches_[i];
@@ -3112,7 +3113,7 @@ struct AppState {
     // Runs under the pattern lock: on the audio thread at the bar line (the bar hook), or on the UI thread when the transport stops.
     // Switches meant for a scene that is not the played one any more (a scene launch landed on the same bar line) are dropped.
     void ApplyQueuedSwitches() {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "ApplyQueuedSwitches");
         sequencer.ArmBarHook(false);
         bool& applying = SwitchApplying();
         const bool was = applying;
@@ -3163,7 +3164,7 @@ struct AppState {
     SynthPatch& EditedPatch(bool chord, int synthIdx) { return chord ? CurrentPattern().chordPatch : CurrentPattern().synthPatches[static_cast<size_t>(std::clamp(synthIdx, 0, kNumSynthTracks - 1))]; }
     void PushEditedPatchToEngine(bool chord, int synthIdx) {
         if (!EditIsPlaying()) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "PushEditedPatchToEngine");
         if (chord) engine.Chord().SetPatch(CurrentPattern().chordPatch);
         else engine.Synth(std::clamp(synthIdx, 0, kNumSynthTracks - 1)).SetPatch(CurrentPattern().synthPatches[static_cast<size_t>(std::clamp(synthIdx, 0, kNumSynthTracks - 1))]);
     }
@@ -3663,7 +3664,7 @@ struct AppState {
     }
     // Picks a file that is already in samples/ for the sampler of the edited scene.
     bool SetSamplerFile(const std::string& file, int tgt = kTargetSampler) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SetSamplerFile");
         if (SampleFor(file) == nullptr && !SamplePending(file)) { SetStatus("CANNOT READ " + file); return false; }
         BumpRequest(SampleKey(project.currentPattern, tgt));   // N1: a file still being read for this target is not used any more
         CancelLibraryAudition();
@@ -3731,7 +3732,7 @@ struct AppState {
             if (gen != docGen_ || dir != SamplesDir()) { SetStatus("SAMPLE NOT SET: ANOTHER PROJECT IS OPEN NOW"); return; }
             if (!RequestIsNewest(key, tok) || SampleFileOf(scene, tgt) != prev) { SetStatus("SAMPLE NOT SET: ANOTHER ONE WAS CHOSEN MEANWHILE"); return; }
             {
-            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            SceneLock lock(sequencer.PatternMutex(), "AssignSampleToSampler");
             if (res->sound && dir == SamplesDir()) sampleCache_[dir + "/" + res->name] = res->sound;
             Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
             PushUndoForScene(scene);
@@ -3758,7 +3759,7 @@ struct AppState {
     // A file already in samples/ becomes the sample of that fill (its kind turns to SAMPLE; one Undo step).
     static std::string FillKey(int where) { return "fill:" + std::to_string(where); }
     bool SetFillSample(int where, const std::string& file) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SetFillSample");
         BumpRequest(FillKey(where));   // a library file still being copied for this fill is not used any more
         FillRule* r = FillRuleAt(where);
         if (!r || file.empty() || file.size() >= static_cast<size_t>(FillRule::kSampleMax) || file.find('/') != std::string::npos) { SetStatus("THAT SAMPLE CANNOT BE USED FOR A FILL"); return false; }
@@ -3795,7 +3796,7 @@ struct AppState {
         loader.Post([res, wavPath, dir, rate] { *res = CopySamplerFile(wavPath, dir, rate); }, [this, res, dir, where, gen, key, tok, before] {
             if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
             if (gen != docGen_ || dir != SamplesDir()) { SetStatus("FILL NOT SET: ANOTHER PROJECT IS OPEN NOW"); return; }
-            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            SceneLock lock(sequencer.PatternMutex(), "AssignSampleToFill");
             if (res->sound) sampleCache_[dir + "/" + res->name] = res->sound;   // the copy is there either way
             sampleNamesValid_ = false; samplesDirty_ = true;
             if (!RequestIsNewest(key, tok)) { SetStatus("FILL NOT SET: ANOTHER SAMPLE WAS CHOSEN MEANWHILE"); return; }
@@ -4032,14 +4033,14 @@ struct AppState {
     // v44.52.1: a LOOP from the library went to the sampler: play it as a loop, tempo fit AUTO (the tempo comes from the name when it has one).
     // N1: the same for the scene that asked for the file (the edited scene may be another one by the time the file arrives).
     void SetSamplerLoopFromLibraryInScene(const LibSample& ls, int tgt, int scene) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SetSamplerLoopFromLibraryInScene");
         const int was = project.currentPattern;
         project.currentPattern = std::clamp(scene, 0, kNumSlotsTotal - 1);
         SetSamplerLoopFromLibrary(ls, tgt);
         project.currentPattern = was;
     }
     void SetSamplerLoopFromLibrary(const LibSample& ls, int tgt = kTargetSampler) {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "SetSamplerLoopFromLibrary");
         SamplerPatch sp = GetSampleTarget(tgt);
         sp.mode = 2; sp.fitBars = 0; sp.start = 0.0f; sp.decay = 1.0f;
         PutSampleTarget(tgt, sp);
@@ -4064,7 +4065,7 @@ struct AppState {
         transSyncedDir_ = dir; transDirty_ = false; transLoading_ = true;
         loader.Post([list, dir, rate] { *list = LoadUserTransitionFolder(dir, rate); }, [this, list, then] {
             transLoading_ = false;
-            { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); engine.ReplaceUserTransitions(std::move(*list)); }
+            { SceneLock lock(sequencer.PatternMutex(), "ReloadUserTransitions"); engine.ReplaceUserTransitions(std::move(*list)); }
             if (then) then();
         });
     }
@@ -4118,7 +4119,7 @@ struct AppState {
             if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
             if (!stillWanted()) { SetStatus("TRANSITION NOT SET: THE PROJECT OR THE BRICK CHANGED MEANWHILE"); return; }
             ReloadUserTransitions([this, res, brick, stillWanted] {
-                std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+                SceneLock lock(sequencer.PatternMutex(), "AssignLibraryTransition");
                 if (!stillWanted()) { SetStatus("TRANSITION NOT SET: THE PROJECT OR THE BRICK CHANGED MEANWHILE"); return; }
                 PushSoundUndo();
                 ChainStep& cs = project.songChain[static_cast<size_t>(brick)];
@@ -4223,7 +4224,7 @@ struct AppState {
     }
     void RenameKits(const std::map<std::string, std::string>& renamed) {
         if (renamed.empty()) return;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "RenameKits");
         ForEachKitName([&](std::string& k) { auto it = renamed.find(k); if (it != renamed.end()) k = it->second; });
         kitsDirty_ = true;
     }
@@ -4287,7 +4288,7 @@ struct AppState {
     }
     bool CopySceneSound(int src, int dst, int what) {
         if (src < 0 || src >= kNumPatterns || dst < 0 || dst >= kNumPatterns || src == dst || what == 0) return false;
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "CopySceneSound");
         const Pattern& a = project.patterns[static_cast<size_t>(src)];
         Pattern& b = project.patterns[static_cast<size_t>(dst)];
         PushUndoForScene(dst);
@@ -4439,7 +4440,7 @@ struct AppState {
     void AdoptProject(Project&& incoming) {
         ++docGen_;   // N1: files still being read for the old project are not put into this one
         {   // the audio thread reads the project: swap it under the lock, held only for the swap (no files are read here)
-            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+            SceneLock lock(sequencer.PatternMutex(), "AdoptProject");
             sequencer.Panic();   // nothing from the old project may keep sounding
             project = std::move(incoming);
             sequencer.SetSongModeActive(false);
@@ -4575,7 +4576,7 @@ struct AppState {
             // the kit may have become this very copy meanwhile (an earlier drop on another drum of the same kit): that is no change
             if (!RequestIsNewest(key, tok) || (kitOf() != prev && kitOf() != res->target)) { SetStatus("SAMPLE NOT SET: THE KIT WAS CHANGED MEANWHILE (KIT WRITTEN: " + res->target + ")"); InvalidateFolderCaches(); return; }
             {
-                std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+                SceneLock lock(sequencer.PatternMutex(), "AssignSampleToSlot");
                 Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
                 PushUndoForScene(scene);   // one step: the kit and the sample the drum played before
                 if (ownKit) pt.tracks[static_cast<size_t>(trackIdx)].kitFolder = res->target; else pt.kitFolder = res->target;
@@ -4702,19 +4703,33 @@ struct AppState {
     }
     // Saves a copy of the open project taken under a short lock; the file is written outside the lock (LIVE-4: a save never holds
     // the sound waiting on the disk).
+    // LIVE-5 (Mac measurement after #29): a copy of the whole project for DocHash / SaveSnapshot, without holding the scene lock for
+    // the whole copy (with a big project that one hold reached about 3 ms, longer than a 128-frame buffer, and the sound dropped every
+    // 2 s while the project was Edited). The head is copied under one short lock, then the scene slots kSlotsPerHold at a time, each
+    // under its own lock. The pieces fit together: only this (the screen) thread changes a project's structure, and it is busy here;
+    // the audio thread may flip a mute at the bar line or the played scene between two pieces, which the next check sees.
+    static constexpr size_t kSlotsPerHold = 8;
+    void CopyProjectInPieces(Project& dst, const char* who) {
+        { SceneLock lock(sequencer.PatternMutex(), who); static_cast<ProjectHead&>(dst) = project; }
+        for (size_t i = 0; i < PatternBank::size(); i += kSlotsPerHold) {
+            SceneLock lock(sequencer.PatternMutex(), who);
+            const size_t end = std::min(i + kSlotsPerHold, PatternBank::size());
+            for (size_t k = i; k < end; ++k) dst.patterns[k] = project.patterns[k];
+        }
+    }
     bool SaveSnapshot(const std::string& path, bool keepHistory = true) {
         Project snap;
-        { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); snap = project; }
+        CopyProjectInPieces(snap, "SaveSnapshot");
         return SaveProject(snap, path, keepHistory);
     }
 
     bool IsUntitled() const { return userdirs::IsUntitledPath(projectPath); }
     // What the open project looks like as text, without the scene being looked at (that is not an edit).
-    // LIVE-4: the project is copied under a short lock (a memory copy) and turned into text outside it; before, the whole text was
-    // built while the sound waited, twice a second.
+    // LIVE-4: the project is copied under short locks (CopyProjectInPieces) and turned into text outside them; before, the whole text
+    // was built while the sound waited, twice a second.
     size_t DocHash() {
         Project snap;
-        { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); snap = project; }
+        CopyProjectInPieces(snap, "DocHash");
         snap.currentPattern = 0; snap.chordSceneEdit = 0;
         return std::hash<std::string>{}(ProjectToString(snap));
     }
@@ -4760,14 +4775,14 @@ struct AppState {
         clean = clean.substr(a, clean.find_last_not_of(' ') - a + 1);
         std::string path = UniqueProjectPathForName(clean);
         std::string oldName = project.name;
-        { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); project.name = clean; }
+        { SceneLock lock(sequencer.PatternMutex(), "SaveProjectAs"); project.name = clean; }
         // v44.50: the samples go with the project. First, so the file names the kits as they are there (C4b e: a kit may get a
         // free name next to another project's kit of the same name).
         const std::map<std::string, std::string> renamed = CopySamplesTo(path);
         if (!SaveSnapshot(path)) {
             std::map<std::string, std::string> back; for (const auto& kv : renamed) back[kv.second] = kv.first;
             RenameKits(back);   // the open project stays where it is: its kits keep their names there
-            { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); project.name = oldName; }
+            { SceneLock lock(sequencer.PatternMutex(), "SaveProjectAs"); project.name = oldName; }
             SetStatus("SAVE AS FAILED: " + path); statusMessageTimer = 8.0f;
             return false;
         }
@@ -4803,7 +4818,7 @@ struct AppState {
     }
     // Cmd+N: a new Untitled project. The open one has been dealt with by the caller (RequestDoc).
     void NewDocument() {
-        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        SceneLock lock(sequencer.PatternMutex(), "NewDocument");
         const std::string keepKitFolder = IsProjectKit(project.kitFolder) ? Project{}.kitFolder : project.kitFolder;   // C4b (e): a kit inside the old project's folder stays there
         Project fresh;
         fresh.name = "Untitled";

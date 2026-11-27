@@ -7748,6 +7748,29 @@ int main(int argc, char** argv) {
         audio.join();
         check(m.MaxHoldUs() == 0 && m.HeldTotalUs() == before, "lock-5 names: the audio thread's own render is not counted as the screen holding the sound");
     }
+    {   // LIVE-5 (Mac measurement after #29): the "Edited" check and the recovery copy take the project in short pieces, not in one hold
+        AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);
+        a.project.name = "Pieces";
+        a.project.patterns[0].bpm = 133.0f;
+        a.project.patterns[kNumPatterns - 1].tracks[2].steps[5].active = true;
+        a.project.patterns[kNumPatterns].name = "last slot";
+        a.project.songChainLength = 3;
+        Project snap;
+        a.CopyProjectInPieces(snap, "TEST");
+        check(ProjectToString(snap) == ProjectToString(a.project) && snap.patterns[kNumPatterns].name == "last slot",
+              "lock-5 pieces: the copy made piece by piece is the whole project (head, first and last slot)");
+        check(!a.sequencer.PatternMutex().HeldByThisThread(), "lock-5 pieces: the lock is free after the copy");
+        auto slurp = [](const std::string& path) { std::ifstream in(path, std::ios::binary); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+        const std::string st = slurp("src/app/AppState.h");
+        check(st.find("snap = project") == std::string::npos && st.find("CopyProjectInPieces(snap, \"DocHash\")") != std::string::npos
+              && st.find("CopyProjectInPieces(snap, \"SaveSnapshot\")") != std::string::npos,
+              "lock-5 pieces: DocHash and SaveSnapshot never copy the whole project under one lock");
+        bool unnamed = false;
+        for (const char* f : {"src/app/AppState.h", "src/app/MixLab.h", "src/ui_desktop/Shell.cpp", "src/main.cpp", "src/ui_desktop/ChordLabPanel.cpp",
+                              "src/ui_desktop/ContextPanel.cpp", "src/ui_desktop/BricksPanel.cpp", "src/ui_desktop/MixerSync.h"})
+            if (slurp(f).find("std::lock_guard<SceneMutex>") != std::string::npos) { unnamed = true; std::cout << "  unnamed scene lock in " << f << "\n"; }
+        check(!unnamed, "lock-5 names: the screen's scene locks all have a name (the XRUN hint never says OTHER for them)");
+    }
     {   // N1 (LIVE-5 / LIVE-6): Settings > Audio rules
         using namespace t8::audiosettings;
         check(ValidBuffer(256) == 256 && ValidBuffer(512) == 512 && ValidBuffer(128) == 128, "audio-set: the three offered buffer sizes are kept");
