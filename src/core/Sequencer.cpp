@@ -27,6 +27,7 @@ void Sequencer::Init(AudioEngine* engine, Project* project) {
     synthNoteOffScheduled_.fill(false);
     chordNoteOffScheduled_ = false;
     chordHeldCount_ = 0;
+    perfOn_ = false; perfPrevCount_ = 0;
     pendingRatchets_.clear();
     prefire_.fill(Prefire{});
 }
@@ -68,6 +69,7 @@ void Sequencer::Stop() {
     engine_->SamplerFadeOut();
     chordNoteOffScheduled_ = false;
     chordHeldCount_ = 0;
+    perfOn_ = false; perfPrevCount_ = 0;
     fillWas_ = false; fillPosPrev_ = -1; fillActiveUi_.store(false);
     engine_->FillSampleStop();
     ApplyStepOverlay();   // not playing: the arrangement mutes let go
@@ -84,6 +86,7 @@ void Sequencer::Panic() {
     engine_->SamplerFadeOut();
     chordNoteOffScheduled_ = false;
     chordHeldCount_ = 0;
+    perfOn_ = false;
 }
 
 void Sequencer::PlayChainFrom(int pos, bool loopBrick) {
@@ -179,14 +182,37 @@ void Sequencer::ApplyChordScene(int c, bool onBoundary) {
     if (onBoundary) {
         chordBaseTick_ = globalTick_;
         if (chordNoteOffScheduled_) chordNoteOffTick_ = 0;
+        if (perfOn_) PerfStop(0.0);
     } else {
         chordBaseTick_ = playing_.load() ? globalTick_ + 1 : 0;
-        if (chordNoteOffScheduled_ || chordHeldCount_ > 0) {
+        if (chordNoteOffScheduled_ || chordHeldCount_ > 0 || perfOn_) {
             engine_->ChordNoteOff();
             chordNoteOffScheduled_ = false;
             chordHeldCount_ = 0;
+            perfOn_ = false;
         }
     }
+}
+
+void Sequencer::PerfStop(double at) {
+    RatchetEvent ev;
+    ev.isDrum = false; ev.isChordVoice = true; ev.chordVoice = -1; ev.chordOn = false;
+    ScheduleHit(at, ev);
+    perfOn_ = false;
+}
+
+void Sequencer::PerfEmit() {
+    if (!perfOn_) return;
+    // the chord started perfStart_ steps into its first tick: tick j covers the chord's times [j - perfStart_, j + 1 - perfStart_)
+    const double lo = static_cast<double>(perfTick_) - perfStart_, hi = lo + 1.0;
+    ChordPerfEvents(perf_, lo, hi, [&](const ChordPerfEvent& e) {
+        RatchetEvent ev;
+        ev.isDrum = false; ev.isChordVoice = true;
+        ev.chordVoice = e.voice; ev.chordOn = e.on; ev.synthNote = e.note; ev.velocity = perf_.velocity;
+        ScheduleHit(e.at - lo, ev);
+    });
+    ++perfTick_;
+    if (lo > perf_.span + 1.0) perfOn_ = false;   // every release is out
 }
 
 void Sequencer::FireTick(int tick) {
@@ -227,6 +253,7 @@ void Sequencer::FireTick(int tick) {
     // advancing the tick) -- clear defensively and rebuild fresh for the
     // step that's starting now.
     pendingRatchets_.clear();
+    bool perfDue = perfOn_;   // C2: the chord being performed goes on in this tick unless a new chord starts (see the chord branch)
 
     // TIE detection: a step that (a) has SLIDE set, or (b) is as long as its
     // whole track loop (the "endless pad" case: one chord/note spanning the
@@ -511,6 +538,33 @@ void Sequencer::FireTick(int tick) {
             int cCount = step.chordSize;
             if (chordLiveSlot_ >= 0 && chordLiveCount_ > 0) { cNotes = chordLiveNotes_; cCount = chordLiveCount_; }
             if (cCount == 0) continue;
+            const ChordPlay& cpl = p.chordPlay;
+            perfDue = false;   // a new chord: the one being performed stops here
+            if (!cpl.IsDefault()) {
+                // C2: the PLAY layer performs the chord over its length (ratchets are not used: RHYTHM is the way to re-strike)
+                if (chordNoteOffScheduled_ || chordHeldCount_ > 0 || perfOn_) PerfStop(off);
+                chordNoteOffScheduled_ = false;
+                chordHeldCount_ = 0;
+                ChordPerf& c = perf_;
+                c.play = cpl;
+                ChordPlay one = cpl; one.octaves = 1;   // the chord as voiced (SMOOTH VOICES), without the OCTAVES copies: the chord "before" next time
+                int8_t base[kMaxChordVoices];
+                const int baseN = ChordPerfVoice(cNotes.data(), cCount, one, perfPrev_.data(), perfPrevCount_, base);
+                ChordPlay dbl = cpl; dbl.smooth = false;
+                c.count = ChordPerfVoice(base, baseN, dbl, nullptr, 0, c.notes.data());
+                perfPrevCount_ = baseN;
+                for (int k = 0; k < baseN; ++k) perfPrev_[static_cast<size_t>(k)] = base[k];
+                c.span = std::max(1, static_cast<int>(step.lengthSteps));
+                c.rate = ChordPerfRateSteps(cpl, p.stepsPerBeat);
+                c.velocity = velocity;
+                c.strike = perfStrikes_++;
+                perfOn_ = true;
+                perfTick_ = 0;
+                perfStart_ = std::clamp(off, 0.0, 0.999);
+                PerfEmit();
+                continue;
+            }
+            if (perfOn_) PerfStop(off);   // back to the plain chord: the performed one lets go first
             chordHeldCount_ = cCount;
             int lenSteps = std::max(1, static_cast<int>(step.lengthSteps));
             chordNoteOffTick_ = lenSteps;   // steps left until the release
@@ -552,6 +606,7 @@ void Sequencer::FireTick(int tick) {
         }
     }
 
+    if (perfDue) PerfEmit();
     LookaheadEarlyHits(tick);
 }
 
@@ -749,6 +804,10 @@ void Sequencer::FireRatchetEvent(const RatchetEvent& ev) {
         engine_->TriggerDrum(ev.drumSlot, ev.velocity, ev.drumVariant, ev.drumParams);
     } else if (ev.isSampler) {
         engine_->SamplerNoteOn(ev.synthNote, ev.velocity);
+    } else if (ev.isChordVoice) {
+        if (ev.chordVoice < 0) engine_->ChordNoteOff();
+        else if (ev.chordOn) engine_->ChordVoiceOn(ev.chordVoice, ev.synthNote, ev.velocity, false);
+        else engine_->ChordVoiceOff(ev.chordVoice);
     } else if (ev.isChord) {
         // Re-strike the same chord tones -- retriggers all voices' envelopes
         // together, same "audibly distinct hits, not one sustained note"

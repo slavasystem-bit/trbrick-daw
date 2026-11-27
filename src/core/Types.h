@@ -659,6 +659,48 @@ inline void FromSamplerPatch(SynthSample& s, const SamplerPatch& p) {
     s.tuneCents = p.tuneCents; s.gainDb = p.gainDb; s.mode = p.mode; s.slices = p.slices; s.markCount = p.markCount; s.marks = p.marks; s.fitBars = p.fitBars;
 }
 
+// C2 (CHORD LAB v2, the PLAY layer): HOW the chords of a scene sound. The chord steps hold only WHAT sounds (the notes and how long);
+// the sequencer plays them through these settings at playback, so the loop, a live chord and the lab all go through one performer.
+// The default (STACK, gate 100 %, 1 octave, voices as written) plays exactly as before the layer existed.
+enum class ChordPlayMode : uint8_t { Stack = 0, Arp = 1, Strum = 2, Rhythm = 3 };
+constexpr int kNumChordPlayModes = 4;
+inline const char* ChordPlayModeName(int m) {
+    static const char* const k[kNumChordPlayModes] = {"STACK", "ARP", "STRUM", "RHYTHM"};
+    return k[std::clamp(m, 0, kNumChordPlayModes - 1)];
+}
+constexpr int kNumChordPlayRates = 5;
+inline const char* ChordPlayRateName(int r) {
+    static const char* const k[kNumChordPlayRates] = {"1/32", "1/16", "1/8", "1/4", "1/2"};
+    return k[std::clamp(r, 0, kNumChordPlayRates - 1)];
+}
+inline double ChordPlayRateBeats(int r) {   // a quarter note is one beat
+    static const double k[kNumChordPlayRates] = {0.125, 0.25, 0.5, 1.0, 2.0};
+    return k[std::clamp(r, 0, kNumChordPlayRates - 1)];
+}
+constexpr int kNumChordPlayOrders = 4;
+inline const char* ChordPlayOrderName(int o) {
+    static const char* const k[kNumChordPlayOrders] = {"UP", "DOWN", "UP-DN", "RND"};
+    return k[std::clamp(o, 0, kNumChordPlayOrders - 1)];
+}
+struct ChordPlay {
+    uint8_t mode = 0;      // ChordPlayMode
+    uint8_t rate = 1;      // index into ChordPlayRate*: ARP / RHYTHM = one hit per rate, STRUM = the time from the first note to the last
+    uint8_t gate = 100;    // 10..100 %: how long a note holds of its hit (STACK / STRUM: of the chord)
+    uint8_t octaves = 1;   // 1..3: ARP climbs this many octaves; the other modes double the chord this many octaves up (6 voices at most)
+    uint8_t order = 0;     // ARP and STRUM: UP / DOWN / UP-DN / RND
+    bool smooth = false;   // SMOOTH VOICES: each chord takes the inversion nearest the chord before it
+    bool IsDefault() const { return mode == 0 && gate == 100 && octaves == 1 && !smooth; }
+    bool operator==(const ChordPlay& o) const { return mode == o.mode && rate == o.rate && gate == o.gate && octaves == o.octaves && order == o.order && smooth == o.smooth; }
+    bool operator!=(const ChordPlay& o) const { return !(*this == o); }
+    void Clamp() {
+        mode = static_cast<uint8_t>(std::min<int>(mode, kNumChordPlayModes - 1));
+        rate = static_cast<uint8_t>(std::min<int>(rate, kNumChordPlayRates - 1));
+        gate = static_cast<uint8_t>(std::clamp<int>(gate, 10, 100));
+        octaves = static_cast<uint8_t>(std::clamp<int>(octaves, 1, 3));
+        order = static_cast<uint8_t>(std::min<int>(order, kNumChordPlayOrders - 1));
+    }
+};
+
 struct Pattern {
     std::string name = "PTN";
     int masterLength = 16; // 1..kMaxSteps
@@ -675,6 +717,7 @@ struct Pattern {
     // NOT touch written chords -- "ADJUST TO SCALE" uses this as the source.
     int8_t chordsKey = -1;
     int8_t chordsScale = -1;
+    ChordPlay chordPlay;         // C2: how the chord track of this scene is played (the PLAY layer)
     // v44.5 arrangement habits of the scene: its role (a tag) and the fill it usually ends with.
     SceneRole role = SceneRole::None;
     FillRule fill;

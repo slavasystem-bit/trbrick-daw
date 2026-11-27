@@ -6,6 +6,7 @@
 #include "app/AppState.h"
 #include "core/ChordLab.h"
 #include "core/ChordAdvice.h"
+#include "core/ChordPerform.h"
 #include "imgui.h"
 #include <functional>
 #include <vector>
@@ -42,6 +43,7 @@ private:
     Slot AdviceSlot(const AppState& app, const Track& jam, const std::vector<Blk>& blocks) const;
     void DrawHeader(AppState& app, ImDrawList* dl, ImVec2 o, float W, int scene);
     void DrawWhatFits(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot);
+    void DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot);
     void ClearJam(AppState& app);
     Track& JamTrack(AppState& app);
     std::vector<Blk> Blocks(const Track& tr) const;

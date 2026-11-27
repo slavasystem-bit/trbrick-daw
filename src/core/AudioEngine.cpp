@@ -139,6 +139,17 @@ void AudioEngine::ChordNoteOff() {
     chordVoice_.NoteOff();
 }
 
+void AudioEngine::ChordVoiceOn(int v, int8_t note, float velocity, bool slide) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    chordVoice_.NoteOnVoice(v, note, velocity, slide);
+    capture_.LogChord(&note, 1);
+}
+
+void AudioEngine::ChordVoiceOff(int v) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    chordVoice_.NoteOffVoice(v);
+}
+
 void AudioEngine::ChordAuditionOn(const int8_t* notes, int count, float velocity) {
     std::lock_guard<std::mutex> lock(mutex_);
     auditionVoice_.SetPatch(chordVoice_.Patch());   // the sound of the chord track as it is now
