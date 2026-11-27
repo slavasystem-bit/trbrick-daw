@@ -67,8 +67,8 @@
 //   insertChorus=0            compat convention as delaySend/reverbSend --
 //                              missing keys default to 0, fully bypassed.)
 //   autopanRate=1             (4th insert-style stage, but applied to pan
-//   autopanDepth=0             directly in Mixer::MixTrack -- see Track::
-//                              autopanRate/autopanDepth in Types.h. Same
+//   autopanDepth=0             directly in Mixer::MixTrack -- see ChannelMix::
+//                              autopanRate/autopanDepth (ChannelMix.h). Same
 //                              optional-key convention, depth=0 default.)
 //   eqHpfHz/eqHpfSlope/eqLowDb/eqLowHz/eqMidDb/eqMidHz/eqMidQ/eqHighDb/eqHighHz  (v29 channel EQ, only
 //                              written when not flat; optional on read)
@@ -287,6 +287,11 @@ void WriteStepFields(std::ostream& f, const Step& s, bool isChord) {
     }
 }
 
+// The channel values of `parts`, one "key=value" line each, in kChannelFields order.
+static void WriteChannel(std::ostream& f, const ChannelMix& c, uint8_t parts) {
+    for (const ChannelField& cf : kChannelFields) if (cf.part & parts) f << cf.key << "=" << c.*cf.member << "\n";
+}
+
 void WriteTrackBody(std::ostream& f, const Track& t) {
     const char* typeStr = "Drum";
     if (t.type == TrackType::Synth) typeStr = "Synth";
@@ -297,8 +302,7 @@ void WriteTrackBody(std::ostream& f, const Track& t) {
     f << "name=" << t.name << "\n";
     f << "length=" << t.length << "\n";
     f << "useOwnLength=" << (t.useOwnLength ? 1 : 0) << "\n";
-    f << "volume=" << t.volume << "\n";
-    f << "pan=" << t.pan << "\n";
+    WriteChannel(f, t, kChLevel | kChPan);   // C3 part 2: the channel values come from kChannelFields (ChannelMix.h)
     if (t.swing >= 0.0f) f << "trackSwing=" << t.swing << "\n";
     if (!t.kitFolder.empty()) f << "trackKit=" << t.kitFolder << "\n";   // v44.26: this drum has a kit of its own
     if (t.defaultVariant != 0) f << "defaultVariant=" << static_cast<int>(t.defaultVariant) << "\n";   // v43.1
@@ -309,22 +313,9 @@ void WriteTrackBody(std::ostream& f, const Track& t) {
     f << "drumDecay=" << t.drumDecay << "\n";
     if (!t.edit.IsDefault())   // v44.52, only when used
         f << "sedit=" << t.edit.start << "|" << t.edit.length << "|" << t.edit.attackMs << "|" << static_cast<int>(t.edit.fineCents) << "|" << static_cast<int>(t.edit.gainDb) << "|" << (t.edit.reverse ? 1 : 0) << "\n";
-    f << "delaySend=" << t.delaySend << "\n";
-    f << "reverbSend=" << t.reverbSend << "\n";
-    f << "insertDrive=" << t.insertDrive << "\n";
-    f << "insertEqTilt=" << t.insertEqTilt << "\n";
-    f << "insertChorus=" << t.insertChorus << "\n";
-    f << "autopanRate=" << t.autopanRate << "\n";
-    f << "autopanDepth=" << t.autopanDepth << "\n";
-    f << "width=" << t.width << "\n";
-    f << "spread=" << t.spread << "\n";
+    WriteChannel(f, t, kChSends | kChInserts | kChStereo);
     // channel EQ (v29): only written when something is not flat, so old files stay byte-identical
-    if (t.eqHpfHz > 20.5f || t.eqLowDb != 0 || t.eqMidDb != 0 || t.eqHighDb != 0) {
-        f << "eqHpfHz=" << t.eqHpfHz << "\n" << "eqHpfSlope=" << t.eqHpfSlope << "\n"
-          << "eqLowDb=" << t.eqLowDb << "\n" << "eqLowHz=" << t.eqLowHz << "\n"
-          << "eqMidDb=" << t.eqMidDb << "\n" << "eqMidHz=" << t.eqMidHz << "\n" << "eqMidQ=" << t.eqMidQ << "\n"
-          << "eqHighDb=" << t.eqHighDb << "\n" << "eqHighHz=" << t.eqHighHz << "\n";
-    }
+    if (t.eqHpfHz > 20.5f || t.eqLowDb != 0 || t.eqMidDb != 0 || t.eqHighDb != 0) WriteChannel(f, t, kChEq);
     if (t.euclidOn && t.type != TrackType::Chord) {   // v44.55, only when on: older files stay byte for byte the same
         f << "euclid=" << static_cast<int>(t.euclidHits) << "," << static_cast<int>(t.euclidSteps) << "," << static_cast<int>(t.euclidRotate) << "\n";
         for (const auto& o : t.euclidOrig) { f << "eorig" << static_cast<int>(o.first) << "="; WriteStepFields(f, o.second, false); f << "\n"; }
@@ -682,17 +673,13 @@ struct Sanitizer {
         if (t.euclidSteps < 1 || t.euclidSteps > kMaxSteps) { t.euclidSteps = static_cast<uint8_t>(std::clamp<int>(t.euclidSteps, 1, kMaxSteps)); ++fixed; }
         if (t.euclidHits > t.euclidSteps) { t.euclidHits = t.euclidSteps; ++fixed; }
         if (!std::isfinite(t.swing)) { t.swing = -1.0f; ++fixed; }
-        F(t.volume, 0.0f, 1.0f, 0.8f);
-        F(t.pan, -1.0f, 1.0f, 0.0f);
         F(t.drumTune, -24.0f, 24.0f, 0.0f);
         F(t.drumDecay, 0.25f, 2.0f, 1.0f);
-        F(t.delaySend, 0.0f, 1.0f, 0.0f);
-        F(t.reverbSend, 0.0f, 1.0f, 0.0f);
-        F(t.insertDrive, 0.0f, 1.0f, 0.0f);
-        F(t.insertEqTilt, -1.0f, 1.0f, 0.0f);
-        F(t.insertChorus, 0.0f, 1.0f, 0.0f);
-        F(t.autopanRate, 0.05f, 8.0f, 1.0f);
-        F(t.autopanDepth, 0.0f, 1.0f, 0.0f);
+        for (const ChannelField& cf : kChannelFields) {   // C3 part 2: every channel value, range and default from ChannelMix.h
+            float& v = t.*cf.member;
+            F(v, cf.lo, cf.hi, cf.def);
+            if (cf.onOff && v != 0.0f && v != 1.0f) { v = v >= 0.5f ? 1.0f : 0.0f; ++fixed; }
+        }
     }
     void PatternAt(Pattern& p) {
         I(p.masterLength, 1, kMaxSteps);
@@ -822,8 +809,7 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
         else if (key == "defaultVariant") t.defaultVariant = static_cast<uint8_t>(std::clamp(std::atoi(val.c_str()), 0, 15));
         else if (key == "grooveOn") t.grooveOn = std::atoi(val.c_str()) != 0;
         else if (key == "trackSwing") t.swing = std::stof(val) < 0.0f ? -1.0f : std::clamp(std::stof(val), 0.0f, 0.75f);
-        else if (key == "volume") t.volume = std::stof(val);
-        else if (key == "pan") t.pan = std::stof(val);
+        else if (const ChannelField* cf = FindChannelField(key.c_str())) t.*cf->member = std::stof(val);   // C3 part 2; the Sanitizer keeps it in range
         else if (key == "mute") t.mute = std::atoi(val.c_str()) != 0;
         else if (key == "solo") t.solo = std::atoi(val.c_str()) != 0;
         else if (key == "drumTune") t.drumTune = std::stof(val);
@@ -835,24 +821,6 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
                 t.edit.fineCents = static_cast<int8_t>(std::clamp(fc, -100, 100)); t.edit.gainDb = static_cast<int8_t>(std::clamp(gd, -24, 12)); t.edit.reverse = rv != 0;
             }
         }
-        else if (key == "delaySend") t.delaySend = std::stof(val);
-        else if (key == "reverbSend") t.reverbSend = std::stof(val);
-        else if (key == "insertDrive") t.insertDrive = std::stof(val);
-        else if (key == "insertEqTilt") t.insertEqTilt = std::stof(val);
-        else if (key == "insertChorus") t.insertChorus = std::stof(val);
-        else if (key == "autopanRate") t.autopanRate = std::stof(val);
-        else if (key == "autopanDepth") t.autopanDepth = std::stof(val);
-        else if (key == "width") t.width = std::clamp(std::stof(val), 0.0f, 2.0f);
-        else if (key == "spread") t.spread = std::clamp(std::stof(val), 0.0f, 1.0f);
-        else if (key == "eqHpfHz") t.eqHpfHz = std::clamp(std::stof(val), 20.0f, 500.0f);
-        else if (key == "eqHpfSlope") t.eqHpfSlope = std::stof(val) >= 0.5f ? 1.0f : 0.0f;
-        else if (key == "eqLowDb") t.eqLowDb = std::clamp(std::stof(val), kEqMinDb, kEqMaxDb);
-        else if (key == "eqLowHz") t.eqLowHz = std::clamp(std::stof(val), 30.0f, 500.0f);
-        else if (key == "eqMidDb") t.eqMidDb = std::clamp(std::stof(val), kEqMinDb, kEqMaxDb);
-        else if (key == "eqMidHz") t.eqMidHz = std::clamp(std::stof(val), 80.0f, 10000.0f);
-        else if (key == "eqMidQ") t.eqMidQ = std::clamp(std::stof(val), 0.3f, 6.0f);
-        else if (key == "eqHighDb") t.eqHighDb = std::clamp(std::stof(val), kEqMinDb, kEqMaxDb);
-        else if (key == "eqHighHz") t.eqHighHz = std::clamp(std::stof(val), 1500.0f, 16000.0f);
         else if (key.rfind("step", 0) == 0) {
             int idx = std::atoi(key.substr(4).c_str());
             if (idx >= 0 && idx < kMaxSteps) parseStepFields(t.steps[idx], val);
