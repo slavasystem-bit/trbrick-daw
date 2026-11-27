@@ -7,7 +7,8 @@
 //
 //   1. TOUR: every tab, every tool (MIX LAB, CHORD LAB, MASTER FX), every track selected, NOTES / SOUND / MIX on TRACK, the groove
 //      window, the help screen, an empty and a filled track, playing and stopped, at three window sizes.
-//   2. MONKEY: random clicks, double clicks, right clicks, drags, the wheel and keys (with and without Cmd / Shift / Option) all
+//   2. SWEEP: in 11 screen setups every control with a label is pressed once (the setup is made again before each press).
+//   3. MONKEY: random clicks, double clicks, right clicks, drags, the wheel and keys (with and without Cmd / Shift / Option) all
 //      over the screen, a few hundred frames per seed.
 //
 // It fails on: a crash (the process dies, CI shows it), any ImGui assertion (kept on here even in Release, see uitest_imconfig.h:
@@ -39,6 +40,22 @@ std::string g_phase = "start";
 int g_frame = 0;
 }
 
+// ---- ImGui test-engine hooks: every control drawn in the current frame, with its rectangle and label ----
+namespace {
+struct SeenControl { ImGuiID id = 0; ImRect bb; std::string label; };
+std::vector<SeenControl> g_seen;        // this frame
+std::vector<SeenControl> g_lastFrame;   // the frame before (what is on screen now)
+}
+void ImGuiTestEngineHook_ItemAdd(ImGuiContext*, ImGuiID id, const ImRect& bb, const ImGuiLastItemData*) {
+    if (id != 0) g_seen.push_back({id, bb, std::string()});
+}
+void ImGuiTestEngineHook_ItemInfo(ImGuiContext*, ImGuiID id, const char* label, ImGuiItemStatusFlags) {
+    if (!label) return;
+    for (auto it = g_seen.rbegin(); it != g_seen.rend(); ++it) if (it->id == id) { it->label = label; return; }
+}
+void ImGuiTestEngineHook_Log(ImGuiContext*, const char*, ...) {}
+const char* ImGuiTestEngine_FindItemDebugLabel(ImGuiContext*, ImGuiID) { return nullptr; }
+
 void T8UiAssertFailed(const char* expr, const char* file, int line) {
     std::fprintf(stderr, "\nUITEST FAIL: ImGui assertion `%s` (%s:%d)\n  while: %s, frame %d\n", expr, file, line, g_phase.c_str(), g_frame);
     std::fflush(stderr);
@@ -54,7 +71,7 @@ struct Runner {
     DesktopFonts fonts;
     ImVec2 size{1440.0f, 900.0f};
     int lockMisses = 0, badAudio = 0, frames = 0;
-    int clicks = 0, clicksOnItems = 0;   // how many clicks landed on a button / field / grid cell (the test must really press things)
+    int clicks = 0, clicksOnItems = 0, swept = 0;   // how many clicks landed on a button / field / grid cell (the test must really press things)
     std::vector<ImGuiID> pressed;        // every control that became active at least once
     std::vector<float> audio;
 
@@ -82,9 +99,12 @@ struct Runner {
         if (app.engine.ConsumeDspFault()) app.engine.ResetDsp();
         app.quitRequested = false;   // Cmd+Q / File > Quit only stop the program's loop; here the test goes on
 
+        g_seen.clear();
+        ImGui::GetCurrentContext()->TestEngineHookItems = true;
         ImGui::NewFrame();
         DrawShellFrame(app, panels, fonts);
         ImGui::Render();
+        g_lastFrame.swap(g_seen);
         if (const ImGuiID id = ImGui::GetCurrentContext()->ActiveId; id != 0 && std::find(pressed.begin(), pressed.end(), id) == pressed.end()) pressed.push_back(id);
         FakeTextures();
         app.TickDocument(io.DeltaTime);
@@ -194,6 +214,57 @@ void Tour(Runner& r) {
         r.Key(k);
 }
 
+// Every labelled control on the screen, pressed once each, in each screen setup (TEST-5 review: random clicks alone found the
+// missing scene locks only after ~60 seeds). Before each press the setup is made again, after it Esc twice closes what opened.
+void Sweep(Runner& r) {
+    AppState& app = r.app;
+    struct Setup { const char* name; int tab; AppState::Tool tool; int mode; int track; };
+    const Setup setups[] = {
+        {"LIVE", 2, AppState::Tool::None, 0, 0}, {"LIVE synth", 2, AppState::Tool::None, 0, 7},
+        {"LIVE MIX LAB", 2, AppState::Tool::MixLab, 0, 0}, {"LIVE CHORD LAB", 2, AppState::Tool::ChordLab, 0, 9},
+        {"LIVE MASTER FX", 2, AppState::Tool::MasterFx, 0, 0},
+        {"TRACK NOTES", 1, AppState::Tool::None, 0, 0}, {"TRACK NOTES synth", 1, AppState::Tool::None, 0, 7},
+        {"TRACK SOUND drum", 1, AppState::Tool::None, 1, 0}, {"TRACK SOUND synth", 1, AppState::Tool::None, 1, 7},
+        {"TRACK MIX", 1, AppState::Tool::None, 2, 0}, {"TRACK CHORD LAB", 1, AppState::Tool::ChordLab, 0, 9},
+    };
+    r.size = ImVec2(1440.0f, 900.0f);
+    for (const Setup& su : setups) {
+        auto setUp = [&]() {
+            if (su.tab == 1 && app.project.songChainLength == 0) { SceneLock lock(app.sequencer.PatternMutex(), "UITEST"); app.ThrowIntoChain(); }
+            app.helpOpen = false;
+            app.uiTabRequest = su.tab;
+            app.OpenTool(su.tool);
+            app.trackEditMode = su.mode;
+            app.seqCursorTrack = su.track;
+            app.grooveViewOpen = false;
+            r.Frames(2);
+        };
+        setUp();
+        std::vector<SeenControl> controls;
+        for (const SeenControl& c : g_lastFrame) {
+            if (c.label.empty() || c.label.compare(0, 2, "##") == 0) continue;
+            if (c.bb.GetWidth() < 2.0f || c.bb.GetHeight() < 2.0f || c.bb.Max.x < 0 || c.bb.Max.y < 0 || c.bb.Min.x > r.size.x || c.bb.Min.y > r.size.y) continue;
+            bool dup = false;
+            for (const SeenControl& d : controls) if (d.id == c.id) dup = true;
+            if (!dup) controls.push_back(c);
+        }
+        for (const SeenControl& c : controls) {
+            const std::string shown = c.label.substr(0, c.label.find("##"));
+            g_phase = std::string("sweep ") + su.name + ": press \"" + shown + "\"";
+            setUp();
+            const SeenControl* now = nullptr;
+            for (const SeenControl& d : g_lastFrame) if (d.id == c.id) now = &d;
+            if (!now) continue;   // gone after an earlier press changed the screen
+            r.Click(now->bb.GetCenter());
+            ++r.swept;
+            r.Calm();
+        }
+    }
+    app.OpenTool(AppState::Tool::None);
+    app.trackEditMode = 0;
+    r.Frames(2);
+}
+
 void Monkey(Runner& r, unsigned seed, int frames) {
     std::mt19937 rng(seed);
     auto R = [&](int n) { return static_cast<int>(rng() % static_cast<unsigned>(n)); };
@@ -276,6 +347,7 @@ int main(int argc, char** argv) {
     Runner r{app, panels, fonts};
     r.Frames(3);
     Tour(r);
+    Sweep(r);
     const int tourFrames = r.frames;
     for (int s = 1; s <= seeds; ++s) Monkey(r, static_cast<unsigned>(s), frames);
 
@@ -285,10 +357,10 @@ int main(int argc, char** argv) {
     app.loader.Stop();
     ImGui::DestroyContext();
 
-    std::printf("uitest: %d frames (tour %d, monkey %d seeds x %d), %d clicks (%d on a control), %zu different controls pressed, scene lock misses %d, bad audio blocks %d\n",
-                r.frames, tourFrames, seeds, frames, r.clicks, r.clicksOnItems, r.pressed.size(), r.lockMisses, r.badAudio);
+    std::printf("uitest: %d frames (tour + sweep %d, %d labelled controls pressed one by one; monkey %d seeds x %d), %d clicks (%d on a control), %zu different controls pressed, scene lock misses %d, bad audio blocks %d\n",
+                r.frames, tourFrames, r.swept, seeds, frames, r.clicks, r.clicksOnItems, r.pressed.size(), r.lockMisses, r.badAudio);
     // a test that clicks into nothing proves nothing: at least one click in five must land on a control and many different ones must be pressed
-    const bool reached = seeds == 0 || (r.clicksOnItems * 5 > r.clicks && r.pressed.size() >= 50);
+    const bool reached = r.swept >= 100 && (seeds == 0 || (r.clicksOnItems * 5 > r.clicks && r.pressed.size() >= 50));
     if (!reached) std::printf("UITEST FAIL: the clicks did not reach the controls (is the screen drawn?)\n");
     const bool ok = r.lockMisses == 0 && r.badAudio == 0 && reached;
     std::printf("%s\n", ok ? "UI TEST PASSED" : "UI TEST FAILED");
