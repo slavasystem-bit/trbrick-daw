@@ -5675,6 +5675,16 @@ int main(int argc, char** argv) {
                   "c3: Option+click puts the default back on mixer / kick / sample cells and on patch knobs");
             check(hd.find("ValueField(\"##pitchFader\"") != std::string::npos && hd.find("MousePos.x - p0.x") == std::string::npos,
                   "c3: the PITCH fader moves from where it is (no jump to the click)");
+            {   // review of #54: the PITCH notch at 0 is +-0.2 %, so small values can be set (typed, dragged)
+                for (float lim : {8.0f, 16.0f}) {
+                    t8::desktop::ValueSpec ps = t8::desktop::BarSpec(-lim, lim, 0.0f, 150.0f);
+                    ps.fromCenter = true; ps.notch = t8::desktop::kPitchNotchPct; ps.unit = " %";
+                    float tv = 0.0f;
+                    check(vfd::ParseTyped("0.3", ps, &tv) && nearlyEqual(tv, 0.3f, 0.001f) && vfd::ParseTyped("0.1", ps, &tv) && tv == 0.0f &&
+                          nearlyEqual(vfd::DragValue(0.0f, 40.0f, true, ps), 40.0f * ps.step * 0.1f, 0.001f),
+                          lim < 10.0f ? "c3: PITCH (+-8 %) takes 0.3 % typed and a fine drag, 0.1 % snaps to 0" : "c3: PITCH (+-16 %) takes 0.3 % typed and a fine drag, 0.1 % snaps to 0");
+                }
+            }
             check(ml.find("ValueField(id, &nv, sp, tw)") != std::string::npos && ml.find("MousePos.x - tx") == std::string::npos,
                   "c3: MIX LAB LEVEL / PAN move from where they are, Shift finer");
         }

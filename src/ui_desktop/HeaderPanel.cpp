@@ -71,7 +71,7 @@ float HeaderPanel::DrawPitch(AppState& app, float rightX) {
             const ImVec2 p0 = ImGui::GetCursorScreenPos();
             float v = app.pitchPct.load(std::memory_order_relaxed);
             ValueSpec sp = BarSpec(-lim, lim, 0.0f, fw);
-            sp.fromCenter = true; sp.color = IM_COL32(140, 198, 255, 255); sp.fmt = "%.1f"; sp.unit = " %";
+            sp.fromCenter = true; sp.notch = kPitchNotchPct; sp.color = IM_COL32(140, 198, 255, 255); sp.fmt = "%.1f"; sp.unit = " %";
             const ValueResult r = ValueField("##pitchFader", &v, sp, fw);
             if (r.changed) app.PitchSet(v);
             const bool hov = ImGui::IsItemHovered();
