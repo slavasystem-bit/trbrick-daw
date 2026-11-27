@@ -12,6 +12,7 @@
 #include "Project.h"
 #include "AudioEngine.h"
 #include "DrumBreaks.h"
+#include "ChordPerform.h"
 #include <array>
 #include <cstring>
 #include <mutex>
@@ -531,6 +532,17 @@ private:
     int chordNoteOffTick_ = 0;
     bool chordNoteOffScheduled_ = false;
     int chordHeldCount_ = 0;   // voices currently gated by the chord track (for tie detection)
+    // C2 (the PLAY layer): the chord the performer is playing while the scene's ChordPlay is not the default. Its events are asked for
+    // one tick at a time (see FireTick / PerfEmit), so nothing is queued ahead and a stop or a new chord simply drops the rest.
+    bool perfOn_ = false;
+    ChordPerf perf_;
+    int perfTick_ = 0;            // ticks since the tick the chord started in
+    double perfStart_ = 0.0;      // where in that tick it started (steps)
+    std::array<int8_t, kMaxChordVoices> perfPrev_{};   // the chord before, as voiced (SMOOTH VOICES)
+    int perfPrevCount_ = 0;
+    uint32_t perfStrikes_ = 0;
+    void PerfEmit();               // schedules the events of perf_ that fall in the tick perfTick_, then moves on one tick
+    void PerfStop(double at);      // ends the chord being performed: every voice lets go at `at` (steps into this tick)
 
     // A ratcheted step (Step::ratchet > 1) needs extra retriggers fired
     // partway through its own duration, not just at the step boundary.
@@ -560,6 +572,9 @@ private:
         std::array<int8_t, 6> chordNotes{};
         int chordCount = 0;
         bool slide = false;    // v39: a delayed main hit carries its legato / tie flag
+        bool isChordVoice = false;   // C2: one tone of the PLAY layer: voice >= 0 starts / releases it, voice -1 releases the whole pool
+        int8_t chordVoice = -1;
+        bool chordOn = false;
     };
     std::vector<RatchetEvent> pendingRatchets_;
     static constexpr size_t kMaxPendingRatchets = 512;   // N1: reserved in Init (11 tracks x 4 ratchets per tick is far below)

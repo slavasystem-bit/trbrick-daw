@@ -49,6 +49,13 @@ public:
             voices_[i].NoteOn(notes[i], velocity, slide);
         }
     }
+    // C2 (the PLAY layer): one tone on one voice of the pool, so ARP / STRUM can start and release the tones one by one.
+    void NoteOnVoice(int v, int8_t note, float velocity, bool slide) {
+        if (v >= 0 && v < kMaxChordVoices) voices_[static_cast<size_t>(v)].NoteOn(note, velocity, slide);
+    }
+    void NoteOffVoice(int v) {
+        if (v >= 0 && v < kMaxChordVoices) voices_[static_cast<size_t>(v)].NoteOff();
+    }
     // Releases every voice in the pool -- same "always release everything,
     // even voices that might already be idle" simplicity as SynthVoice::
     // NoteOff, cheap because each engine's own NoteOff is a no-op when

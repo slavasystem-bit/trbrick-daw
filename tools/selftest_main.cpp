@@ -2242,6 +2242,85 @@ int main(int argc, char** argv) {
         check(ownBack, "chord bank off: the scene's own chords play again");
     }
 
+    // ---- C2: the PLAY layer (core/ChordPerform.h and the sequencer) -----
+    {
+        // the events, whole and tick by tick, are the same
+        ChordPerf c; c.notes = {57, 60, 64, 0, 0, 0}; c.count = 3; c.span = 16; c.rate = 1; c.play.mode = 1; c.play.gate = 50;
+        std::vector<ChordPerfEvent> whole, ticks;
+        ChordPerfEvents(c, 0.0, 17.0, [&](const ChordPerfEvent& e) { whole.push_back(e); });
+        for (int t = 0; t < 17; ++t) ChordPerfEvents(c, t, t + 1.0, [&](const ChordPerfEvent& e) { ticks.push_back(e); });
+        bool same = whole.size() == ticks.size() && whole.size() == 32;
+        for (size_t i = 0; same && i < whole.size(); ++i) same = whole[i].at == ticks[i].at && whole[i].on == ticks[i].on && whole[i].note == ticks[i].note && whole[i].voice == ticks[i].voice;
+        check(same, "c2 play: ARP 1/16 over a bar is 16 notes, each with its release, the same whole or one tick at a time");
+        check(whole.size() >= 4 && whole[0].on && whole[0].note == 57 && whole[1].on == false && std::fabs(whole[1].at - 0.5) < 1e-9 && whole[2].note == 60 && whole[4].note == 64,
+              "c2 play: ARP UP climbs the chord, GATE 50 % lets each note go half way to the next");
+        c.play.octaves = 2; c.play.order = 2;
+        std::vector<int> seq; ChordPerfEvents(c, 0.0, 16.0, [&](const ChordPerfEvent& e) { if (e.on) seq.push_back(e.note); });
+        check(seq.size() == 16 && seq[0] == 57 && seq[5] == 76 && seq[6] == 72 && seq[10] == 57, "c2 play: ARP UP-DN over 2 octaves goes 57 .. 76 and back down");
+        ChordPerf s = c; s.play = ChordPlay{}; s.play.mode = 2; s.play.order = 1; s.rate = 1.0;
+        std::vector<ChordPerfEvent> st; ChordPerfEvents(s, 0.0, 17.0, [&](const ChordPerfEvent& e) { st.push_back(e); });
+        check(st.size() == 4 && st[0].note == 64 && st[2].note == 57 && std::fabs(st[2].at - 1.0) < 1e-9 && !st[3].on && st[3].voice == -1 && std::fabs(st[3].at - 16.0) < 1e-9,
+              "c2 play: STRUM DOWN rolls the chord high to low over the RATE and holds it to the end");
+        ChordPerf r = c; r.play = ChordPlay{}; r.play.mode = 3; r.rate = 4.0; r.play.gate = 75;
+        int rOn = 0, rOff = 0; ChordPerfEvents(r, 0.0, 17.0, [&](const ChordPerfEvent& e) { if (e.on) ++rOn; else ++rOff; });
+        check(rOn == 12 && rOff == 8, "c2 play: RHYTHM 1/4 strikes the chord 4 times in a bar, each released at its GATE");
+        const int8_t f[3] = {65, 69, 72}, cmaj[3] = {60, 64, 67};
+        int8_t out[6]; PerfSmooth(cmaj, 3, f, 3, out);
+        check(out[0] == 64 && out[1] == 67 && out[2] == 72, "c2 play: SMOOTH VOICES plays C after F as E G C (the voices move 3 semitones, not 15)");
+        ChordPlay dbl; dbl.octaves = 2;
+        check(ChordPerfVoice(cmaj, 3, dbl, nullptr, 0, out) == 6 && out[5] == 79, "c2 play: OCTAVES 2 doubles a STACK chord an octave up (6 voices)");
+        check(ChordPlay{}.IsDefault() && !ChordPlay{1, 1, 100, 1, 0, false}.IsDefault(), "c2 play: the default is STACK, gate 100 %, 1 octave, as written");
+
+        // the sequencer plays through it
+        Project pp;
+        Pattern& sc = pp.patterns[0]; sc.bpm = 120.0f; sc.masterLength = 16; sc.stepsPerBeat = 4; sc.swing = 0.0f;
+        Step& cs = sc.tracks[kChordTrackIndex].steps[0];
+        cs.active = true; cs.chordSize = 3; cs.chordNotes = {57, 60, 64, 0, 0, 0}; cs.lengthSteps = 16;
+        AudioEngine pe; pe.Init(kSampleRate);
+        pe.GetMixer().SyncFromPattern(sc);
+        Sequencer ps; ps.Init(&pe, &pp);
+        std::vector<float> pbuf(256 * 2);
+        auto run = [&](double secs) {
+            pe.Capture().Start(); ps.Play();
+            const int n = static_cast<int>(secs * kSampleRate);
+            for (int d = 0; d < n; d += 256) ps.RenderAndAdvance(pbuf.data(), std::min(256, n - d), kSampleRate);
+            ps.Stop();
+            return pe.Capture().Events();
+        };
+        auto ev0 = run(1.9);
+        int chords = 0; for (const auto& e : ev0) if (e.isChord) ++chords;
+        check(chords == 1 && ev0.size() >= 1 && ev0[0].noteCount == 3, "c2 play: the default plays the chord as one stack, as before");
+        sc.chordPlay.mode = 1; sc.chordPlay.rate = 1; sc.chordPlay.gate = 50;
+        auto ev1 = run(1.99);
+        std::vector<std::pair<double, int>> arp; for (const auto& e : ev1) if (e.isChord) arp.push_back({e.timeSeconds, e.notes[0]});
+        check(arp.size() == 16 && arp[0].second == 57 && arp[1].second == 60 && arp[2].second == 64 && arp[3].second == 57 && std::fabs(arp[1].first - 0.125) < 0.01 && std::fabs(arp[15].first - 1.875) < 0.01,
+              "c2 play: ARP 1/16 at 120 BPM plays 16 notes in the bar, one every 1/8 s, up the chord");
+        sc.chordPlay = ChordPlay{}; sc.chordPlay.mode = 2; sc.chordPlay.rate = 1;
+        auto ev2 = run(0.5);
+        std::vector<double> strum; for (const auto& e : ev2) if (e.isChord) strum.push_back(e.timeSeconds);
+        check(strum.size() == 3 && std::fabs(strum[1] - 0.0625) < 0.01 && std::fabs(strum[2] - 0.125) < 0.01, "c2 play: STRUM 1/16 rolls the three notes in over 1/8 s");
+        sc.chordPlay = ChordPlay{}; sc.chordPlay.octaves = 2; sc.chordPlay.smooth = true;   // review of PR 46: a held STACK with OCTAVES / SMOOTH
+        auto ev3 = run(4.5);   // two loop restarts of a chord that spans the loop
+        int held = 0; int heldN = 0; for (const auto& e : ev3) if (e.isChord) { ++held; heldN = e.noteCount; }
+        sc.chordPlay = ChordPlay{};
+        auto ev4 = run(4.5);
+        int plain = 0; for (const auto& e : ev4) if (e.isChord) ++plain;
+        check(held == plain && held == 3 && heldN == 6,
+              "c2 play: STACK at gate 100 % with OCTAVES 2 goes the plain way: one 6-note chord per loop, struck as the plain chord is (a tie over the restart)");
+        ps.Stop();
+        // saved with the scene, only when changed
+        sc.chordPlay = ChordPlay{3, 2, 60, 2, 1, true};
+        pp.patterns[1].chordPlay = ChordPlay{};
+        check(SaveProject(pp, "selftest_tmp_safety/chordplay.t8proj"), "c2 play: save");
+        Project lp;
+        check(LoadProject(lp, "selftest_tmp_safety/chordplay.t8proj") && lp.patterns[0].chordPlay == ChordPlay{3, 2, 60, 2, 1, true} && lp.patterns[1].chordPlay.IsDefault() && LastLoadFixedValues() == 0,
+              "c2 play: PLAY is saved with the scene and comes back");
+        std::ifstream pin("selftest_tmp_safety/chordplay.t8proj");
+        const std::string ptxt((std::istreambuf_iterator<char>(pin)), std::istreambuf_iterator<char>());
+        size_t nPlay = 0; for (size_t at = ptxt.find("chordPlay="); at != std::string::npos; at = ptxt.find("chordPlay=", at + 1)) ++nPlay;
+        check(nPlay == 1, "c2 play: a scene with the default PLAY writes nothing");
+    }
+
     // ---- Chord bank at the app level: seeding, editing, undo, progressions, key follow -----
     {
         AppState ba;
@@ -3321,7 +3400,8 @@ int main(int argc, char** argv) {
                           "fill c4b: 1/2 BEAT on a brick and on a scene survives a save / load");
                     {   // review of PR 44: a 0 in a file from before format 10 is not half a beat (it was never written; it reads as 1 beat, as before)
                         std::ifstream in("selftest_arr.t8proj"); std::string t((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
-                        const std::string cur = "format=" + std::to_string(kProjectFormatVersion); const size_t at = t.find(cur); if (at != std::string::npos) t.replace(at, cur.size(), "format=9");
+                        const std::string cur = "format=" + std::to_string(kProjectFormatVersion);   // the format this program writes, whatever its number
+                        const size_t at = t.find(cur); if (at != std::string::npos) t.replace(at, cur.size(), "format=9");
                         { std::ofstream out("selftest_arr.t8proj", std::ios::trunc); out << t; }
                         Project po; check(LoadProject(po, "selftest_arr.t8proj") && po.songChain[1].fill.beats == 1 && po.patterns[1].fill.beats == 1,
                                           "fill c4b: a fill length of 0 in a format 9 file reads as 1 beat");
@@ -5777,6 +5857,9 @@ int main(int argc, char** argv) {
             check(lab.find("void ChordLabPanel::UndoAll") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB\");\n        n = app.UndoBackTo(labMark_);") != std::string::npos &&
                   lab.find("labMark_ = app.UndoMark();") != std::string::npos,
                   "c2 ui: UNDO ALL goes back to the marker taken at open, under the scene lock");
+            check(lab.find("void ChordLabPanel::DrawPlay") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB PLAY\");\n        app.PushUndo();") != std::string::npos &&
+                  lab.find("ChordPerfEvents(c, t, t + 1.0") != std::string::npos,
+                  "c2 ui: PLAY edits the scene's ChordPlay as one undo step under the lock, and draws the same events the sequencer plays");
         }
         // melody: bass A A F F A F (on the beat) + a D passing note
         auto patp = std::make_unique<Pattern>(); Pattern& pat = *patp; pat.stepsPerBeat = 4; pat.masterLength = 16;

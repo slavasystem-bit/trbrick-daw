@@ -518,6 +518,142 @@ void ChordLabPanel::DrawWhatFits(AppState& app, ImDrawList* dl, ImVec2 a, float 
     }
 }
 
+// C2: PLAY, how the chords of the scene sound (the scene's ChordPlay, applied by the sequencer while it plays: core/ChordPerform.h).
+// Every change is one undo step of the scene; it never starts a draft (the chords stay as they are, only the playing changes).
+void ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot) {
+    const int scene = SceneShown(app);
+    Pattern& pat = app.project.patterns[static_cast<size_t>(scene)];
+    ChordPlay cp = pat.chordPlay;
+    Text(dl, a, vis::kTextDim, "PLAY \xC2\xB7 HOW IT SOUNDS", 12.0f);
+    dl->AddLine(ImVec2(a.x + TextW("PLAY \xC2\xB7 HOW IT SOUNDS", 12.0f) + 8, a.y + 7), ImVec2(a.x + w, a.y + 7), vis::kLine, 1.0f);
+    bool changed = false, started = false, cancelled = false;
+    auto commitStep = [&]() { started = true; };
+    ImGui::PushID("##play");
+    ImGui::SetCursorScreenPos(ImVec2(a.x, a.y + 22));
+    {
+        int m = cp.mode;
+        static const char* const kModes[kNumChordPlayModes] = {"STACK", "ARP", "STRUM", "RHYTHM"};
+        if (Segmented("##pmode", &m, kModes, kNumChordPlayModes, (w - 9.0f) / 4.0f)) { cp.mode = static_cast<uint8_t>(m); changed = true; commitStep(); }
+        if (ImGui::IsItemHovered()) Hint("STACK: the notes together.  ARP: one note after another.  STRUM: the notes rolled in quickly, like a guitar.  RHYTHM: the chord struck again at the RATE.");
+    }
+    const float fy = a.y + 58.0f;
+    const float cw = (w - 12.0f) / 3.0f;
+    const bool arp = cp.mode == static_cast<uint8_t>(ChordPlayMode::Arp);
+    const bool stack = cp.mode == static_cast<uint8_t>(ChordPlayMode::Stack);
+    const char* rateLabel = cp.mode == static_cast<uint8_t>(ChordPlayMode::Strum) ? "SPREAD" : "RATE";
+    const char* labels[3] = {rateLabel, "GATE", "OCTAVES"};
+    for (int i = 0; i < 3; ++i) Text(dl, ImVec2(a.x + i * (cw + 6.0f), fy), vis::kTextDim, labels[i], 11.0f);
+    {
+        ImGui::SetCursorScreenPos(ImVec2(a.x, fy + 16));
+        float v = cp.rate;
+        ValueSpec sp; sp.lo = 0; sp.hi = kNumChordPlayRates - 1; sp.step = 0.05f; sp.wheel = 1; sp.def = 1; sp.integer = true; sp.text = ChordPlayRateName(cp.rate);
+        const ValueResult r = ValueField("##prate", &v, sp, cw, !stack);
+        if (r.started) commitStep();
+        if (r.changed) { cp.rate = static_cast<uint8_t>(std::lround(v)); changed = true; }
+        if (r.cancelled) cancelled = true;
+        if (ImGui::IsItemHovered()) Hint(stack ? "RATE is for ARP, STRUM and RHYTHM." : "ARP / RHYTHM: one hit every %s note.  STRUM: the time from the first note to the last.", ChordPlayRateName(cp.rate));
+    }
+    {
+        ImGui::SetCursorScreenPos(ImVec2(a.x + cw + 6.0f, fy + 16));
+        float v = cp.gate;
+        ValueSpec sp; sp.lo = 10; sp.hi = 100; sp.step = 0.5f; sp.wheel = 5; sp.def = 100; sp.integer = true; sp.unit = " %";
+        const ValueResult r = ValueField("##pgate", &v, sp, cw);
+        if (r.started) commitStep();
+        if (r.changed) { cp.gate = static_cast<uint8_t>(std::lround(v)); changed = true; }
+        if (r.cancelled) cancelled = true;
+        if (ImGui::IsItemHovered()) Hint("How long a note holds: 100 %% = until the next hit (STACK / STRUM: the whole chord), less = shorter, more air.");
+    }
+    {
+        ImGui::SetCursorScreenPos(ImVec2(a.x + 2 * (cw + 6.0f), fy + 16));
+        float v = cp.octaves;
+        ValueSpec sp; sp.lo = 1; sp.hi = 3; sp.step = 0.05f; sp.wheel = 1; sp.def = 1; sp.integer = true;
+        const ValueResult r = ValueField("##poct", &v, sp, cw);
+        if (r.started) commitStep();
+        if (r.changed) { cp.octaves = static_cast<uint8_t>(std::lround(v)); changed = true; }
+        if (r.cancelled) cancelled = true;
+        if (ImGui::IsItemHovered()) Hint(arp ? "ARP climbs this many octaves." : "The chord doubled this many octaves up (6 voices at most).");
+    }
+    const float oy = fy + 52.0f;
+    Text(dl, ImVec2(a.x, oy), vis::kTextDim, "ORDER", 11.0f);
+    ImGui::SetCursorScreenPos(ImVec2(a.x, oy + 16));
+    {
+        int ord = cp.order;
+        static const char* const kOrd[kNumChordPlayOrders] = {"UP", "DOWN", "UP-DN", "RND"};
+        ImGui::BeginDisabled(!(arp || cp.mode == static_cast<uint8_t>(ChordPlayMode::Strum)));
+        if (Segmented("##pord", &ord, kOrd, kNumChordPlayOrders, (w - 9.0f) / 4.0f)) { cp.order = static_cast<uint8_t>(ord); changed = true; commitStep(); }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("ARP and STRUM: which note comes first. UP-DN strums go down every second chord; RND is the same for the same chord every time.");
+    }
+    ImGui::SetCursorScreenPos(ImVec2(a.x, oy + 52));
+    {
+        bool sm = cp.smooth;
+        if (Check(sm ? "SMOOTH VOICES \xC2\xB7 ON" : "SMOOTH VOICES \xC2\xB7 OFF", &sm, w)) { cp.smooth = sm; changed = true; commitStep(); }
+        if (ImGui::IsItemHovered()) Hint("Each chord takes the inversion nearest the chord before it, so the voices move as little as they can.");
+    }
+    ImGui::PopID();
+    if (started) {
+        SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB PLAY");
+        app.PushUndo();
+    }
+    if (changed || cancelled) {
+        SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB PLAY");
+        if (cancelled) app.DropLastUndo();
+        cp.Clamp();
+        pat.chordPlay = cp;
+    }
+
+    // what the chord of this place sounds like through PLAY (the same events the sequencer plays), over up to two bars
+    const float py = oy + 92.0f, ph = std::min(110.0f, h - (py - a.y) - 22.0f);
+    if (ph < 40.0f) return;
+    const ImVec2 pa(a.x, py), pb(a.x + w, py + ph);
+    dl->AddRectFilled(pa, pb, IM_COL32(22, 24, 31, 255), 6.0f);
+    dl->AddRect(pa, pb, vis::kLine, 6.0f);
+    int bi = slot.block >= 0 ? slot.block : (blocks.empty() ? -1 : 0);
+    if (bi < 0) { Text(dl, ImVec2(pa.x + 10, pa.y + ph * 0.5f - 7), vis::kTextDim, "put a chord in the loop to see it played", 11.5f); return; }
+    const Blk& b = blocks[static_cast<size_t>(bi)];
+    const Step& st = jam.steps[static_cast<size_t>(b.start)];
+    ChordPerf c;
+    c.play = pat.chordPlay;
+    ChordPlay one = c.play; one.octaves = 1; one.smooth = false;
+    int8_t base[kMaxChordVoices];
+    const int baseN = ChordPerfVoice(st.chordNotes.data(), st.chordSize, one, nullptr, 0, base);
+    c.count = ChordPerfVoice(base, baseN, c.play, nullptr, 0, c.notes.data());
+    c.span = std::min(b.len, 2 * PerBar(pat));
+    c.rate = ChordPerfRateSteps(c.play, pat.stepsPerBeat);
+    struct NoteBar { double t0, t1; int note; };
+    std::vector<NoteBar> bars;
+    double onAt[kMaxChordVoices]; int onNote[kMaxChordVoices];
+    for (int v = 0; v < kMaxChordVoices; ++v) { onAt[v] = -1.0; onNote[v] = 0; }
+    auto close = [&](int v, double t) { if (onAt[v] >= 0.0) { bars.push_back({onAt[v], t, onNote[v]}); onAt[v] = -1.0; } };
+    for (int t = 0; t <= static_cast<int>(c.span); ++t)   // one step at a time, as the sequencer asks (a fast ARP has more events than one call holds)
+        ChordPerfEvents(c, t, t + 1.0, [&](const ChordPerfEvent& e) {
+            if (e.on) { close(e.voice, e.at); onAt[static_cast<size_t>(e.voice)] = e.at; onNote[static_cast<size_t>(e.voice)] = e.note; }
+            else if (e.voice < 0) { for (int v = 0; v < kMaxChordVoices; ++v) close(v, e.at); }
+            else close(e.voice, e.at);
+        });
+    for (int v = 0; v < kMaxChordVoices; ++v) close(v, c.span);
+    if (bars.empty()) return;
+    int lo = 127, hi = 0;
+    for (const NoteBar& nb : bars) { lo = std::min(lo, nb.note); hi = std::max(hi, nb.note); }
+    const int rows = std::max(1, hi - lo + 1);
+    const float ix0 = pa.x + 8, ix1 = pb.x - 8, iy0 = pa.y + 8, iy1 = pb.y - 8;
+    const float rowH = std::min(10.0f, (iy1 - iy0) / rows);
+    const float midY = (iy0 + iy1) * 0.5f;
+    const int perBeat = PerBeat(pat);
+    for (int s = perBeat; s < static_cast<int>(c.span); s += perBeat) {   // the beats
+        const float x = ix0 + (ix1 - ix0) * static_cast<float>(s / c.span);
+        dl->AddLine(ImVec2(x, iy0), ImVec2(x, iy1), IM_COL32(255, 255, 255, 14), 1.0f);
+    }
+    for (const NoteBar& nb : bars) {
+        const float x0 = ix0 + (ix1 - ix0) * static_cast<float>(nb.t0 / c.span), x1 = ix0 + (ix1 - ix0) * static_cast<float>(nb.t1 / c.span);
+        const float yc = midY + (static_cast<float>(lo + hi) * 0.5f - nb.note) * rowH;
+        dl->AddRectFilled(ImVec2(x0, yc - rowH * 0.42f), ImVec2(std::max(x0 + 2.0f, x1 - 1.0f), yc + rowH * 0.42f), vis::kViolet, 2.0f);
+    }
+    char cap[96];
+    std::snprintf(cap, sizeof cap, "%s \xC2\xB7 %s", LabChordFromNotes(st.chordNotes.data(), st.chordSize).name.c_str(), ChordPlayModeName(pat.chordPlay.mode));
+    Text(dl, ImVec2(pa.x, pb.y + 4), vis::kTextDim, cap, 11.0f);
+}
+
 void ChordLabPanel::Draw(AppState& app, float W, float H) {
     if (!opened_) { opened_ = true; Rebuild(app); selBlock_ = -1; labMark_ = app.UndoMark(); abBefore_ = false; }
     if (!abBefore_) {   // which chords are shown: the edited slot (bank on) or the scene's own (bank off, nothing changed yet)
@@ -547,10 +683,12 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         ImGui::Dummy(ImVec2(W, H));
         return;
     }
-    // C2: HARMONY and THE LOOP on the left, WHAT FITS on the right (PLAY and a short SOUND column follow in the next parts of C2)
-    const float leftW = std::clamp(W * 0.54f, 520.0f, 900.0f);
-    const float midX = leftW + 20.0f, midW = std::max(300.0f, W - midX - 2.0f);
+    // C2: HARMONY and THE LOOP on the left, WHAT FITS in the middle, PLAY on the right (a short SOUND column follows in part 3)
+    const float playW = std::clamp(W * 0.22f, 260.0f, 400.0f);
+    const float leftW = std::clamp((W - playW) * 0.57f, 480.0f, 900.0f);
+    const float midX = leftW + 20.0f, playX = W - playW, midW = std::max(280.0f, playX - 20.0f - midX);
     dl->AddLine(ImVec2(o.x + midX - 10, o.y + top), ImVec2(o.x + midX - 10, o.y + H - 4), vis::kLine, 1.0f);
+    dl->AddLine(ImVec2(o.x + playX - 10, o.y + top), ImVec2(o.x + playX - 10, o.y + H - 4), vis::kLine, 1.0f);
 
     Track& jt = JamTrack(app);   // A BEFORE: the bank is off, so this is the scene's own chord track (shown, not edited)
     const std::vector<Blk> blocks = Blocks(jt);
@@ -822,6 +960,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
 
     // ---- 3 WHAT FITS
     DrawWhatFits(app, dl, ImVec2(o.x + midX, o.y + top + 4.0f), midW, H - top - 8.0f, jt, blocks, slot);
+    DrawPlay(app, dl, ImVec2(o.x + playX, o.y + top + 4.0f), playW - 2.0f, H - top - 8.0f, jt, blocks, slot);
 
     ImGui::PopFont();
     ImGui::SetCursorScreenPos(ImVec2(o.x, o.y));

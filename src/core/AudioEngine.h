@@ -79,6 +79,9 @@ public:
     // ChordVoice::NoteOn.
     void ChordNoteOn(const int8_t* notes, int count, float velocity, bool slide);
     void ChordNoteOff();
+    // C2 (the PLAY layer): one chord tone on voice `v` of the chord pool / its release
+    void ChordVoiceOn(int v, int8_t note, float velocity, bool slide);
+    void ChordVoiceOff(int v);
     // v44.44: a second pool of chord voices for trying a chord by ear (CHORD LAB, HEAR buttons). It sounds through the chord track
     // (same patch, level, EQ, sends) next to whatever the sequencer plays, so an audition never cuts or steals the loop's chord,
     // and it is not written into a MIDI capture.

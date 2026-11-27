@@ -544,6 +544,11 @@ static void WriteProject(std::ostream& f, const Project& project) {
               << k.click << "," << k.drive << "," << k.level << "\n";
         }
         if (pat.chordsKey >= 0) f << "chordsKey=" << static_cast<int>(pat.chordsKey) << "\nchordsScale=" << static_cast<int>(pat.chordsScale) << "\n";
+        if (pat.chordPlay != ChordPlay{}) {   // C2: the PLAY layer of the chord track, only when changed
+            const ChordPlay& cp = pat.chordPlay;
+            f << "chordPlay=" << static_cast<int>(cp.mode) << "," << static_cast<int>(cp.rate) << "," << static_cast<int>(cp.gate) << ","
+              << static_cast<int>(cp.octaves) << "," << static_cast<int>(cp.order) << "," << (cp.smooth ? 1 : 0) << "\n";
+        }
         f << "\n";
         for (int i = 0; i < kNumSynthTracks; ++i) WriteSynth(f, "pattern" + std::to_string(p) + ".synth" + std::to_string(i), pat.synthPatches[static_cast<size_t>(i)]);
         WriteSynth(f, "pattern" + std::to_string(p) + ".chordpatch", pat.chordPatch);
@@ -695,6 +700,7 @@ struct Sanitizer {
         F(p.swing, 0.0f, 0.75f, 0.0f);
         for (auto& sp : p.synthPatches) Patch(sp);
         Patch(p.chordPatch);
+        { const ChordPlay before = p.chordPlay; p.chordPlay.Clamp(); if (p.chordPlay != before) ++fixed; }   // C2
         for (int i = 0; i < kNumTracks; ++i) {
             Track& t = p.tracks[static_cast<size_t>(i)];
             if (i < kNumDrumTracks) TrackAt(t, TrackType::Drum, i);
@@ -1193,6 +1199,14 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
             }
             else if (key == "chordsKey") pat.chordsKey = static_cast<int8_t>(std::clamp(std::atoi(val.c_str()), -1, kNumKeys - 1));
             else if (key == "chordsScale") pat.chordsScale = static_cast<int8_t>(std::clamp(std::atoi(val.c_str()), -1, kNumScales - 1));
+            else if (key == "chordPlay") {   // C2
+                int v[6] = {0, 1, 100, 1, 0, 0};
+                std::sscanf(val.c_str(), "%d,%d,%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
+                ChordPlay& cp = pat.chordPlay;
+                cp.mode = static_cast<uint8_t>(std::clamp(v[0], 0, 255)); cp.rate = static_cast<uint8_t>(std::clamp(v[1], 0, 255));
+                cp.gate = static_cast<uint8_t>(std::clamp(v[2], 0, 255)); cp.octaves = static_cast<uint8_t>(std::clamp(v[3], 0, 255));
+                cp.order = static_cast<uint8_t>(std::clamp(v[4], 0, 255)); cp.smooth = v[5] != 0;
+            }
         } else if (curPattern >= 0 && curPattern < kNumSlotsTotal &&
                    curTrack >= 0 && curTrack < kNumTracks) {
             Track& t = project.patterns[curPattern].tracks[curTrack];

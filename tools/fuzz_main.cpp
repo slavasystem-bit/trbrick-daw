@@ -25,7 +25,7 @@ static const char* kOpNames[] = {"ToggleStep","RandomizeDrums","RandomizeMelodic
     "LoopAll","ToStart","Undo","Redo","CopyPastePattern","CopyPasteTrack","CopyInstrument","MatchLevelPanEq","ClearInstrument","ClearPattern","Genre","Drop","Mutes",
     "AdjustToScale","SnapToScale","KeyScale","LaunchScene","SynthPreset","LiveChord","ChordSettings","EditScene","BrickLevels","ParamRow","MatchLevel","SelectBrick",
     "Starter","SaveLoad","Style","Sampler","SynthSample","NextBar","EuclidKeep",
-    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged","FillSample","DrumSample"};
+    "Link","OpenGo","ArmScope","Pitch","RiserBreakRepeat","MasterFx","ReopenDamaged","FillSample","DrumSample","ChordPlay"};
 constexpr int kNumOps = sizeof(kOpNames) / sizeof(kOpNames[0]);
 
 static int Check(AppState& a, const char* op, unsigned seed, int n) {
@@ -351,6 +351,13 @@ int main(int argc, char** argv) {
                 case 2: { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); a.CurrentPattern().kitFolder = R(2) ? "samples/kits/gone" : "kits/electro"; } a.SyncSceneKits(); break;   // missing: silence, no crash
                 default: { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); a.CurrentPattern().tracks[static_cast<size_t>(tr)].kitFolder = R(2) ? std::string() : "samples/kits/electro"; } a.SyncSceneKits(); break;
                 }
+                break; }
+            case 74: {   // C2: the PLAY layer of a scene, anything in range (a damaged file is the ReopenDamaged op's business)
+                ChordPlay& cp = p.patterns[static_cast<size_t>(R(kNumPatterns))].chordPlay;
+                cp.mode = static_cast<uint8_t>(R(kNumChordPlayModes)); cp.rate = static_cast<uint8_t>(R(kNumChordPlayRates));
+                cp.gate = static_cast<uint8_t>(10 + R(91)); cp.octaves = static_cast<uint8_t>(1 + R(3));
+                cp.order = static_cast<uint8_t>(R(kNumChordPlayOrders)); cp.smooth = R(2) != 0;
+                if (R(6) == 0) cp = ChordPlay{};
                 break; }
             case 60:   // v44.49: a style with a random set of parts, on whatever grid, length and key the scene has
                 a.styleBeat = R(4) != 0; a.styleSound = R(2) != 0; a.styleNotes = R(4) != 0; a.styleTempo = R(4) == 0;
