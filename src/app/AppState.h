@@ -315,6 +315,7 @@ struct AppState {
         int trackSoundMask = 0;
         Pattern trackSound;
         std::vector<std::pair<int, Pattern>> bulk;   // brick slots whose SOUND parts are restored (notes untouched)
+        uint64_t serial = 0;                  // C2: when the step was pushed (UndoMark / UndoBackTo)
     };
     static constexpr size_t kMaxUndo = 256;
     std::vector<UndoEntry> undoStack;
@@ -324,8 +325,32 @@ struct AppState {
     static double UndoNowSeconds() {
         return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     }
+    uint64_t undoSerial_ = 0;
+    // Every push onto undoStack ends here: stamp the new step, then drop the oldest steps over kMaxUndo.
     void TrimUndo() {
+        if (!undoStack.empty()) undoStack.back().serial = ++undoSerial_;
         while (undoStack.size() > kMaxUndo) undoStack.erase(undoStack.begin());
+    }
+    // C2 (UNDO ALL in CHORD LAB): a marker for "now". Steps pushed after it (edits, redos) have a larger serial.
+    // The next sound edit starts a fresh step, so it never merges into a step made before the marker.
+    uint64_t UndoMark() { lastSoundUndoPush_ = -100.0; return undoSerial_; }
+    // Number of undo steps after `mark` that Undo() would take now (the steps of other scenes wait, as in Undo()).
+    int UndoStepsSince(uint64_t mark) const {
+        int n = 0;
+        for (const UndoEntry& e : undoStack)
+            if (e.serial > mark && !(e.kind == UndoEntry::Kind::Pattern && e.patternIndex != project.currentPattern)) ++n;
+        return n;
+    }
+    // Undo every step pushed after `mark`, stopping at the first step from before it. Returns how many were undone.
+    int UndoBackTo(uint64_t mark) {
+        int n = 0;
+        for (;;) {
+            const int i = FindApplicable(undoStack);
+            if (i < 0 || undoStack[static_cast<size_t>(i)].serial <= mark) break;
+            if (!Undo()) break;
+            ++n;
+        }
+        return n;
     }
     void PushUndo() {
         if (SwitchApplying()) return;   // v44.54: a queued LIVE switch is applied on the audio thread; its undo step was pushed at the click
