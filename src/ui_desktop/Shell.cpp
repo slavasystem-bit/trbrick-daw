@@ -21,6 +21,7 @@ namespace t8::desktop {
 void DrawShellFrame(AppState& app, ShellPanels& p, const DesktopFonts& fonts) {
     ImGuiIO& io = ImGui::GetIO();
     HandleShortcuts(app);
+    app.RunPasteRequest();   // C4b (e): a paste from the track menu, outside the scene lock
     app.TickKeyFollow();
     app.TickTransport();
     app.RefreshChordLive();

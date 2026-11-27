@@ -190,13 +190,12 @@ void SequencerPanel::Draw(AppState& app, const LiveLayout& layout) {
         if (ImGui::BeginPopupContextItem("##trackctx")) {
             app.seqCursorTrack = row;
             if (ImGui::MenuItem("Copy track", "Cmd+C")) app.CopyTrack(row);
-            if (ImGui::MenuItem("Paste track", "Cmd+V", false, app.hasTrackClipboard)) app.PasteTrack(row);
+            if (ImGui::MenuItem("Paste track", "Cmd+V", false, app.hasTrackClipboard)) app.pasteRequest = {1, row};   // C4b (e): done next frame, before the lock (it may copy kit files)
             ImGui::Separator();
             DrawInstrumentItems(app, app.project.currentPattern, row);
             ImGui::Separator();
             if (ImGui::MenuItem("Copy whole scene", "Cmd+Shift+C")) { app.CopyPattern(); app.SetStatus("SCENE COPIED"); }
-            if (ImGui::MenuItem("Paste whole scene", "Cmd+Shift+V", false, app.hasPatternClipboard))
-                app.SetStatus(app.PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
+            if (ImGui::MenuItem("Paste whole scene", "Cmd+Shift+V", false, app.hasPatternClipboard)) app.pasteRequest = {2, 0};   // C4b (e): next frame, before the lock
             if (t.type == TrackType::Drum) {
                 ImGui::Separator();
                 if (ImGui::MenuItem("Rhythm from the next genre")) app.SwapDrumSlotNext(t.slotIndex);
