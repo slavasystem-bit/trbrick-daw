@@ -457,7 +457,8 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
                     const FillRule fr = cs.fillMode == FillMode::Off ? FillRule{} : (cs.fillMode == FillMode::Own ? cs.fill : pat.fill);
                     const double brickBars = barsOf[static_cast<size_t>(i)];
                     const double passBars = std::max(0.0625, static_cast<double>(ChainStepLoopSteps(pat, cs)) / (4.0 * ClampGrid(pat.stepsPerBeat)));
-                    const double fillBars = FillBeatsOf(fr.beats) / 4.0;
+                    const int spbF = ClampGrid(pat.stepsPerBeat);
+                    const double fillBars = FillStepsOf(fr.beats, spbF) / (4.0 * spbF);   // as it sounds (half a beat on triplets = 1 step)
                     std::vector<std::pair<double, double>> blocks;   // (start bar inside the brick, length in bars)
                     const double shBars = fr.shiftBeats / 4.0;   // v44.25: the block sits this much earlier than the end of the pass / block
                     if (fr.when == FillWhen::LastLoop) { const double l = std::min(fillBars, passBars); blocks.push_back({brickBars - l - std::min(shBars, passBars - l), l}); }
@@ -501,7 +502,7 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
                             for (int j = 0; j < n; ++j) if (mouse.x >= geo[static_cast<size_t>(j)].x0 && mouse.x < geo[static_cast<size_t>(j)].x1) { dragTarget_ = j; break; }
                             if (dragTarget_ == i) {   // inside the same brick: earlier / later by whole beats
                                 const double periodBeats = (dragFill_.when == FillWhen::EveryBars ? std::max(1, static_cast<int>(dragFill_.everyBars)) : passBars) * 4.0;
-                                const int maxShift = std::max(0, static_cast<int>(std::floor(periodBeats + 1e-6)) - static_cast<int>(dragFill_.beats));
+                                const int maxShift = std::max(0, static_cast<int>(std::floor(periodBeats - FillBeatsOf(dragFill_.beats) + 1e-6)));
                                 const int ns = std::clamp(static_cast<int>(dragFill_.shiftBeats) - static_cast<int>(std::lround(dx / ppb * 4.0)), 0, maxShift);
                                 FillRule nr = dragFill_; nr.shiftBeats = static_cast<uint8_t>(ns);
                                 if (cs.fillMode != FillMode::Own || !(cs.fill == nr)) { cs.fillMode = FillMode::Own; cs.fill = NormalizeFill(nr); app.sequencer.RefreshArrangement(); }
@@ -1499,7 +1500,8 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
             const FillRule& fr = cs.fillMode == FillMode::Own ? cs.fill : pat.fill;
             if (hasFill) {
                 const float lenBeats = std::max(1.0f, static_cast<float>(ChainStepBars(pat, cs)) * 4.0f);
-                const float w = std::clamp(static_cast<float>(FillBeatsOf(fr.beats)) / lenBeats, 0.06f, 1.0f) * (b.x - a.x - 4.0f);
+                const int spbF = ClampGrid(pat.stepsPerBeat);
+                const float w = std::clamp(static_cast<float>(FillStepsOf(fr.beats, spbF)) / static_cast<float>(spbF) / lenBeats, 0.06f, 1.0f) * (b.x - a.x - 4.0f);
                 dl->AddRectFilled(ImVec2(b.x - 2.0f - w, a.y + 3.0f), ImVec2(b.x - 2.0f, b.y - 3.0f), WithAlpha(colors::kFill, 120), 2.0f);
                 dl->AddLine(ImVec2(b.x - 2.0f - w, a.y + 3.0f), ImVec2(b.x - 2.0f - w, b.y - 3.0f), colors::kFill, 2.0f);
             }
