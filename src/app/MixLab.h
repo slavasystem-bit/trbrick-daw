@@ -74,7 +74,7 @@ public:
         Join();
         auto job = std::make_shared<MixLabJob>();
         {
-            std::lock_guard<SceneMutex> lock(app.sequencer.PatternMutex());
+            SceneLock lock(app.sequencer.PatternMutex(), "MIX LAB");
             job->project = app.project;
         }
         job->projectPath = app.projectPath;

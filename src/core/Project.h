@@ -30,10 +30,10 @@ private:
     std::unique_ptr<Pattern[]> p_;
 };
 
-struct Project {
+// LIVE-5: everything of a project except its scene slots, so the screen can copy a project in short pieces (CopyProjectInPieces).
+struct ProjectHead {
     std::string name = "New Project";
     std::string kitFolder = "kits/acid_v2";   // the kit of every scene whose own Pattern::kitFolder is empty
-    PatternBank patterns;
     // v44.5.4: the sound lives in each Pattern (Pattern::synthPatches / chordPatch / kick / kitFolder). These are only the
     // BASE sound: what a file without per-scene sounds is upgraded from, and what the project starts with. The editor and the
     // engine never read them.
@@ -99,6 +99,10 @@ struct Project {
 
     // Loads/saves a simple human-readable key=value text format (see
     // Persistence.cpp for the format description). Returns false on failure.
+};
+
+struct Project : ProjectHead {
+    PatternBank patterns;   // the scene slots (16 live + the brick slots)
 };
 
 } // namespace t8

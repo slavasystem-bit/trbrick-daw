@@ -7724,9 +7724,12 @@ int main(int argc, char** argv) {
         std::thread ui([&] { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); held = true; while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
         while (!held) std::this_thread::yield();
         const auto t0 = std::chrono::steady_clock::now();
+        // The screen thread keeps the lock until `release`, which is set only after this returns: returning at all proves the
+        // callback does not wait for the screen. The wall-time bound is loose because a shared CI machine can deschedule the
+        // spinning thread for tens of ms (macOS runner: 32 ms once); `waited` is the limit the code itself checks.
         const bool got = a.sequencer.LockForAudio(5000, waited);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        check(!got && waited >= 5000 && ms < 30.0, "lock-5: a busy lock is given up after the limit (" + std::to_string(ms) + " ms), the callback plays silence instead of waiting");
+        check(!got && waited >= 5000 && ms < 200.0, "lock-5: a busy lock is given up after the limit (" + std::to_string(ms) + " ms), the callback plays silence instead of waiting");
         release = true; ui.join();
         check(a.sequencer.LockForAudio(5000, waited), "lock-5: once the screen lets go, the next buffer plays normally");
         a.sequencer.UnlockForAudio();
@@ -7755,6 +7758,40 @@ int main(int argc, char** argv) {
         std::thread audio([&] { m.MarkAudioThread(); SceneLock lk(m, "AUDIO?"); std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
         audio.join();
         check(m.MaxHoldUs() == 0 && m.HeldTotalUs() == before, "lock-5 names: the audio thread's own render is not counted as the screen holding the sound");
+    }
+    {   // LIVE-5 (Mac measurement after #29): the "Edited" check and the recovery copy take the project in short pieces, not in one hold
+        AppState a; a.engine.Init(kSampleRate); a.sequencer.Init(&a.engine, &a.project);
+        a.project.name = "Pieces";
+        a.project.patterns[0].bpm = 133.0f;
+        a.project.patterns[kNumPatterns - 1].tracks[2].steps[5].active = true;
+        a.project.patterns[kNumPatterns].name = "last slot";
+        a.project.songChainLength = 3;
+        Project snap;
+        a.CopyProjectInPieces(snap, "TEST");
+        check(ProjectToString(snap) == ProjectToString(a.project) && snap.patterns[kNumPatterns].name == "last slot",
+              "lock-5 pieces: the copy made piece by piece is the whole project (head, first and last slot)");
+        check(!a.sequencer.PatternMutex().HeldByThisThread(), "lock-5 pieces: the lock is free after the copy");
+        {   // review of #53: a NEXT BAR mute on linked scenes 4 and 13 (two different pieces) lands while the copy is between them
+            a.project.sceneLink[3] = 1; a.project.sceneLink[12] = 1;
+            static int calls = 0; calls = 0;
+            a.copyPieceHookForTest_ = [](AppState& s) { if (++calls == 2) s.SetMuteScene(1, true, 3); };   // after the piece with scene 4
+            Project linked;
+            a.CopyProjectInPieces(linked, "TEST");
+            a.copyPieceHookForTest_ = nullptr;
+            check(a.project.patterns[12].tracks[1].mute && a.project.patterns[3].tracks[1].mute, "lock-5 pieces: (setup) the mute reached both linked scenes");
+            check(linked.patterns[3].tracks[1].mute && linked.patterns[12].tracks[1].mute,
+                  "lock-5 pieces: a bar-line mute between two pieces is in the copy for every linked scene (never half a group)");
+        }
+        auto slurp = [](const std::string& path) { std::ifstream in(path, std::ios::binary); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+        const std::string st = slurp("src/app/AppState.h");
+        check(st.find("snap = project") == std::string::npos && st.find("CopyProjectInPieces(snap, \"DocHash\")") != std::string::npos
+              && st.find("CopyProjectInPieces(snap, \"SaveSnapshot\")") != std::string::npos,
+              "lock-5 pieces: DocHash and SaveSnapshot never copy the whole project under one lock");
+        bool unnamed = false;
+        for (const char* f : {"src/app/AppState.h", "src/app/MixLab.h", "src/ui_desktop/Shell.cpp", "src/main.cpp", "src/ui_desktop/ChordLabPanel.cpp",
+                              "src/ui_desktop/ContextPanel.cpp", "src/ui_desktop/BricksPanel.cpp", "src/ui_desktop/MixerSync.h"})
+            if (slurp(f).find("std::lock_guard<SceneMutex>") != std::string::npos) { unnamed = true; std::cout << "  unnamed scene lock in " << f << "\n"; }
+        check(!unnamed, "lock-5 names: the screen's scene locks all have a name (the XRUN hint never says OTHER for them)");
     }
     {   // N1 (LIVE-5 / LIVE-6): Settings > Audio rules
         using namespace t8::audiosettings;
