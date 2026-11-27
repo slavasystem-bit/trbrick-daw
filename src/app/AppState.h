@@ -3135,7 +3135,7 @@ struct AppState {
     std::array<std::array<std::string, kNumDrumTracks>, kNumPatterns> kitSyncedTrack_{};   // v44.26: the own kits of the drums, as last handed to the sequencer
     std::map<std::string, DrumKit::BankPtr> kitMixed_;                                    // v44.26: banks put together from a scene kit and drums with a kit of their own
     std::array<bool, kNumPatterns> kitSyncedInUse_{};   // v44.33: which slots had a brick pointing at them when the banks were last handed over
-    std::string kitSyncedDefault_;
+    std::string kitSyncedDefault_, kitSyncedDir_;
     bool kitsDirty_ = true;
     const std::string& SceneKitFolder(int scene) const {
         scene = std::clamp(scene, 0, kNumPatterns - 1);
@@ -3152,7 +3152,11 @@ struct AppState {
     // and KitPending() is true. When it arrives the kits are synced again (kitsDirty_).
     std::set<std::string> kitPending_;
     std::string kitStatusFolder_;   // LoadKitFolder waits for this one to say how many samples it has
-    DrumKit::BankPtr KitBank(const std::string& folder) {
+    // C4b (e): where a kit folder is on disk. A project kit ("samples/kits/x") is beside the project file, so the same name means
+    // another folder in another project: the caches below are keyed by this path, never by the name the project stores.
+    std::string KitDiskPath(const std::string& folder) const { return IsProjectKit(folder) ? DirNameOf(projectPath) + "/" + folder : folder; }
+    DrumKit::BankPtr KitBank(const std::string& folderName) {
+        const std::string folder = KitDiskPath(folderName);
         auto it = kitCache_.find(folder);
         if (it != kitCache_.end()) return it->second;
         if (kitPending_.count(folder)) return nullptr;
@@ -3165,18 +3169,18 @@ struct AppState {
         auto out = std::make_shared<DrumKit::BankPtr>();
         const DrumKit* kit = engine.GetKit();   // Build() is const and only reads files
         const int rate = engine.SampleRate();
-        loader.Post([out, kit, folder, rate] { *out = kit->Build(folder, rate); }, [this, out, folder] {
+        loader.Post([out, kit, folder, rate] { *out = kit->Build(folder, rate); }, [this, out, folder, folderName] {
             kitPending_.erase(folder);
             kitCache_[folder] = *out;
             kitsDirty_ = true;
-            if (folder == kitStatusFolder_) {
+            if (folderName == kitStatusFolder_) {
                 kitStatusFolder_.clear();
-                SetStatus("KIT " + folder + " (" + std::to_string(KitSlotsLoaded(*out)) + "/6 loaded) - SCENE " + std::to_string(project.currentPattern + 1));
+                SetStatus("KIT " + folderName + " (" + std::to_string(KitSlotsLoaded(*out)) + "/6 loaded) - SCENE " + std::to_string(project.currentPattern + 1));
             }
         });
         return nullptr;
     }
-    bool KitPending(const std::string& folder) const { return kitPending_.count(folder) != 0; }
+    bool KitPending(const std::string& folder) const { return kitPending_.count(KitDiskPath(folder)) != 0; }
     static int KitSlotsLoaded(const DrumKit::BankPtr& b) {
         int n = 0;
         if (b) for (const auto& v : b->variants) if (!v.empty()) ++n;
@@ -3198,8 +3202,8 @@ struct AppState {
         return variant >= 0 && variant < static_cast<int>(v.size()) ? v[static_cast<size_t>(variant)] : nullptr;
     }
     // A kit folder whose files changed on disk (a dropped sample): forget its bank so the next sync reads it again.
-    void InvalidateKit(const std::string& folder) {
-        auto it = kitCache_.find(folder);
+    void InvalidateKit(const std::string& folderName) {
+        auto it = kitCache_.find(KitDiskPath(folderName));
         if (it != kitCache_.end()) { kitRetired_.push_back(it->second); kitCache_.erase(it); }
         kitsDirty_ = true;
     }
@@ -3211,7 +3215,7 @@ struct AppState {
             for (int t = 0; t < kNumDrumTracks; ++t) if (kitSyncedTrack_[static_cast<size_t>(i)][static_cast<size_t>(t)] != project.patterns[static_cast<size_t>(i)].tracks[static_cast<size_t>(t)].kitFolder) return true;
             return false;
         };
-        bool changed = force || kitsDirty_ || kitSyncedDefault_ != project.kitFolder;
+        bool changed = force || kitsDirty_ || kitSyncedDefault_ != project.kitFolder || kitSyncedDir_ != DirNameOf(projectPath);   // C4b (e): project kits are read beside the project file
         for (int i = 0; i < kNumPatterns && !changed; ++i) if (kitSyncedFolder_[static_cast<size_t>(i)] != project.patterns[static_cast<size_t>(i)].kitFolder || trackKitsChanged(i) || kitSyncedInUse_[static_cast<size_t>(i)] != SlotInUse(i)) changed = true;
         if (!changed) return;
         {   // N1: every bank this needs must be in the cache first; while one is still being read, the sequencer keeps what it has
@@ -3260,12 +3264,13 @@ struct AppState {
         }
         for (auto it = kitMixed_.begin(); it != kitMixed_.end();) { if (mixedNow.count(it->first)) ++it; else { kitRetired_.push_back(it->second); it = kitMixed_.erase(it); } }
         kitSyncedDefault_ = project.kitFolder;
+        kitSyncedDir_ = DirNameOf(projectPath);
         kitsDirty_ = false;
         sequencer.SetSceneBanks(banks, def);
         // forget banks no scene uses any more (kept alive in kitRetired_ for a while)
         for (auto it = kitCache_.begin(); it != kitCache_.end();) {
-            bool used = it->first == project.kitFolder;
-            for (const Pattern& p : project.patterns) { if (p.kitFolder == it->first) used = true; for (int t = 0; t < kNumDrumTracks; ++t) if (p.tracks[static_cast<size_t>(t)].kitFolder == it->first) used = true; }
+            bool used = it->first == KitDiskPath(project.kitFolder);
+            for (const Pattern& p : project.patterns) { if (!p.kitFolder.empty() && KitDiskPath(p.kitFolder) == it->first) used = true; for (int t = 0; t < kNumDrumTracks; ++t) if (!p.tracks[static_cast<size_t>(t)].kitFolder.empty() && KitDiskPath(p.tracks[static_cast<size_t>(t)].kitFolder) == it->first) used = true; }
             if (used) ++it; else { kitRetired_.push_back(it->second); it = kitCache_.erase(it); }
         }
         while (kitRetired_.size() > 6) kitRetired_.erase(kitRetired_.begin());
@@ -4125,6 +4130,19 @@ struct AppState {
             fs::create_directories(fs::path(to) / "transitions", ec);
             for (const auto& f : fs::directory_iterator(tfrom, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), fs::path(to) / "transitions" / f.path().filename(), fs::copy_options::skip_existing, ec);
         }
+        {   // C4b (e): the kits inside the project's folder that the project plays (samples/kits/<kit>)
+            std::set<std::string> kits;
+            auto addKit = [&](const std::string& k) { if (IsProjectKit(k)) kits.insert(k.substr(8)); };   // "kits/<kit>" under samples/
+            addKit(project.kitFolder);
+            for (const Pattern& pt : project.patterns) { addKit(pt.kitFolder); for (int t = 0; t < kNumDrumTracks; ++t) addKit(pt.tracks[static_cast<size_t>(t)].kitFolder); }
+            for (const std::string& k : kits) {
+                const fs::path src = fs::path(from) / k, dst = fs::path(to) / k;
+                if (!fs::is_directory(src, ec)) continue;
+                fs::create_directories(dst, ec);
+                for (const auto& f : fs::directory_iterator(src, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), dst / f.path().filename(), fs::copy_options::skip_existing, ec);
+            }
+            if (!kits.empty()) kitsDirty_ = true;   // read again from the new folder
+        }
         if (files.empty()) return;
         fs::create_directories(to, ec);
         for (const std::string& f : files) fs::copy_file(fs::path(from) / f, fs::path(to) / f, fs::copy_options::skip_existing, ec);
@@ -4340,8 +4358,8 @@ struct AppState {
             NoteLoadFailed(path);
             return false;
         }
+        projectPath = path;   // first: the project's own kits and samples are read beside this file (C4b e)
         AdoptProject(std::move(incoming));
-        projectPath = path;
         docNewerFormat = LastLoadNewerFormat();
         MarkSaved();
         if (KitPending(project.kitFolder)) {   // N1: the kit is still being read; its own message comes when it is there
@@ -4355,34 +4373,45 @@ struct AppState {
         NoteLoadResult(path);
         return true;
     }
-    // A .wav or .aif dropped on the window becomes the sample of the selected DRUM track (an AIFF is written into the kit as a .wav). The current kit is first copied
-    // into a kit of its own (kits/mykit, mykit_2, ...), so the factory kits are never touched; the project then
-    // points at that kit. Older takes of the slot (name_2.wav ...) are replaced by the dropped file.
-    // N1 (LIVE-2): the file is read and the kit folder written on the loader thread; the scene / drum that was selected when it was
-    // asked for gets the new kit then.
-    struct SlotCopy { bool ok = false; std::string error, target; };
-    static SlotCopy CopySlotFile(const std::string& wavPath, const std::string& sceneKit, int slotIndex, int rate) {   // any thread
+    // A .wav or .aif dropped on the window (or taken in the SAMPLES browser) is ADDED to the selected DRUM track as its next sample
+    // (C4b e): the kit is first copied into the project's own folder (samples/kits/<kit>, once; a kit already there is used as it
+    // is), the file goes in as the next free take (snare_3.wav ...; nothing is replaced or deleted), and the drum then plays it.
+    // The factory kits beside the program are never touched, and the kit travels with the project (SAVE AS copies it). One Undo
+    // step brings the previous kit and sample back. An AIFF is written into the kit as a .wav.
+    // N1 (LIVE-2): the file is read, the kit folder written and the new bank built on the loader thread; the scene / drum that was
+    // selected when it was asked for gets it then.
+    struct SlotCopy { bool ok = false; std::string error, target; int variant = 0; DrumKit::BankPtr bank; };
+    static SlotCopy CopySlotFile(const std::string& wavPath, const std::string& kitName, const std::string& kitDisk, const std::string& projDir,
+                                 int slotIndex, int rate, const DrumKit* kit) {   // any thread
         namespace fs = std::filesystem;
         SlotCopy r;
         SampleBuffer probe;
         if (!LoadWav(wavPath, probe, rate) || probe.empty()) { const std::string why = UnreadableReason(wavPath); r.error = why.empty() ? "CANNOT READ THAT FILE (WAV OR AIFF)" : why; return r; }
         std::error_code ec;
-        std::string target = sceneKit;
-        const bool alreadyMine = target.rfind("kits/mykit", 0) == 0;
-        if (!alreadyMine) {
-            int n = 1;
-            do { target = "kits/mykit" + (n == 1 ? std::string() : "_" + std::to_string(n)); ++n; } while (fs::exists(target, ec) && n < 1000);
-            fs::create_directories(target, ec);
-            if (ec) { r.error = "CANNOT CREATE " + target; return r; }
-            for (const auto& f : fs::directory_iterator(sceneKit, ec))
-                if (f.is_regular_file() && f.path().extension() == ".wav") fs::copy_file(f.path(), fs::path(target) / f.path().filename(), fs::copy_options::overwrite_existing, ec);
+        std::string target = kitName, disk = kitDisk;
+        if (!IsProjectKit(kitName)) {   // a factory (or older private) kit: the project gets its own copy of it
+            std::string base;
+            for (char c : KitShortName(kitName)) if (c != '/' && c != '\\' && c != ':') base += c;
+            if (base.empty() || base == "." || base == "..") base = "kit";
+            target = kProjectKitPrefix + base;
+            disk = projDir + "/" + target;
+            fs::create_directories(disk, ec);
+            if (ec || !fs::is_directory(disk, ec)) { r.error = "CANNOT CREATE " + target; return r; }
+            for (const auto& f : fs::directory_iterator(kitDisk, ec))   // missing files only: a copy made before may hold added takes
+                if (f.is_regular_file() && f.path().extension() == ".wav") fs::copy_file(f.path(), fs::path(disk) / f.path().filename(), fs::copy_options::skip_existing, ec);
         }
+        // the next take after the highest one there, so the takes other scenes play keep their numbers
         const std::string stem = DrumSlotFileStem(static_cast<DrumSlot>(slotIndex));
-        for (const auto& f : fs::directory_iterator(target, ec)) {
-            const std::string name = f.path().stem().string();
-            if (f.path().extension() == ".wav" && (name == stem || name.rfind(stem + "_", 0) == 0)) fs::remove(f.path(), ec);
-        }
-        if (!ImportAudioAsWav(wavPath, (fs::path(target) / (stem + ".wav")).string())) { r.error = "CANNOT COPY THE FILE INTO " + target; return r; }
+        int highest = fs::exists(fs::path(disk) / (stem + ".wav"), ec) ? 1 : 0;
+        for (int v = 2; v <= kMaxKitVariants; ++v) if (fs::exists(fs::path(disk) / (stem + "_" + std::to_string(v) + ".wav"), ec)) highest = v;
+        if (highest >= kMaxKitVariants) { r.error = "THIS DRUM HAS " + std::to_string(kMaxKitVariants) + " SAMPLES IN KIT " + KitShortName(target) + " ALREADY: PICK ANOTHER KIT FIRST"; return r; }
+        const std::string file = highest == 0 ? stem + ".wav" : stem + "_" + std::to_string(highest + 1) + ".wav";
+        if (!ImportAudioAsWav(wavPath, (fs::path(disk) / file).string())) { r.error = "CANNOT COPY THE FILE INTO " + target; return r; }
+        r.bank = kit->Build(disk, rate);
+        const auto& names = r.bank->names[static_cast<size_t>(slotIndex)];
+        const auto at = std::find(names.begin(), names.end(), file);
+        if (at == names.end()) { r.error = "CANNOT READ THE COPY IN " + target; return r; }
+        r.variant = static_cast<int>(at - names.begin());
         r.ok = true; r.target = target;
         return r;
     }
@@ -4392,10 +4421,12 @@ struct AppState {
         const Track& tr = CurrentPattern().tracks[static_cast<size_t>(trackIdx)];
         if (tr.type != TrackType::Drum) { SetStatus("SELECT A DRUM TRACK OR THE SAMPLER FIRST, THEN DROP THE FILE"); statusMessageTimer = 6.0f; return false; }
         const std::string sceneKit = TrackKitFolder(project.currentPattern, tr.slotIndex);   // v44.26: a drum with a kit of its own gets the sample in that kit
+        const std::string sceneKitDisk = KitDiskPath(sceneKit), projDir = DirNameOf(projectPath);
         const bool ownKit = !tr.kitFolder.empty();
         const std::string trackName = tr.name;
         auto res = std::make_shared<SlotCopy>();
         const int slotIndex = tr.slotIndex, rate = engine.SampleRate();
+        const DrumKit* kit = engine.GetKit();   // Build() is const and only reads files
         const std::string key = "kit:" + std::to_string(scene) + ":" + std::to_string(trackIdx);
         const std::string prev = ownKit ? tr.kitFolder : CurrentPattern().kitFolder;
         const unsigned tok = BumpRequest(key), gen = docGen_;
@@ -4403,19 +4434,27 @@ struct AppState {
             const Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
             return ownKit ? pt.tracks[static_cast<size_t>(trackIdx)].kitFolder : pt.kitFolder;
         };
-        loader.Post([res, wavPath, sceneKit, slotIndex, rate] { *res = CopySlotFile(wavPath, sceneKit, slotIndex, rate); },
-                    [this, res, wavPath, scene, trackIdx, ownKit, trackName, key, prev, tok, gen, kitOf] {
+        loader.Post([res, wavPath, sceneKit, sceneKitDisk, projDir, slotIndex, rate, kit] { *res = CopySlotFile(wavPath, sceneKit, sceneKitDisk, projDir, slotIndex, rate, kit); },
+                    [this, res, wavPath, scene, trackIdx, ownKit, trackName, key, prev, tok, gen, kitOf, projDir] {
             if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
             if (gen != docGen_) { SetStatus("SAMPLE NOT SET: ANOTHER PROJECT IS OPEN NOW (KIT WRITTEN: " + res->target + ")"); return; }
+            if (projDir != DirNameOf(projectPath)) { SetStatus("SAMPLE NOT SET: THE PROJECT WAS SAVED IN ANOTHER FOLDER MEANWHILE - ADD IT AGAIN"); statusMessageTimer = 6.0f; InvalidateFolderCaches(); return; }
             if (!RequestIsNewest(key, tok) || kitOf() != prev) { SetStatus("SAMPLE NOT SET: THE KIT WAS CHANGED MEANWHILE (KIT WRITTEN: " + res->target + ")"); InvalidateFolderCaches(); return; }
-            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-            Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
-            PushUndoForScene(scene);
-            if (ownKit) pt.tracks[static_cast<size_t>(trackIdx)].kitFolder = res->target; else pt.kitFolder = res->target;   // v44.5.4: the dropped sample goes into a kit of this scene
+            {
+                std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+                Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
+                PushUndoForScene(scene);   // one step: the kit and the sample the drum played before
+                if (ownKit) pt.tracks[static_cast<size_t>(trackIdx)].kitFolder = res->target; else pt.kitFolder = res->target;
+                Track& t = pt.tracks[static_cast<size_t>(trackIdx)];
+                for (Step& st : t.steps) st.variant = kAutoVariant;   // every step plays the new sample, as a pick in the SAMPLE row does
+                t.defaultVariant = static_cast<uint8_t>(res->variant);
+            }
             InvalidateKit(res->target);
+            kitCache_[KitDiskPath(res->target)] = res->bank;   // built on the loader thread with the new file: no second read
             SyncSceneKits();
             InvalidateFolderCaches();
-            SetStatus(std::string("SAMPLE SET: ") + std::filesystem::path(wavPath).filename().string() + " -> " + trackName + " (kit " + res->target.substr(5) + ")");
+            SetStatus(std::string("SAMPLE ADDED: ") + fs::path(wavPath).filename().string() + " -> " + trackName + " (SAMPLE " + std::to_string(res->variant + 1)
+                      + " OF KIT " + KitShortName(res->target) + " IN THE PROJECT)");
         });
         if (loader.Running()) { SetStatus("READING " + fs::path(wavPath).filename().string() + "..."); return true; }
         return res->ok;   // no loader: both parts have run already
@@ -4595,7 +4634,7 @@ struct AppState {
         }
         docNewerFormat = 0;   // the copy is this version's own file
         DropRecovery();   // the old document's copy (the Untitled file, or Recovery/<old>.t8proj)
-        CopySamplesTo(path);   // v44.50: the samples of the sampler go with the project
+        CopySamplesTo(path);   // v44.50: the samples of the sampler go with the project (C4b e: and its own kits)
         projectPath = path;
         projectFilesCacheValid = false;
         MarkSaved();
@@ -4627,7 +4666,7 @@ struct AppState {
     // Cmd+N: a new Untitled project. The open one has been dealt with by the caller (RequestDoc).
     void NewDocument() {
         std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-        const std::string keepKitFolder = project.kitFolder;
+        const std::string keepKitFolder = IsProjectKit(project.kitFolder) ? Project{}.kitFolder : project.kitFolder;   // C4b (e): a kit inside the old project's folder stays there
         Project fresh;
         fresh.name = "Untitled";
         fresh.kitFolder = keepKitFolder;
