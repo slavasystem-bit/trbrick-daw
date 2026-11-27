@@ -70,7 +70,7 @@ void Sequencer::Stop() {
     chordNoteOffScheduled_ = false;
     chordHeldCount_ = 0;
     perfOn_ = false; perfPrevCount_ = 0;
-    liveQ_ = false;
+    liveQ_.store(false);
     fillWas_ = false; fillPosPrev_ = -1; fillActiveUi_.store(false);
     engine_->FillSampleStop();
     ApplyStepOverlay();   // not playing: the arrangement mutes let go
@@ -505,10 +505,10 @@ void Sequencer::FireTick(int tick) {
     // C2: a chord clicked in CHORD LAB while the loop plays starts on the next beat (LAUNCH NOW: the next step) through the same performer,
     // and holds until the next chord of the loop: it stands in for the rest of the block it lands in.
     bool liveNow = false;
-    if (liveQ_) {
+    if (liveQ_.load()) {
         const int q = launchQuant_.load() == 0 ? 1 : std::max(1, StepsPerBeat());
         if (tick % q == 0) {
-            liveQ_ = false;
+            liveQ_.store(false);
             liveNow = true;
             const Track& ct = StepTrack(p, kChordTrackIndex);
             const int len = std::max(1, ct.useOwnLength ? ct.length : p.masterLength);
@@ -520,7 +520,7 @@ void Sequencer::FireTick(int tick) {
             }
             perfDue = false;
             StartChord(p, liveQNotes_, liveQCount_, span, liveQVel_, 0.0, 1, false);
-            liveStart_.store(idx); liveLen_.store(span);
+            liveStart_.store(idx); liveLen_.store(span); liveRecLen_.store(std::max(1, std::min(span, len - idx)));   // REC never writes past the loop end
             liveSerial_.fetch_add(1);
         }
     }

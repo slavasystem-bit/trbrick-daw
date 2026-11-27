@@ -452,12 +452,13 @@ public:
         liveQCount_ = std::clamp(count, 0, 6);
         for (int i = 0; i < 6; ++i) liveQNotes_[static_cast<size_t>(i)] = i < liveQCount_ ? notes[i] : 60;
         liveQVel_ = velocity;
-        liveQ_ = liveQCount_ > 0;
+        liveQ_.store(liveQCount_ > 0);
     }
-    bool LiveChordQueued() const { return liveQ_; }
+    bool LiveChordQueued() const { return liveQ_.load(); }
     uint32_t LiveChordSerial() const { return liveSerial_.load(); }
     int LiveChordStart() const { return liveStart_.load(); }
-    int LiveChordLen() const { return liveLen_.load(); }
+    int LiveChordLen() const { return liveLen_.load(); }      // how long it sounds (it may hold over the loop restart)
+    int LiveChordRecLen() const { return liveRecLen_.load(); }   // what REC writes: up to the loop end, never past it
     int ChordLiveSlot() const { return chordLiveSlot_; }
     bool IsSongModeActive() const { return songModeActive_; }
     int SongChainPos() const { return songChainPos_; }
@@ -557,12 +558,12 @@ private:
     uint32_t perfStrikes_ = 0;
     void StartChord(const Pattern& p, std::array<int8_t, 6> notes, int count, int lenSteps, float velocity, double off, int ratchet, bool slideFirst);
     // C2: a chord queued from CHORD LAB (QueueLiveChord), and where the last one started
-    bool liveQ_ = false;
+    std::atomic<bool> liveQ_{false};
     std::array<int8_t, 6> liveQNotes_{};
     int liveQCount_ = 0;
     float liveQVel_ = 0.85f;
     std::atomic<uint32_t> liveSerial_{0};
-    std::atomic<int> liveStart_{0}, liveLen_{0};
+    std::atomic<int> liveStart_{0}, liveLen_{0}, liveRecLen_{0};
     void PerfEmit();               // schedules the events of perf_ that fall in the tick perfTick_, then moves on one tick
     void PerfStop(double at);      // ends the chord being performed: every voice lets go at `at` (steps into this tick)
 

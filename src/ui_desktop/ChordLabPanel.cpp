@@ -132,7 +132,11 @@ void ChordLabPanel::TakeLiveChord(AppState& app) {
     if (!liveWait_) return;
     liveWait_ = false;
     if (!recLive_ || abBefore_ || app.sequencer.PlayPatternIndex() != SceneShown(app)) return;
-    Place(app, liveChord_, app.sequencer.LiveChordStart(), app.sequencer.LiveChordLen());
+    if (app.project.chordBankOn && app.sequencer.ChordSceneCur() != app.project.chordSceneEdit) {   // another slot is playing: its places are not this one's
+        app.SetStatus("CHORD LAB: NOT RECORDED - ANOTHER CHORD SLOT IS PLAYING");
+        return;
+    }
+    Place(app, liveChord_, app.sequencer.LiveChordStart(), app.sequencer.LiveChordRecLen());
 }
 
 // Takes the room [start, end) away from the blocks that are in it: a block that starts inside goes, one that reaches into it is shortened.
