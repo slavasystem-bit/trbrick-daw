@@ -40,6 +40,10 @@ constexpr ImVec4 kAmberV(0.95f, 0.64f, 0.24f, 1.0f);
 
 bool StartsWith(const std::string& s, const char* p) { return s.rfind(p, 0) == 0; }
 
+// C3 (UI-2): the defaults Option+click puts back (the values a new track / kick has)
+const Mixer::TrackState& TsDef() { static const Mixer::TrackState d{}; return d; }
+const KickSynthSettings& KickDef() { static const KickSynthSettings d{}; return d; }
+
 // Shorter captions so ~19 cells (an FM patch) still fit one row.
 std::string ShortName(const char* name) {
     std::string n = name;
@@ -129,11 +133,16 @@ void DrawWaveIcon(ImDrawList* dl, ImVec2 a, ImVec2 b, const SynthPatch& p, ImU32
 
 template <class Apply>
 void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, float cur, float lo, float hi,
-                             float step, const char* text, Apply&& apply, bool dim) {
+                             float step, const char* text, Apply&& apply, bool dim, float def) {
     int idx = cellCounter_++;
     bool sel = (idx == selCell_);
     float norm = hi > lo ? (cur - lo) / (hi - lo) : 0.0f;
     ParamCellResult r = ParamCell(id, cap, text, norm, sel, &accum_[std::min(idx, 95)], 3.0f, cellSize_, dim);
+    if (r.reset) {   // C3 (UI-2): Option+click = the default, one undo step
+        const float d = std::clamp(def, lo, hi);
+        if (d != cur) { app.PushUndo(); pendingUndo_ = false; apply(d); }
+        return;
+    }
     int steps = r.steps;
     int key = 0;
     if (sel) {
@@ -180,6 +189,25 @@ void ContextPanel::PatchCell(AppState& app, int ti, int paramIndex) {
     ParamCellResult r = ParamCell(id, cap.c_str(), val.c_str(), norm, sel, &accum_[std::min(idx, 95)],
                                   norm < 0.0f ? 9.0f : 3.0f, cellSize_);
     int steps = r.steps;
+    if (r.reset && paramIndex > 0) {   // C3 (UI-2): Option+click = what a new patch has (row 0, ENGINE, is not reset)
+        SynthPatch d; d.engineType = patch.engineType;
+        SynthPatch q = patch;
+        int dir = 1, n = 0;
+        if (norm >= 0.0f) {   // step towards the default until the next step would not get closer
+            const float target = PatchNorm(d, name);
+            dir = PatchNorm(q, name) < target ? 1 : -1;
+            for (; n < 4000; ++n) {
+                SynthPatch q2 = q; AdjustPatchParam(q2, paramIndex, dir);
+                if (std::fabs(PatchNorm(q2, name) - target) >= std::fabs(PatchNorm(q, name) - target)) break;
+                q = q2;
+            }
+        } else {              // a list: forward until it reads the same as the default
+            const std::string want = FormatPatchParam(d, paramIndex);
+            for (; n < 64 && FormatPatchParam(q, paramIndex) != want; ++n) AdjustPatchParam(q, paramIndex, 1);
+            if (FormatPatchParam(q, paramIndex) != want) n = 0;
+        }
+        steps = dir * n;
+    }
     if (r.clicked) selCell_ = idx;
     if (sel) {
         int mul = (keys_.coarse && norm >= 0.0f) ? 5 : 1;
@@ -263,43 +291,43 @@ void ContextPanel::DrawCommonRow(AppState& app, int ti) {
     BlockBegin("SENDS");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.reverbSend * 100 + 0.5f));
     FloatCell(app, "rev", "REVERB", mt.reverbSend, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::reverbSend, &Track::reverbSend, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::reverbSend, &Track::reverbSend, v, 0.0f, 1.0f); }, false, TsDef().reverbSend);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.delaySend * 100 + 0.5f));
     FloatCell(app, "del", "DELAY", mt.delaySend, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::delaySend, &Track::delaySend, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::delaySend, &Track::delaySend, v, 0.0f, 1.0f); }, false, TsDef().delaySend);
     BlockEnd();
 
     BlockBegin("STEREO");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.width * 100 + 0.5f));
     FloatCell(app, "wid", "WIDTH", mt.width, 0.0f, 2.0f, 2.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::width, &Track::width, v, 0.0f, 2.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::width, &Track::width, v, 0.0f, 2.0f); }, false, TsDef().width);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.spread * 100 + 0.5f));
     FloatCell(app, "spr", "SPREAD", mt.spread, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::spread, &Track::spread, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::spread, &Track::spread, v, 0.0f, 1.0f); }, false, TsDef().spread);
     BlockEnd();
 
     BlockBegin("INSERT FX");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.insertDrive * 100 + 0.5f));
     FloatCell(app, "drv", "DRIVE", mt.insertDrive, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertDrive, &Track::insertDrive, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertDrive, &Track::insertDrive, v, 0.0f, 1.0f); }, false, TsDef().insertDrive);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%+d%%", static_cast<int>(std::lround(mt.insertEqTilt * 100)));
     FloatCell(app, "eq", "EQ TILT", mt.insertEqTilt, -1.0f, 1.0f, 2.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertEqTilt, &Track::insertEqTilt, v, -1.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertEqTilt, &Track::insertEqTilt, v, -1.0f, 1.0f); }, false, TsDef().insertEqTilt);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.insertChorus * 100 + 0.5f));
     FloatCell(app, "cho", "CHORUS", mt.insertChorus, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertChorus, &Track::insertChorus, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertChorus, &Track::insertChorus, v, 0.0f, 1.0f); }, false, TsDef().insertChorus);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%.2fHZ", mt.autopanRate);
     FloatCell(app, "apr", "PAN RATE", mt.autopanRate, 0.05f, 8.0f, 0.1f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::autopanRate, &Track::autopanRate, v, 0.05f, 8.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::autopanRate, &Track::autopanRate, v, 0.05f, 8.0f); }, false, TsDef().autopanRate);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.autopanDepth * 100 + 0.5f));
     FloatCell(app, "apd", "PAN DEPTH", mt.autopanDepth, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::autopanDepth, &Track::autopanDepth, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::autopanDepth, &Track::autopanDepth, v, 0.0f, 1.0f); }, false, TsDef().autopanDepth);
     BlockEnd();
 
     BlockBegin("LENGTH / FEEL");
@@ -313,13 +341,13 @@ void ContextPanel::DrawCommonRow(AppState& app, int ti) {
     int trackLen = t.useOwnLength ? t.length : pat.masterLength;
     std::snprintf(buf, sizeof(buf), "%d", trackLen);
     FloatCell(app, "len", "STEPS", static_cast<float>(trackLen), 1.0f, static_cast<float>(kMaxSteps), 1.0f, buf,
-              [&](float v) { t.useOwnLength = true; t.length = std::clamp(static_cast<int>(v + 0.5f), 1, kMaxSteps); });
+              [&](float v) { t.useOwnLength = true; t.length = std::clamp(static_cast<int>(v + 0.5f), 1, kMaxSteps); }, false, static_cast<float>(pat.masterLength));
     // v39: this track's own swing; the lowest position means "follow the scene swing" (shown as SCENE)
     ImGui::SameLine(0, 6);
     if (t.swing < 0.0f) std::snprintf(buf, sizeof(buf), "SCENE");
     else std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(t.swing * 100.0f + 0.5f));
     FloatCell(app, "tsw", "SWING", t.swing < 0.0f ? -0.01f : t.swing, -0.01f, 0.75f, 0.01f, buf,
-              [&](float v) { t.swing = v < 0.0f ? -1.0f : std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 0.75f); });
+              [&](float v) { t.swing = v < 0.0f ? -1.0f : std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 0.75f); }, false, -0.01f);
     BlockEnd(false);
 }
 
@@ -423,19 +451,20 @@ void ContextPanel::DrawEq(AppState& app, int ti, float availW) {
     // ---- cells ----
     int cells = 10;
     cellSize_.x = std::clamp((availW - cw - 5 * 19.0f - 6.0f * cells) / cells, 40.0f, 62.0f);
-    auto freqCell = [&](const char* id, const char* cap, float cur, float lo, float hi, float Mixer::TrackState::*mf, float Track::*tf, bool offAtMin) {
+    auto freqCell = [&](const char* id, const char* cap, float cur, float lo, float hi, float Mixer::TrackState::*mf, float Track::*tf, bool offAtMin, float defHz) {
+        const float def = std::log2(defHz);
         if (offAtMin && cur <= 20.5f) std::snprintf(buf, sizeof(buf), "OFF"); else fmtHz(buf, sizeof(buf), cur);
         FloatCell(app, id, cap, std::log2(cur), std::log2(lo), std::log2(hi), 1.0f / 12.0f, buf,
-                  [&, mf, tf, lo, hi, offAtMin](float v) { float f = std::exp2(v); if (offAtMin && f < 22.0f) f = 20.0f; SetTrackFloatField(app, ti, mf, tf, f, lo, hi); });
+                  [&, mf, tf, lo, hi, offAtMin](float v) { float f = std::exp2(v); if (offAtMin && f < 22.0f) f = 20.0f; SetTrackFloatField(app, ti, mf, tf, f, lo, hi); }, false, def);
     };
     auto gainCell = [&](const char* id, float cur, float Mixer::TrackState::*mf, float Track::*tf) {
         std::snprintf(buf, sizeof(buf), "%+.1fDB", cur);
         FloatCell(app, id, "GAIN", cur, -kEqMaxDb, kEqMaxDb, 0.5f, buf,
-                  [&, mf, tf](float v) { SetTrackFloatField(app, ti, mf, tf, std::round(v * 2.0f) / 2.0f, -kEqMaxDb, kEqMaxDb); });
+                  [&, mf, tf](float v) { SetTrackFloatField(app, ti, mf, tf, std::round(v * 2.0f) / 2.0f, -kEqMaxDb, kEqMaxDb); }, false, 0.0f);
     };
 
     BlockBegin("LOW CUT");
-    freqCell("hpf", "FREQ", mt.eqHpfHz, 20.0f, 500.0f, &Mixer::TrackState::eqHpfHz, &Track::eqHpfHz, true);
+    freqCell("hpf", "FREQ", mt.eqHpfHz, 20.0f, 500.0f, &Mixer::TrackState::eqHpfHz, &Track::eqHpfHz, true, TsDef().eqHpfHz);
     ImGui::SameLine(0, 6);
     int sl = DiscreteCell("hps", "SLOPE", mt.eqHpfSlope >= 0.5f ? "24 DB" : "12 DB", !ep.HpfOn());
     if (sl != 0) { app.PushUndo(); setF(&Mixer::TrackState::eqHpfSlope, &Track::eqHpfSlope, mt.eqHpfSlope >= 0.5f ? 0.0f : 1.0f, 0.0f, 1.0f); }
@@ -444,23 +473,23 @@ void ContextPanel::DrawEq(AppState& app, int ti, float availW) {
     BlockBegin("LOW SHELF");
     gainCell("lg", mt.eqLowDb, &Mixer::TrackState::eqLowDb, &Track::eqLowDb);
     ImGui::SameLine(0, 6);
-    freqCell("lf", "FREQ", mt.eqLowHz, 30.0f, 500.0f, &Mixer::TrackState::eqLowHz, &Track::eqLowHz, false);
+    freqCell("lf", "FREQ", mt.eqLowHz, 30.0f, 500.0f, &Mixer::TrackState::eqLowHz, &Track::eqLowHz, false, TsDef().eqLowHz);
     BlockEnd(true);
 
     BlockBegin("MID BELL");
     gainCell("mg", mt.eqMidDb, &Mixer::TrackState::eqMidDb, &Track::eqMidDb);
     ImGui::SameLine(0, 6);
-    freqCell("mf", "FREQ", mt.eqMidHz, 80.0f, 10000.0f, &Mixer::TrackState::eqMidHz, &Track::eqMidHz, false);
+    freqCell("mf", "FREQ", mt.eqMidHz, 80.0f, 10000.0f, &Mixer::TrackState::eqMidHz, &Track::eqMidHz, false, TsDef().eqMidHz);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%.1f", mt.eqMidQ);
     FloatCell(app, "mq", "Q", std::log2(mt.eqMidQ), std::log2(0.3f), std::log2(6.0f), 1.0f / 12.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::eqMidQ, &Track::eqMidQ, std::exp2(v), 0.3f, 6.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::eqMidQ, &Track::eqMidQ, std::exp2(v), 0.3f, 6.0f); }, false, std::log2(TsDef().eqMidQ));
     BlockEnd(true);
 
     BlockBegin("HIGH SHELF");
     gainCell("hg", mt.eqHighDb, &Mixer::TrackState::eqHighDb, &Track::eqHighDb);
     ImGui::SameLine(0, 6);
-    freqCell("hf", "FREQ", mt.eqHighHz, 1500.0f, 16000.0f, &Mixer::TrackState::eqHighHz, &Track::eqHighHz, false);
+    freqCell("hf", "FREQ", mt.eqHighHz, 1500.0f, 16000.0f, &Mixer::TrackState::eqHighHz, &Track::eqHighHz, false, TsDef().eqHighHz);
     BlockEnd(false);
     ImGui::NewLine();
     if (ImGui::Button("FLAT##eqflat")) {
@@ -606,12 +635,12 @@ void ContextPanel::DrawDrum(AppState& app, int ti) {
     BlockBegin("OUTPUT");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.volume * 100 + 0.5f));
     FloatCell(app, "tvol", "VOLUME", mt.volume, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, v, 0.0f, 1.0f); }, false, TsDef().volume);
     ImGui::SameLine(0, 6);
     if (std::fabs(mt.pan) < 0.015f) std::snprintf(buf, sizeof(buf), "C");
     else std::snprintf(buf, sizeof(buf), "%c%d", mt.pan < 0 ? 'L' : 'R', static_cast<int>(std::fabs(mt.pan) * 100 + 0.5f));
     FloatCell(app, "tpan", "PAN", mt.pan, -1.0f, 1.0f, 1.0f / 32.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::pan, &Track::pan, std::fabs(v) < 0.02f ? 0.0f : v, -1.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::pan, &Track::pan, std::fabs(v) < 0.02f ? 0.0f : v, -1.0f, 1.0f); }, false, 0.0f);
     BlockEnd(true);
 
     // ---- right: tabs (same place, same size as the synth's) ----
@@ -642,10 +671,10 @@ void ContextPanel::DrawDrumVoice(AppState& app, int ti) {
 
     BlockBegin("VOICE");
     std::snprintf(buf, sizeof(buf), "%+.1fST", t.drumTune);
-    FloatCell(app, "tune", "TUNE", t.drumTune, -24.0f, 24.0f, 0.5f, buf, [&](float v) { t.drumTune = v; });
+    FloatCell(app, "tune", "TUNE", t.drumTune, -24.0f, 24.0f, 0.5f, buf, [&](float v) { t.drumTune = v; }, false, 0.0f);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%.2fX", t.drumDecay);
-    FloatCell(app, "decay", "DECAY", t.drumDecay, 0.25f, 2.0f, 0.05f, buf, [&](float v) { t.drumDecay = v; });
+    FloatCell(app, "decay", "DECAY", t.drumDecay, 0.25f, 2.0f, 0.05f, buf, [&](float v) { t.drumDecay = v; }, false, 1.0f);
     BlockEnd(true);
 
     DrawSampleEditBlocks(app, t.edit, [] {}, true, t.slotIndex == static_cast<int>(DrumSlot::Kick));   // v44.52: the same SAMPLE knobs as the sampler
@@ -665,25 +694,25 @@ void ContextPanel::DrawDrumVoice(AppState& app, int ti) {
         ImGui::SameLine(0, 6);
         if (ks.keyLock) std::snprintf(buf, sizeof(buf), "%s %.0fHZ", kKeyNames[std::clamp(app.project.randomizerKeyRoot, 0, kNumKeys - 1)], KickKeyFrequency(app.project.randomizerKeyRoot));
         else std::snprintf(buf, sizeof(buf), "%.0fHZ", ks.pitchHz);
-        FloatCell(app, "kpitch", "PITCH", ks.pitchHz, 30.0f, 100.0f, 1.0f, buf, [&](float v) { setF(ks.pitchHz, v); }, off || ks.keyLock);
+        FloatCell(app, "kpitch", "PITCH", ks.pitchHz, 30.0f, 100.0f, 1.0f, buf, [&](float v) { setF(ks.pitchHz, v); }, off || ks.keyLock, KickDef().pitchHz);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%.1fX", ks.sweep);
-        FloatCell(app, "ksweep", "SWEEP", ks.sweep, 1.0f, 10.0f, 0.1f, buf, [&](float v) { setF(ks.sweep, v); }, off);
+        FloatCell(app, "ksweep", "SWEEP", ks.sweep, 1.0f, 10.0f, 0.1f, buf, [&](float v) { setF(ks.sweep, v); }, off, KickDef().sweep);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%.0fMS", ks.sweepMs);
-        FloatCell(app, "ksweept", "SWEEP TIME", ks.sweepMs, 5.0f, 150.0f, 1.0f, buf, [&](float v) { setF(ks.sweepMs, v); }, off);
+        FloatCell(app, "ksweept", "SWEEP TIME", ks.sweepMs, 5.0f, 150.0f, 1.0f, buf, [&](float v) { setF(ks.sweepMs, v); }, off, KickDef().sweepMs);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%.0fMS", ks.decayMs);
-        FloatCell(app, "kdecay", "LENGTH", ks.decayMs, 80.0f, 1200.0f, 10.0f, buf, [&](float v) { setF(ks.decayMs, v); }, off);
+        FloatCell(app, "kdecay", "LENGTH", ks.decayMs, 80.0f, 1200.0f, 10.0f, buf, [&](float v) { setF(ks.decayMs, v); }, off, KickDef().decayMs);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(ks.click * 100 + 0.5f));
-        FloatCell(app, "kclick", "CLICK", ks.click, 0.0f, 1.0f, 1.0f / 32.0f, buf, [&](float v) { setF(ks.click, v); }, off);
+        FloatCell(app, "kclick", "CLICK", ks.click, 0.0f, 1.0f, 1.0f / 32.0f, buf, [&](float v) { setF(ks.click, v); }, off, KickDef().click);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(ks.drive * 100 + 0.5f));
-        FloatCell(app, "kdrive", "DRIVE", ks.drive, 0.0f, 1.0f, 1.0f / 32.0f, buf, [&](float v) { setF(ks.drive, v); }, off);
+        FloatCell(app, "kdrive", "DRIVE", ks.drive, 0.0f, 1.0f, 1.0f / 32.0f, buf, [&](float v) { setF(ks.drive, v); }, off, KickDef().drive);
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(ks.level * 100 + 0.5f));
-        FloatCell(app, "klevel", "LEVEL", ks.level, 0.0f, 1.0f, 1.0f / 32.0f, buf, [&](float v) { setF(ks.level, v); }, off);
+        FloatCell(app, "klevel", "LEVEL", ks.level, 0.0f, 1.0f, 1.0f / 32.0f, buf, [&](float v) { setF(ks.level, v); }, off, KickDef().level);
         BlockEnd(false);
     }
 }
@@ -905,27 +934,27 @@ void ContextPanel::DrawSampleEditBlocks(AppState& app, SampleEdit& ed, const std
     (void)drum;
     BlockBegin("SAMPLE");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(ed.start * 100 + 0.5f));
-    FloatCell(app, "sstart", "START", ed.start, 0.0f, 0.95f, 0.01f, buf, [&](float v) { ed.start = v; onChange(); });
+    FloatCell(app, "sstart", "START", ed.start, 0.0f, 0.95f, 0.01f, buf, [&](float v) { ed.start = v; onChange(); }, false, SampleEdit{}.start);
     if (ImGui::IsItemHovered()) Hint("Where in the sample the sound starts. Cut a silence or a pre-hit off the front.");
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(ed.length * 100 + 0.5f));
-    FloatCell(app, "sdecay", "LENGTH", ed.length, 0.02f, 1.0f, 0.02f, buf, [&](float v) { ed.length = v; onChange(); });
+    FloatCell(app, "sdecay", "LENGTH", ed.length, 0.02f, 1.0f, 0.02f, buf, [&](float v) { ed.length = v; onChange(); }, false, SampleEdit{}.length);
     if (ImGui::IsItemHovered()) Hint("How much of the sample, counted from START, plays before it fades out. 100% = to the end.");
     if (!hideAttack) {
         ImGui::SameLine(0, 6);
         std::snprintf(buf, sizeof(buf), "%.0fMS", ed.attackMs);
-        FloatCell(app, "sattack", "ATTACK", ed.attackMs, 0.0f, 200.0f, 1.0f, buf, [&](float v) { ed.attackMs = v; onChange(); });
+        FloatCell(app, "sattack", "ATTACK", ed.attackMs, 0.0f, 200.0f, 1.0f, buf, [&](float v) { ed.attackMs = v; onChange(); }, false, SampleEdit{}.attackMs);
         if (ImGui::IsItemHovered()) Hint("A fade-in. 0 = the sample's own start (a tiny click guard on drums). Longer = a softer, swelling start.");
     }
     BlockEnd(true);
 
     BlockBegin("TUNE / LEVEL");
     std::snprintf(buf, sizeof(buf), "%+d CT", static_cast<int>(ed.fineCents));
-    FloatCell(app, "stune", "FINE", static_cast<float>(ed.fineCents), -100.0f, 100.0f, 1.0f, buf, [&](float v) { ed.fineCents = static_cast<int8_t>(std::lround(v)); onChange(); });
+    FloatCell(app, "stune", "FINE", static_cast<float>(ed.fineCents), -100.0f, 100.0f, 1.0f, buf, [&](float v) { ed.fineCents = static_cast<int8_t>(std::lround(v)); onChange(); }, false, 0.0f);
     if (ImGui::IsItemHovered()) Hint("Fine tune in cents (100 = a semitone), on top of TUNE / ROOT.");
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%+d DB", static_cast<int>(ed.gainDb));
-    FloatCell(app, "sgain", "GAIN", static_cast<float>(ed.gainDb), -24.0f, 12.0f, 1.0f, buf, [&](float v) { ed.gainDb = static_cast<int8_t>(std::lround(v)); onChange(); });
+    FloatCell(app, "sgain", "GAIN", static_cast<float>(ed.gainDb), -24.0f, 12.0f, 1.0f, buf, [&](float v) { ed.gainDb = static_cast<int8_t>(std::lround(v)); onChange(); }, false, 0.0f);
     if (ImGui::IsItemHovered()) Hint("Makes this sample quieter or louder before the track's VOLUME (a quiet recording, a hot one).");
     ImGui::SameLine(0, 6);
     int rv = DiscreteCell("srev", "DIRECT.", ed.reverse ? "REVERSE" : "FORWARD");
@@ -942,12 +971,12 @@ void ContextPanel::DrawSampler(AppState& app, int ti) {
     BlockBegin("OUTPUT");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.volume * 100 + 0.5f));
     FloatCell(app, "tvol", "VOLUME", mt.volume, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, v, 0.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, v, 0.0f, 1.0f); }, false, TsDef().volume);
     ImGui::SameLine(0, 6);
     if (std::fabs(mt.pan) < 0.015f) std::snprintf(buf, sizeof(buf), "C");
     else std::snprintf(buf, sizeof(buf), "%c%d", mt.pan < 0 ? 'L' : 'R', static_cast<int>(std::fabs(mt.pan) * 100 + 0.5f));
     FloatCell(app, "tpan", "PAN", mt.pan, -1.0f, 1.0f, 1.0f / 32.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::pan, &Track::pan, std::fabs(v) < 0.02f ? 0.0f : v, -1.0f, 1.0f); });
+              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::pan, &Track::pan, std::fabs(v) < 0.02f ? 0.0f : v, -1.0f, 1.0f); }, false, 0.0f);
     BlockEnd(true);
 
     static const char* kTabs[4] = {"VOICE", "EQ", "FX", "AUTO"};
@@ -990,7 +1019,7 @@ void ContextPanel::DrawSamplerVoice(AppState& app, int ti) {
     ImGui::SameLine(0, 6);
     const int rootMidi = sp.root;
     std::snprintf(buf, sizeof(buf), "%s%d", kNoteNames[((rootMidi % 12) + 12) % 12], rootMidi / 12 - 1);
-    FloatCell(app, "sroot", "ROOT", static_cast<float>(sp.root), 24.0f, 96.0f, 1.0f, buf, [&](float v) { sp.root = static_cast<int8_t>(std::lround(v)); push(); }, sp.mode == 2);
+    FloatCell(app, "sroot", "ROOT", static_cast<float>(sp.root), 24.0f, 96.0f, 1.0f, buf, [&](float v) { sp.root = static_cast<int8_t>(std::lround(v)); push(); }, sp.mode == 2, 60.0f);
     if (ImGui::IsItemHovered()) Hint(sp.mode == 1 ? "The note of the first slice; the next notes up play the next slices."
                                                   : "The note that plays the sample at its own pitch. A step on another note plays it higher or lower, like a keyboard.");
     if (sp.mode == 1) {
@@ -1008,7 +1037,7 @@ void ContextPanel::DrawSamplerVoice(AppState& app, int ti) {
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("Finds the hits of the sample and puts a mark on each. It replaces the marks you have now (Undo brings them back). Then fine-tune on the waveform: click = add a mark, right-click = remove the nearest one.");
             ImGui::SameLine(0, 6);
             std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(hitSens_ * 100 + 0.5f));
-            FloatCell(app, "ssens", "SENS", hitSens_, 0.0f, 1.0f, 0.05f, buf, [&](float v) { hitSens_ = v; });
+            FloatCell(app, "ssens", "SENS", hitSens_, 0.0f, 1.0f, 0.05f, buf, [&](float v) { hitSens_ = v; }, false, 0.5f);
             if (ImGui::IsItemHovered()) Hint("How soft a hit may be and still get a mark. Higher finds more (also ghost notes), lower only the loud hits. Press FIND to search again.");
         }
     }

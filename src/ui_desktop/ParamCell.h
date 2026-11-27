@@ -12,10 +12,15 @@
 //                        (value += steps * stepSize) share one code path
 //   - discrete cells  -> (norm < 0) a plain click cycles +1, right-click -1,
 //                        for on/off, enum and list-like values
+//   - C3 (UI-2): the same modifiers as every ValueField (Interaction.h): Shift while dragging = finer (x0.1),
+//                Option(Alt)+click = `reset` (the caller puts the default back; that press does not drag), and the
+//                gestures are named in the info line on hover.
 // Continuous cells (norm in 0..1) draw a proportional fill like KnobAbsolute
 // in KnobWidgets.h; that file's knobs stay for FxPanel.
 #include "imgui.h"
 #include "Visual.h"
+#include "Interaction.h"
+#include "InfoLine.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -26,6 +31,7 @@ struct ParamCellResult {
     bool clicked = false;     // left press landed on the cell (select it)
     bool activated = false;   // a drag gesture just started (push undo once here)
     int steps = 0;            // net +/- steps from drag, or +1/-1 from a click on a discrete cell
+    bool reset = false;       // C3 (UI-2): Option(Alt)+click: put the default back (no steps this press)
 };
 
 // UI-7: a caption or value wider than its cell ("KEY LOCK", "SWEEP TIME", "FORWARD") is drawn smaller to fit instead of being cut
@@ -86,15 +92,26 @@ inline ParamCellResult ParamCell(const char* id, const char* caption, const char
         ParamCellCenteredText(dl, ImVec2(p0.x, boxMax.y + 2.0f), p1, valueText, IM_COL32(210, 212, 222, 255));
     }
 
-    if (ImGui::IsItemActivated()) { res.clicked = true; res.activated = true; }
-    if (active) {
-        *accumPx -= ImGui::GetIO().MouseDelta.y;
+    ImGuiStorage* st = ImGui::GetStateStorage();
+    const ImGuiID kSkip = ImGui::GetID("skip");
+    if (ImGui::IsItemActivated()) {
+        res.clicked = true;
+        if (interaction::IsReset()) { res.reset = true; st->SetInt(kSkip, 1); }   // Option+click: the default, and this press does not drag
+        else { res.activated = true; st->SetInt(kSkip, 0); }
+    }
+    const bool skip = st->GetInt(kSkip, 0) != 0;
+    if (active && !skip) {
+        *accumPx -= ImGui::GetIO().MouseDelta.y * (interaction::IsFine() ? interaction::kFineFactor : 1.0f);   // Shift = finer
         while (*accumPx >= pxPerStep) { res.steps++; *accumPx -= pxPerStep; }
         while (*accumPx <= -pxPerStep) { res.steps--; *accumPx += pxPerStep; }
     } else {
         *accumPx = 0.0f;
     }
-    if (discrete) {
+    if (hovered || active) {
+        HintGestures(discrete ? "Click: next   Right-click: back   Drag: scrub   Up / Down: change the selected cell"
+                              : "Drag up / down: change   Shift: finer   Option+click: default   Up / Down: change the selected cell (Shift: bigger)");
+    }
+    if (discrete && !skip) {
         // A click that never turned into a drag cycles forward; a right
         // click cycles back. (Drag on a discrete cell still steps, so an
         // enum can be scrubbed.)

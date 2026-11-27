@@ -63,33 +63,27 @@ float HeaderPanel::DrawPitch(AppState& app, float rightX) {
             Hint("PITCH: plays EVERYTHING faster or slower, tempo and pitch together, like the pitch fader of a Technics deck - to play along with a record. Now %+.1f%% = %.1f BPM.\nAt any time: Option+Up / Down = faster / slower by 0.1%% (Shift 1%%), Option+Left / Right = a push while held. Double click or Option+click = 0%%.\nClick: shows the fader and the range. Exports are not affected.",
                  pct, app.PitchedBpm(bpm));
         if (app.pitchMode) {
-            // the fader: centre = 0%, drag or click to set, Option+click / double click = 0
+            // C3 (UI-3): the fader is a ValueField bar like every other fader: it moves from where it is (a click does not jump), Shift =
+            // finer, Option+click = 0 %, double click = type a value, Esc during a drag puts it back. Centre = 0 % with a detent.
             ImGui::SameLine(0, 6);
             const float lim = app.PitchLimit();
             const float fw = 150.0f, fh = ImGui::GetFrameHeight();
             const ImVec2 p0 = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton("##pitchFader", ImVec2(fw, fh));
-            const bool hov = ImGui::IsItemHovered(), act = ImGui::IsItemActive();
-            if (act) {
-                const float t = std::clamp((ImGui::GetIO().MousePos.x - p0.x - 6.0f) / (fw - 12.0f), 0.0f, 1.0f);
-                float v = (t * 2.0f - 1.0f) * lim;
-                if (std::fabs(v) < 0.2f) v = 0.0f;   // a detent in the middle, like the click of a real fader
-                app.PitchSet(v);
+            float v = app.pitchPct.load(std::memory_order_relaxed);
+            ValueSpec sp = BarSpec(-lim, lim, 0.0f, fw);
+            sp.fromCenter = true; sp.color = IM_COL32(140, 198, 255, 255); sp.fmt = "%.1f"; sp.unit = " %";
+            const ValueResult r = ValueField("##pitchFader", &v, sp, fw);
+            if (r.changed) app.PitchSet(v);
+            const bool hov = ImGui::IsItemHovered();
+            {   // ticks every quarter of the range over the bar, the zero one longer
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+                const float cy = p0.y + fh * 0.5f, x0 = p0.x, x1 = p0.x + fw, xm = (x0 + x1) * 0.5f;
+                for (int tk = -4; tk <= 4; ++tk) {
+                    const float tx = xm + (x1 - x0) * 0.5f * tk / 4.0f;
+                    dl->AddLine(ImVec2(tx, cy - (tk == 0 ? 9.0f : 6.0f)), ImVec2(tx, cy - 5.0f), IM_COL32(150, 160, 175, tk == 0 ? 255 : 120), 1.0f);
+                }
             }
-            if (ImGui::IsItemHovered() && (ImGui::IsMouseDoubleClicked(0) || (ImGui::GetIO().KeyAlt && ImGui::IsMouseClicked(0)))) app.PitchSet(0.0f);
-            const float cur = app.pitchPct.load(std::memory_order_relaxed);
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            const float cy = p0.y + fh * 0.5f, x0 = p0.x + 6.0f, x1 = p0.x + fw - 6.0f, xm = (x0 + x1) * 0.5f;
-            dl->AddRectFilled(ImVec2(p0.x, p0.y + 3), ImVec2(p0.x + fw, p0.y + fh - 3), hov || act ? vis::kCellHover : vis::kCell, 4.0f);
-            dl->AddRect(ImVec2(p0.x, p0.y + 3), ImVec2(p0.x + fw, p0.y + fh - 3), act ? vis::kAccent : vis::kLineHi, 4.0f);
-            for (int tk = -4; tk <= 4; ++tk) {   // ticks every quarter of the range, the zero one longer
-                const float tx = xm + (x1 - x0) * 0.5f * tk / 4.0f;
-                dl->AddLine(ImVec2(tx, cy - (tk == 0 ? 7.0f : 3.0f)), ImVec2(tx, cy + (tk == 0 ? 7.0f : 3.0f)), IM_COL32(150, 160, 175, tk == 0 ? 255 : 120), 1.0f);
-            }
-            const float hx = xm + (x1 - x0) * 0.5f * (cur / lim);
-            if (std::fabs(cur) > 0.04f) dl->AddRectFilled(ImVec2(std::min(xm, hx), cy - 2), ImVec2(std::max(xm, hx), cy + 2), IM_COL32(140, 198, 255, 200), 2.0f);
-            dl->AddRectFilled(ImVec2(hx - 3, p0.y + 4), ImVec2(hx + 3, p0.y + fh - 4), IM_COL32(235, 240, 248, 255), 2.0f);
-            if (hov) Hint("PITCH fader: drag to set, double click or Option+click = 0%%. Range +-%.0f%%, 0.1%% steps.", lim);
+            if (hov) Hint("PITCH fader: drag (Shift = finer), Option+click = 0%%, double click = type. Range +-%.0f%%, 0.1%% steps.", lim);
 
             ImGui::SameLine(0, 6);
             static const char* const kRangeNames[2] = {"8%", "16%"};
