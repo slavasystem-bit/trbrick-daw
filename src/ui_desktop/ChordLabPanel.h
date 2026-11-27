@@ -18,7 +18,9 @@ public:
     void Draw(AppState& app, float width, float height);
     void Leave(AppState& app);
     // v44.46: how the SOUND view draws the chord instrument (main passes the context panel)
-    void SetSoundBody(std::function<void(AppState&)> f) { soundBody_ = std::move(f); }   // the panel is not shown: stops a chord that is being auditioned
+    void SetSoundBody(std::function<void(AppState&)> f) { soundBody_ = std::move(f); }
+    // C2 part 3: the short SOUND column under PLAY (main passes the context panel); returns true for ALL KNOBS...
+    void SetSoundColumn(std::function<bool(AppState&, ImVec2, float)> f) { soundColumn_ = std::move(f); }   // the panel is not shown: stops a chord that is being auditioned
 
 private:
     struct Blk { int start = 0, len = 1; };
@@ -45,7 +47,7 @@ private:
     Slot AdviceSlot(const AppState& app, const Track& jam, const std::vector<Blk>& blocks) const;
     void DrawHeader(AppState& app, ImDrawList* dl, ImVec2 o, float W, int scene);
     void DrawWhatFits(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot);
-    void DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot);
+    float DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, float h, const Track& jam, const std::vector<Blk>& blocks, const Slot& slot);
     void ClearJam(AppState& app);
     Track& JamTrack(AppState& app);
     std::vector<Blk> Blocks(const Track& tr) const;
@@ -60,13 +62,14 @@ private:
     int selBlock_ = -1;
     int srcMask_ = 1;                    // bit 0 BASS, bit 1 SYNTH 2, bit 2 SYNTH 3
     LabMelody mel_;                      // the notes under the place WHAT FITS is about
-    bool soundView_ = false;             // JAM | SOUND switch
+    bool soundView_ = false;             // ALL KNOBS...: the whole chord instrument in the place of the lab (BACK TO THE JAM returns)
     int adviceMode_ = 0;                 // C2: BEST / SMOOTH / MORE TENSION / NEW COLOUR
     int adviceSel_ = 0;                  // the card whose sentence is shown
     bool abBefore_ = false;              // C2: A BEFORE is being heard (the draft waits in abSlot_)
     int abSlot_ = 0;
     uint64_t labMark_ = 0;               // C2: the undo marker taken when CHORD LAB was opened (UNDO ALL goes back to it)
     std::function<void(AppState&)> soundBody_;
+    std::function<bool(AppState&, ImVec2, float)> soundColumn_;
     int defLen_ = 1;                     // new block: 0 half a bar, 1 a bar, 2 two bars
     int dragRow_ = -1, dragCol_ = -1;    // a palette chip being dragged towards the loop
     int resizeBlk_ = -1;                 // a block edge being dragged
