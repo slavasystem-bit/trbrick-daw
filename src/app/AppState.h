@@ -588,14 +588,35 @@ struct AppState {
         for (std::string* n : names) { auto it = renamed.find(*n); if (it != renamed.end()) *n = it->second; }
         kitsDirty_ = true;
     }
-    bool PastePattern() {
-        if (!hasPatternClipboard) return false;
-        {   // the clipboard itself now names this folder's copies (pasting again needs no copy)
+    // Reads and copies kit files: call it BEFORE taking the scene lock (the audio thread waits on that lock), as every paste
+    // command does; Paste* call it again, which is then a no-op. The clipboards then name this folder's copies.
+    // A paste asked for from a panel drawn under the scene lock (the track menu): run by the shell next frame, outside any lock.
+    struct PasteRequest { int kind = 0, track = 0; };   // kind 1 = track onto `track`, 2 = whole scene
+    PasteRequest pasteRequest;
+    void RunPasteRequest() {
+        const PasteRequest r = pasteRequest;
+        if (r.kind == 0) return;
+        pasteRequest = {};
+        PrepareClipboardKits();
+        SceneLock lock(sequencer.PatternMutex(), "PASTE");
+        if (r.kind == 1) PasteTrack(r.track);
+        else SetStatus(PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
+    }
+    void PrepareClipboardKits() {
+        if (hasPatternClipboard) {
             std::vector<std::string*> names = {&patternClipboard.kitFolder};
             for (int t = 0; t < kNumDrumTracks; ++t) names.push_back(&patternClipboard.tracks[static_cast<size_t>(t)].kitFolder);
             BringKitsFrom(patternClipDir_, names);
             patternClipDir_ = DirNameOf(projectPath);
         }
+        if (hasTrackClipboard) {
+            BringKitsFrom(trackClipDir_, {&trackClipboard.kitFolder});
+            trackClipDir_ = DirNameOf(projectPath);
+        }
+    }
+    bool PastePattern() {
+        if (!hasPatternClipboard) return false;
+        PrepareClipboardKits();   // a no-op when the command already did it before its lock
         PushUndo();
         CurrentPattern() = patternClipboard;
         SyncMixer(CurrentPattern());
@@ -638,8 +659,7 @@ struct AppState {
             SetStatus("CAN'T PASTE: TYPE MISMATCH");
             return;
         }
-        BringKitsFrom(trackClipDir_, {&trackClipboard.kitFolder});   // C4b (e)
-        trackClipDir_ = DirNameOf(projectPath);
+        PrepareClipboardKits();   // C4b (e): a no-op when the command already did it before its lock
         PushUndo();
         std::string keepName = dest.name;
         TrackType keepType = dest.type;

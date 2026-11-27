@@ -97,6 +97,7 @@ void HandleShortcuts(AppState& app) {
         return;
     }
     if (cmd && ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+        app.PrepareClipboardKits();   // C4b (e): kit files of another project's folder are copied before the lock, never under it
         SceneLock lock(app.sequencer.PatternMutex(), "KEYS");
         if (shift) app.SetStatus(app.PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
         else app.PasteTrack(std::clamp(app.seqCursorTrack, 0, kNumTracks - 1));

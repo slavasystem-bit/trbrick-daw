@@ -2562,7 +2562,12 @@ int main(int argc, char** argv) {
                 fa.CopyPattern();
                 fa.projectPath = pdir + "/elsewhere2/o.t8proj";
                 fa.project.currentPattern = 2;
-                check(fa.PastePattern() && fa.CurrentPattern().kitFolder == "samples/kits/electro_2_2", "c4b e: ... under a free name when that folder has another kit of the name");
+                fa.PrepareClipboardKits();   // what a paste command does before it takes the scene lock (review of #48)
+                check(fa.patternClipboard.kitFolder == "samples/kits/electro_2_2" && fs::exists(pdir + "/elsewhere2/samples/kits/electro_2_2/chh.wav"),
+                      "c4b e: the kit files are copied before the paste takes the scene lock");
+                fa.pasteRequest = {2, 0};
+                fa.RunPasteRequest();   // the track menu's paste, run by the shell outside the lock
+                check(fa.CurrentPattern().kitFolder == "samples/kits/electro_2_2" && fa.pasteRequest.kind == 0, "c4b e: ... under a free name when that folder has another kit of the name");
             }
             da.seqCursorTrack = 6;
             check(!da.AssignSampleToSlot("selftest_tmp_drop.wav"), "drop: a synth track refuses a sample");

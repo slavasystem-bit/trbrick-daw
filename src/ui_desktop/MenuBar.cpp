@@ -127,11 +127,13 @@ void MenuBar::Draw(AppState& app) {
             const int tr = std::clamp(app.seqCursorTrack, 0, kNumTracks - 1);
             if (Item("Copy Track", "^C", "Copy the track under the cursor (the digits 1-0 or Cmd+arrows move the cursor). Over the piano roll with notes selected, Cmd+C copies the notes.")) app.CopyTrack(tr);
             if (Item("Paste Track", "^V", "Paste it onto the track under the cursor (same kind of track only).", app.hasTrackClipboard)) {
+                app.PrepareClipboardKits();   // C4b (e): disk copies before the lock
                 SceneLock lock(app.sequencer.PatternMutex(), "MENU");
                 app.PasteTrack(tr);
             }
             if (Item("Copy Scene", "Shift+^C", "Copy the whole edited scene.")) { app.CopyPattern(); app.SetStatus("SCENE COPIED"); }
             if (Item("Paste Scene", "Shift+^V", "Replace the edited scene with the copied one (undoable).", app.hasPatternClipboard)) {
+                app.PrepareClipboardKits();   // C4b (e): disk copies before the lock
                 SceneLock lock(app.sequencer.PatternMutex(), "MENU");
                 app.SetStatus(app.PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
             }
