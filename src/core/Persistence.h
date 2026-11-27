@@ -10,7 +10,7 @@ namespace t8 {
 
 // File format version written as "format=N" under [project]. 1 = files from
 // before the key existed; 2 adds the trailing [end] completeness marker.
-constexpr int kProjectFormatVersion = 9;   // 9: C4b, the SAMPLE fill (fillSample=, fsmN=); 8: v44.59, keys added in v44.51-v44.58 (sceneLink, euclid, sedit, sample, keytrack ...); every new key bumps it (selftest checks); 3: v44.5.4, the sound (patches, kick, kit) is saved per scene; 4: v44.21, dynamics lanes with free points (dyn / lv2); 5: v44.22, every brick has its own scene slot (pattern16..79); 7: v44.50, the sampler is the 11th track (sampler= per scene; the kit part of ownSound moved from bit 10 to bit 11); 6: v44.24, a brick can have its own sound for some instruments (ownSound), the sound of the track holds whole channels
+constexpr int kProjectFormatVersion = 10;   // 10: C4b, a fill may last half a beat (fill beats 0; an older program would read 1 beat, so it keeps the file and saves a copy); 9: C4b, the SAMPLE fill (fillSample=, fsmN=); 8: v44.59, keys added in v44.51-v44.58 (sceneLink, euclid, sedit, sample, keytrack ...); every new key bumps it (selftest checks); 3: v44.5.4, the sound (patches, kick, kit) is saved per scene; 4: v44.21, dynamics lanes with free points (dyn / lv2); 5: v44.22, every brick has its own scene slot (pattern16..79); 7: v44.50, the sampler is the 11th track (sampler= per scene; the kit part of ownSound moved from bit 10 to bit 11); 6: v44.24, a brick can have its own sound for some instruments (ownSound), the sound of the track holds whole channels
 
 // Crash-safe: writes <path>.tmp, fsyncs, renames over <path>, keeps the old
 // file as <path>.bak.

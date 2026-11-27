@@ -338,7 +338,7 @@ int main(int argc, char** argv) {
                 case 0: a.AssignSampleToFill(R(2) ? "selftest_tmp_fuzz/src/fz_a.wav" : "selftest_tmp_fuzz/src/fz_b.wav", where); break;
                 case 1: { const auto& nm = a.SampleNames(); if (!nm.empty()) a.SetFillSample(where, nm[static_cast<size_t>(R(static_cast<int>(nm.size())))]); break; }
                 case 2: if (fr) { fr->kind = FillKind::Sample; fr->when = FillWhen::EveryLoop; fr->SetSample(R(2) ? "gone.wav" : std::string(R(200), 'q')); } break;   // missing / absurd: silence
-                case 3: if (fr) { fr->sampleFit = static_cast<uint8_t>(R(2)); fr->drumsMute = R(2) != 0; fr->beats = static_cast<uint8_t>(kFillBeatChoices[R(4)]); fr->when = static_cast<FillWhen>(R(kNumFillWhen)); } break;
+                case 3: if (fr) { fr->sampleFit = static_cast<uint8_t>(R(2)); fr->drumsMute = R(2) != 0; fr->beats = static_cast<uint8_t>(kFillBeatChoices[R(5)]); fr->when = static_cast<FillWhen>(R(kNumFillWhen)); } break;
                 case 4: if (fr) fr->kind = static_cast<FillKind>(R(kNumFillKinds)); break;
                 default: if (where >= 0) p.songChain[static_cast<size_t>(where)].fillMode = static_cast<FillMode>(R(3)); break;
                 }
