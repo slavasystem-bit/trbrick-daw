@@ -244,7 +244,7 @@ void ChordLabPanel::StartFrom(AppState& app, int pi) {
     if (pi < 0 || pi >= static_cast<int>(all.size())) return;
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
     const int len = DefaultLen(app);
-    const int row = app.chdComplex ? 1 : 0;   // the CHORDS tab's 7TH / TRIAD choice carries over
+    const int row = 0;   // C2 part 3b: START FROM writes triads (the 7TH / TRIAD setting of the old CHORDS tab is gone)
     {
         SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
         BeginEdit(app);

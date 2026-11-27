@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
             case 49: a.sequencer.SetLaunchQuantize(R(3)); a.sequencer.LaunchScene(R(kNumLiveScenes)); break;
             case 50: a.seqCursorTrack = kNumDrumTracks + syn; a.ApplySynthPreset(R(static_cast<int>(AllSynthPresets().size()))); break;
             case 51: a.chdLiveSlot = -1; a.RefreshChordLive(true); break;   // v44.44: the live chord is gone from the UI; the engine path stays off
-            case 52: a.chdComplex = R(2); a.chdOutputMode = R(2) ? ChordOutputMode::Arpeggio : ChordOutputMode::Stack; a.chdArpRateSteps = 1 + R(4); a.chdChordLengthSteps = 1 << R(6); break;
+            case 52: a.ApplyChordProgression(R(static_cast<int>(AllChordProgressions().size()))); break;   // C2 part 3b: the VOICING settings are gone
             case 53: { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); p.currentPattern = R(kNumLiveScenes); p.liveScene = p.currentPattern; break; }
             case 54: if (nb > 0) { a.PushSoundUndo(); const int b = R(nb); a.SetBrickLevel(b, R(2), -R(30)); a.SetBrickTrackLevels(b, tr, -R(48), -R(12)); a.SetBrickTransitionLevel(b, -R(20)); a.SetBrickFillLevel(b, -R(20)); } break;
             case 55: if (nb > 0) { const int b = R(nb); const int row = a.AddBrickParamRow(b, tr, R(6)); if (row >= 0 && R(3) == 0) a.RemoveBrickParamRow(b, 0); } break;

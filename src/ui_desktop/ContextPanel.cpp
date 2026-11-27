@@ -9,7 +9,6 @@
 #include "TrackStyle.h"
 #include "MixerSync.h"
 #include "SynthSync.h"
-#include "ChordEditor.h"
 #include "core/SynthVoice.h"
 #include "core/Persistence.h"
 #include "core/ChordVoice.h"
@@ -1319,7 +1318,6 @@ void ContextPanel::DrawAuto(AppState& app, int ti, float availW) {
 
 void ContextPanel::DrawChords(AppState& app, int ti) {
     (void)ti;
-    char buf[24];
     cellSize_.x = 68.0f;
 
     // ---- CHORDS: v44.46 the progression picker (PROGRESSION, CUSTOM, APPLY) is gone: START FROM in CHORD LAB does the same, with the
@@ -1352,51 +1350,13 @@ void ContextPanel::DrawChords(AppState& app, int ti) {
         if (ImGui::IsItemHovered()) Hint("Same, but also the three synth tracks of this scene");
     }
     if (ImGui::Button("RANDOM", ImVec2(88, 0))) app.RandomizeChordProgression();
-    if (ImGui::IsItemHovered()) Hint("A random progression in the key, written with the VOICING settings on the right.");
+    if (ImGui::IsItemHovered()) Hint("A random progression in the key: held chords, one per even part of the scene. How they are played (ARP, STRUM...) is PLAY in CHORD LAB.");
     ImGui::SameLine(0, 4);
     if (ImGui::Button("CLEAR", ImVec2(70, 0))) { app.ClearChordTrack(); app.SetStatus("CHORD TRACK CLEARED"); }
-    BlockEnd();
-
-    // ---- VOICING (the five generator settings) ----
-    BlockBegin("VOICING");
-    int st = DiscreteCell("cx", "CHORDS", app.chdComplex ? "7TH" : "TRIAD");
-    if (st != 0) { app.chdComplex = !app.chdComplex; app.RefreshChordLive(true); }
-    ImGui::SameLine(0, 6);
-    st = DiscreteCell("mode", "OUTPUT", app.chdOutputMode == ChordOutputMode::Arpeggio ? "ARP" : "STACK");
-    if (st != 0) app.chdOutputMode = app.chdOutputMode == ChordOutputMode::Arpeggio ? ChordOutputMode::Stack : ChordOutputMode::Arpeggio;
-    bool arp = app.chdOutputMode == ChordOutputMode::Arpeggio;
-    ImGui::SameLine(0, 6);
-    st = DiscreteCell("arpst", "ARP STYLE", ArpStyleName(app.chdArpStyle), !arp);
-    if (st != 0) app.chdArpStyle = static_cast<ArpStyle>((static_cast<int>(app.chdArpStyle) + (st > 0 ? 1 : -1) + kNumArpStyles) % kNumArpStyles);
-    ImGui::SameLine(0, 6);
-    std::snprintf(buf, sizeof(buf), "%d STEP%s", app.chdArpRateSteps, app.chdArpRateSteps == 1 ? "" : "S");
-    st = DiscreteCell("arprate", "ARP RATE", buf, !arp);
-    if (st != 0) {
-        static const int kRates[3] = {1, 2, 4};
-        int c = 0;
-        for (int i = 0; i < 3; ++i) if (kRates[i] == app.chdArpRateSteps) c = i;
-        app.chdArpRateSteps = kRates[(c + (st > 0 ? 1 : -1) + 3) % 3];
-    }
-    ImGui::SameLine(0, 6);
-    if (app.chdChordLengthSteps == 0) std::snprintf(buf, sizeof(buf), "AUTO");
-    else std::snprintf(buf, sizeof(buf), "%d STEPS", app.chdChordLengthSteps);
-    st = DiscreteCell("clen", "CHORD LEN", buf);
-    if (st != 0) {
-        static const int kLens[5] = {0, 4, 8, 16, 32};
-        int c = 0;
-        for (int i = 0; i < 5; ++i) if (kLens[i] == app.chdChordLengthSteps) c = i;
-        app.chdChordLengthSteps = kLens[(c + (st > 0 ? 1 : -1) + 5) % 5];
-    }
-    ImGui::TextDisabled("settings are used by RANDOM and START FROM");
-    BlockEnd();
-
-    // ---- the chord editor (single chords by hand) ----
-    BlockBegin("EDIT BY HAND");
-    if (ImGui::Button("CHORD EDITOR...")) OpenChordEditor(app, app.project.chordBankOn ? app.project.chordSceneEdit : -1);
-    if (ImGui::IsItemHovered()) Hint("Build or change single chords by hand: root, type, inversion, length, order.\nWorks on the chord scene you are editing (LIVE > CHORDS) or on this scene's own chords.");
-    ImGui::SameLine(0, 8);
-    ImGui::TextDisabled(app.project.chordBankOn ? "RANDOM writes into chord slot %d" : "RANDOM writes into this scene's chords", app.project.chordSceneEdit + 1);
     BlockEnd(false);
+
+    // C2 part 3b: VOICING (triad / 7th, STACK / ARP, arp style and rate, chord length) and the chord editor window are gone: how the
+    // chords are played is PLAY in CHORD LAB (it plays them, it does not write them into the steps), single chords are built there.
     ImGui::Dummy(ImVec2(1, 4));
     // (the chord track's sends / insert FX / length live in the SOUND view)
 }

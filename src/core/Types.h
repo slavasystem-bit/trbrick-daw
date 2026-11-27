@@ -55,29 +55,7 @@ enum class TrackType : uint8_t { Drum = 0, Synth = 1, Chord = 2, Sampler = 3 };
 // field of the step editor treat them alike.
 inline bool IsNoteTrackType(TrackType t) { return t == TrackType::Synth || t == TrackType::Sampler; }
 
-// Phase 6: CHORDS tab output mode -- STACK holds a chord's notes together
-// as real simultaneous polyphony (see ChordVoice.h); ARPEGGIO rolls the
-// same notes out one at a time in sequence instead. Both are genuine,
-// idiomatic ways to play a chord (not a "fallback" for the monophonic
-// tracks -- this track is actually polyphonic either way), so this is a
-// deliberate style choice, not a capability limitation.
-enum class ChordOutputMode : uint8_t { Stack = 0, Arpeggio = 1 };
-inline const char* ChordOutputModeName(ChordOutputMode m) {
-    return m == ChordOutputMode::Arpeggio ? "ARPEGGIO" : "STACK";
-}
-constexpr int kNumChordOutputModes = 2;
-
-enum class ArpStyle : uint8_t { Up = 0, Down = 1, UpDown = 2, Random = 3 };
-inline const char* ArpStyleName(ArpStyle s) {
-    switch (s) {
-        case ArpStyle::Up:     return "UP";
-        case ArpStyle::Down:   return "DOWN";
-        case ArpStyle::UpDown: return "UP-DOWN";
-        case ArpStyle::Random: return "RANDOM";
-    }
-    return "?";
-}
-constexpr int kNumArpStyles = 4;
+// C2 part 3b: ChordOutputMode / ArpStyle (the CHORDS tab's baked STACK / ARPEGGIO) are gone: see ChordPlay below.
 
 enum class DrumSlot : uint8_t {
     Kick = 0, Snare = 1, Clap = 2, ClosedHat = 3, OpenHat = 4, Perc = 5
