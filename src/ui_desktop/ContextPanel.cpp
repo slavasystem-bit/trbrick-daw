@@ -791,7 +791,7 @@ void ContextPanel::DrawWaveCard(AppState& app, const char* id, const float* data
     if (clicked && !hasWave && ImGui::IsItemClicked(ImGuiMouseButton_Left)) *clicked = true;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1(p0.x + width, p0.y + bh);
-    dl->AddRectFilled(p0, p1, hov && clicked ? vis::kCellHover : vis::kCell, 5.0f);
+    dl->AddRectFilled(p0, p1, hov && clicked && !hasWave ? vis::kCellHover : vis::kCell, 5.0f);   // only an empty card is a button
     dl->AddRect(p0, p1, ColorAlpha(tc, 160), 5.0f);
     if (!data || frames < 2) {
         const char* msg = emptyMsg ? emptyMsg : "NO SAMPLE";
@@ -851,11 +851,13 @@ void ContextPanel::DrawWaveCard(AppState& app, const char* id, const float* data
     const float mfrac = std::clamp((mx - x0) / span, 0.0f, 1.0f);
     auto nearMark = [&](float x) { int best = -1; float bd = 6.0f; for (int i = 0; i < markCount; ++i) { const float d = std::fabs(x0 + marks[i] / 65535.0f * span - x); if (d <= bd) { bd = d; best = i; } } return best; };
     int hoverWhat = 0;   // 1 START, 2 end, 3 a mark
-    if (gest && hov && waveDrag_ == 0) {
-        if (gest->lines && std::fabs(mx - sx) <= 5.0f) hoverWhat = 1;
-        else if (gest->lines && std::fabs(mx - ex) <= 5.0f) hoverWhat = 2;
-        else if (gest->marks && marks && nearMark(mx) >= 0) hoverWhat = 3;
+    if (gest && hov && waveDrag_ == 0) {   // the nearest of START, the end and the marks within 5 px (review of PR 39: a mark by a line can be taken)
+        float bd = 5.0f;
+        if (gest->lines && std::fabs(mx - sx) <= bd) { bd = std::fabs(mx - sx); hoverWhat = 1; }
+        if (gest->lines && std::fabs(mx - ex) < bd) { bd = std::fabs(mx - ex); hoverWhat = 2; }
+        if (gest->marks && marks) { const int m = nearMark(mx); if (m >= 0 && std::fabs(x0 + marks[m] / 65535.0f * span - mx) < bd) hoverWhat = 3; }
     }
+    if (gest && waveDrag_ != 0 && !ImGui::IsItemActive() && !ImGui::IsItemDeactivated() && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { waveDrag_ = 0; waveDragMark_ = -1; }   // the card went away mid-drag
     if (gest) {
         if (ImGui::IsItemActivated() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             waveDragMoved_ = false;
