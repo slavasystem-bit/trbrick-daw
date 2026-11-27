@@ -857,7 +857,7 @@ void ContextPanel::DrawWaveCard(AppState& app, const char* id, const float* data
         if (gest->lines && std::fabs(mx - ex) < bd) { bd = std::fabs(mx - ex); hoverWhat = 2; }
         if (gest->marks && marks) { const int m = nearMark(mx); if (m >= 0 && std::fabs(x0 + marks[m] / 65535.0f * span - mx) < bd) hoverWhat = 3; }
     }
-    if (gest && waveDrag_ != 0 && !ImGui::IsItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { waveDrag_ = 0; waveDragMark_ = -1; }   // the card went away mid-drag
+    if (gest && waveDrag_ != 0 && !ImGui::IsItemActive() && !ImGui::IsItemDeactivated() && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) { waveDrag_ = 0; waveDragMark_ = -1; }   // the card went away mid-drag
     if (gest) {
         if (ImGui::IsItemActivated() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             waveDragMoved_ = false;
