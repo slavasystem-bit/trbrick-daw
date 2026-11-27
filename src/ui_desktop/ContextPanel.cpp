@@ -1401,6 +1401,14 @@ void ContextPanel::DrawChords(AppState& app, int ti) {
     // (the chord track's sends / insert FX / length live in the SOUND view)
 }
 
+// C2 part 3: the 0..1 positions of the SOUND column's CUTOFF (log, 100 Hz..18 kHz) and ATTACK / RELEASE (square root, 0..2000 ms)
+namespace {
+float ChordCutoffPos(float hz) { return std::log(std::clamp(hz, 100.0f, 18000.0f) / 100.0f) / std::log(180.0f); }
+float ChordCutoffHz(float pos) { return 100.0f * std::pow(180.0f, std::clamp(pos, 0.0f, 1.0f)); }
+float ChordEnvPos(float ms) { return std::sqrt(std::clamp(ms / 2000.0f, 0.0f, 1.0f)); }
+float ChordEnvMs(float pos) { pos = std::clamp(pos, 0.0f, 1.0f); return 2000.0f * pos * pos; }
+} // namespace
+
 // C2 part 3: CHORD LAB's SOUND column. Drawn by CHORD LAB in place of nothing else of this panel, so the browser is drawn here too.
 bool ContextPanel::DrawChordSoundColumn(AppState& app, ImVec2 a, float w) {
     SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB SOUND");
@@ -1448,9 +1456,9 @@ bool ContextPanel::DrawChordSoundColumn(AppState& app, ImVec2 a, float w) {
     static const char* const kCap[6] = {"CUTOFF", "ATTACK", "RELEASE", "WIDTH", "REVERB", "LEVEL"};
     char txt[6][24];
     float v[6];
-    v[0] = std::log(std::clamp(patch.cutoffHz, 100.0f, 18000.0f) / 100.0f) / std::log(180.0f);
-    v[1] = std::sqrt(std::clamp(patch.attack / 2.0f, 0.0f, 1.0f));
-    v[2] = std::sqrt(std::clamp(patch.release / 2.0f, 0.0f, 1.0f));
+    v[0] = ChordCutoffPos(patch.cutoffHz);
+    v[1] = ChordEnvPos(patch.attack * 1000.0f);
+    v[2] = ChordEnvPos(patch.release * 1000.0f);
     v[3] = mt.width; v[4] = mt.reverbSend; v[5] = mt.volume;
     if (patch.cutoffHz >= 1000.0f) std::snprintf(txt[0], sizeof txt[0], "%.1f k", patch.cutoffHz / 1000.0f);
     else std::snprintf(txt[0], sizeof txt[0], "%d Hz", static_cast<int>(patch.cutoffHz + 0.5f));
@@ -1474,7 +1482,11 @@ bool ContextPanel::DrawChordSoundColumn(AppState& app, ImVec2 a, float w) {
         dl->AddText(nullptr, capSize, ImVec2(x, ky), vis::kTextDim, kCap[k]);
         ImGui::SetCursorScreenPos(ImVec2(x, ky + 16.0f));
         ValueSpec sp;
-        if (k < 3) { sp.lo = 0.0f; sp.hi = 1.0f; sp.step = 0.004f; sp.wheel = 0.02f; sp.text = on ? txt[k] : "-"; }
+        if (k < 3) {   // typed in Hz / ms (the review of #50 found 800 typed into CUTOFF giving 18 kHz)
+            sp.lo = 0.0f; sp.hi = 1.0f; sp.step = 0.004f; sp.wheel = 0.02f; sp.text = on ? txt[k] : "-"; sp.unit = k == 0 ? " Hz" : " ms";
+            if (k == 0) { sp.toTyped = ChordCutoffHz; sp.fromTyped = ChordCutoffPos; }
+            else { sp.toTyped = ChordEnvMs; sp.fromTyped = ChordEnvPos; }
+        }
         else { sp.lo = 0.0f; sp.hi = k == 3 ? 2.0f : 1.0f; sp.step = 0.005f; sp.wheel = 0.01f; sp.scale = 100.0f; sp.unit = " %"; sp.text = txt[k]; }
         sp.def = k == 0 ? std::log(9.0f) / std::log(180.0f) : k == 1 ? std::sqrt(0.0025f) : k == 2 ? 0.2f : k == 3 ? 1.0f : k == 4 ? 0.0f : 0.8f;
         float nv = v[k];
@@ -1484,9 +1496,9 @@ bool ContextPanel::DrawChordSoundColumn(AppState& app, ImVec2 a, float w) {
         if (r.started) app.PushUndo();
         if (r.changed) {
             switch (k) {
-                case 0: patch.cutoffHz = std::clamp(100.0f * std::pow(180.0f, nv), 100.0f, 18000.0f); break;
-                case 1: patch.attack = std::clamp(2.0f * nv * nv, 0.001f, 2.0f); break;
-                case 2: patch.release = std::clamp(2.0f * nv * nv, 0.01f, 2.0f); break;
+                case 0: patch.cutoffHz = std::clamp(ChordCutoffHz(nv), 100.0f, 18000.0f); break;
+                case 1: patch.attack = std::clamp(ChordEnvMs(nv) / 1000.0f, 0.001f, 2.0f); break;
+                case 2: patch.release = std::clamp(ChordEnvMs(nv) / 1000.0f, 0.01f, 2.0f); break;
                 case 3: SetTrackFloatField(app, ti, &Mixer::TrackState::width, &Track::width, nv, 0.0f, 2.0f); break;
                 case 4: SetTrackFloatField(app, ti, &Mixer::TrackState::reverbSend, &Track::reverbSend, nv, 0.0f, 1.0f); break;
                 default: SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, nv, 0.0f, 1.0f); break;

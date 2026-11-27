@@ -5656,6 +5656,15 @@ int main(int argc, char** argv) {
         check(vfd::ParseTyped("90", bpm, &typed) && nearlyEqual(typed, 90.0f, 0.001f), "u1a: typed value is read");
         check(vfd::ParseTyped("9999", bpm, &typed) && nearlyEqual(typed, 300.0f, 0.001f), "u1a: typed value is clamped");
         check(!vfd::ParseTyped("abc", bpm, &typed) && !vfd::ParseTyped("", bpm, &typed), "u1a: garbage is rejected");
+        {   // C2 part 3 (review of #50): a field that drags a log position takes a typed number in its unit
+            t8::desktop::ValueSpec cut; cut.lo = 0.0f; cut.hi = 1.0f; cut.unit = " Hz";
+            cut.fromTyped = [](float hz) { return std::log(std::clamp(hz, 100.0f, 18000.0f) / 100.0f) / std::log(180.0f); };
+            cut.toTyped = [](float pos) { return 100.0f * std::pow(180.0f, pos); };
+            float pos = 0.0f;
+            check(vfd::ParseTyped("800", cut, &pos) && nearlyEqual(cut.toTyped(pos), 800.0f, 1.0f) &&
+                  vfd::ParseTyped("2000 Hz", cut, &pos) && nearlyEqual(cut.toTyped(pos), 2000.0f, 2.0f),
+                  "c2 ui: 800 typed into CUTOFF is 800 Hz, not 18 kHz (fromTyped)");
+        }
 
         AppState app;
         app.engine.Init(kSampleRate);

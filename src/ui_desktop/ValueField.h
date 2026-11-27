@@ -38,6 +38,10 @@ struct ValueSpec {
     const char* offText = nullptr;   // shown instead of the number at lo ("off")
     const char* text = nullptr;      // shown instead of the number, whatever the value ("trim"); drag and typing still work
     float scale = 1.0f;         // shown / typed value = value * scale (a 0..1 volume typed as percent: scale 100)
+    // A field that drags a 0..1 position but means a unit (Hz on a log scale, ms on a square-root one): typing goes through these
+    // instead of `scale` (toTyped: value -> the number shown when typing starts; fromTyped: the typed number -> value).
+    float (*toTyped)(float) = nullptr;
+    float (*fromTyped)(float) = nullptr;
     // Bar look (faders, pan): a track with a thumb instead of a text field; the number is drawn by the caller or typed.
     bool bar = false;
     bool fromCenter = false;    // bar: fills from the middle, snaps to the middle (pan)
@@ -83,7 +87,8 @@ inline float WheelValue(float value, int notches, bool fine, const ValueSpec& s)
 }
 inline bool ParseTyped(const char* text, const ValueSpec& s, float* out) {
     char* end = nullptr;
-    const float v = std::strtof(text, &end) / (s.scale != 0.0f ? s.scale : 1.0f);
+    const float typed = std::strtof(text, &end);
+    const float v = s.fromTyped ? s.fromTyped(typed) : typed / (s.scale != 0.0f ? s.scale : 1.0f);
     if (end == text) return false;
     while (*end == ' ' || *end == '%') ++end;   // "50%" and "50 " are fine
     if (*end != '\0' && s.unit[0] == '\0') return false;
@@ -157,7 +162,7 @@ inline ValueResult ValueField(const char* id, float* value, const ValueSpec& sp,
         if (ImGui::IsItemDeactivated() && st->GetInt(kMoved, 0) && !r.finished) r.finished = true;
         if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !interaction::IsReset()) {
             ed.id = wid; ed.focus = true;
-            std::snprintf(ed.buf, sizeof ed.buf, sp.fmt, static_cast<double>(*value * sp.scale));
+            std::snprintf(ed.buf, sizeof ed.buf, sp.fmt, static_cast<double>(sp.toTyped ? sp.toTyped(*value) : *value * sp.scale));
         }
         if (hovered && !active && io.MouseWheel != 0.0f && !interaction::IsCmd()) {   // one notch = one step
             ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
