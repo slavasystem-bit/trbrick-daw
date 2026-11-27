@@ -18,8 +18,25 @@
 
 namespace t8::desktop {
 
+// A popup opened under one id but drawn under another (OpenPopup inside a PushID, BeginPopup outside it) never gets a window: it
+// stays open unseen, a click does not close it, and every key shortcut waits for it (urgent bug 2026-11-27: a right-click on a
+// chord of the CHORD LAB loop left Space, M, C... dead). Such a popup is closed one frame after it was opened.
+static void CloseOrphanPopups(AppState& app) {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    for (int i = 0; i < g.OpenPopupStack.Size; ++i) {
+        const ImGuiPopupData& pd = g.OpenPopupStack[i];
+        if (pd.Window == nullptr && pd.OpenFrameCount < g.FrameCount - 1) {
+            std::fprintf(stderr, "UI: closed a popup that was never drawn (id %08X)\n", pd.PopupId);
+            ++app.orphanPopupsClosed;
+            ImGui::ClosePopupToLevel(i, false);
+            return;
+        }
+    }
+}
+
 void DrawShellFrame(AppState& app, ShellPanels& p, const DesktopFonts& fonts) {
     ImGuiIO& io = ImGui::GetIO();
+    CloseOrphanPopups(app);
     HandleShortcuts(app);
     app.RunPasteRequest();   // C4b (e): a paste from the track menu, outside the scene lock
     app.TickKeyFollow();

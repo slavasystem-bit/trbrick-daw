@@ -362,6 +362,7 @@ int main(int argc, char** argv) {
                 else if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP) { e.button.x = static_cast<Sint32>(e.button.x / uiZoom); e.button.y = static_cast<Sint32>(e.button.y / uiZoom); }
             }
             ImGui_ImplSDL2_ProcessEvent(&e);
+            if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_SPACE && e.key.repeat == 0) ++app.spaceDownsRaw;   // see HandleShortcuts
             if (e.type == SDL_QUIT) app.RequestDoc(AppState::DocAction::Quit);   // U8b: asks Save / Don't Save / Cancel when something is unsaved
             // N1 (LIVE-6): a device that appears (AirPods, an HDMI screen, a USB box) no longer restarts the sound. A removed one is
             // checked after a moment, and the sound is restarted only if OUR output stopped (see the watchdog below).

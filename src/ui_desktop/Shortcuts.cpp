@@ -10,8 +10,14 @@ namespace t8::desktop {
 
 void HandleShortcuts(AppState& app) {
     ImGuiIO& io = ImGui::GetIO();
+    // Space = play / stop. A new press from the window counts even when the UI still sees an earlier Space as held (a lost key-up),
+    // and a Space that is held back says why in the info line (urgent fix 2026-11-27: Space stopped working on a Mac).
+    const bool rawSpace = app.spaceDownsRaw != app.spaceDownsSeen;
+    app.spaceDownsSeen = app.spaceDownsRaw;
+    const bool spaceHit = ImGui::IsKeyPressed(ImGuiKey_Space, false) || (rawSpace && ImGui::IsKeyDown(ImGuiKey_Space));
     if (io.WantTextInput || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         app.pitchBend.store(0, std::memory_order_relaxed);   // a push never sticks when a box or a menu takes the keys
+        if (spaceHit && !io.WantTextInput) app.SetStatus("SPACE: A MENU OR A WINDOW IS OPEN - CLOSE IT FIRST (ESC OR A CLICK OUTSIDE)");
         return;
     }
 
@@ -52,7 +58,8 @@ void HandleShortcuts(AppState& app) {
         if (ImGui::IsKeyPressed(ImGuiKey_C, false)) { app.ToggleTool(AppState::Tool::ChordLab); return; }
         if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { app.ToggleTool(AppState::Tool::MasterFx); return; }
     }
-    if (!cmd && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+    if (spaceHit) {
+        if (cmd) { app.SetStatus("SPACE: CMD OR CTRL COUNTS AS HELD - PRESS AND RELEASE CMD AND CTRL ONCE"); return; }
         app.TransportToggle();   // v44.10: the one player (brick loop / track), see AppState::TransportToggle
         return;
     }

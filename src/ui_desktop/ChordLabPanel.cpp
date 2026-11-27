@@ -891,11 +891,12 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         const LabFn fn = LabFunctionOf(lc, key, scale);
         const ImVec2 a(bx0 + b.start * unit + 2, blkTop), e(bx0 + (b.start + b.len) * unit - 2, blkBot);
         ImGui::SetCursorScreenPos(a);
+        const ImGuiID blkMenuId = ImGui::GetID("##blkmenu");   // the id BeginPopup("##blkmenu") below uses (outside the PushID of the block)
         ImGui::PushID(1000 + static_cast<int>(i));
         ImGui::InvisibleButton("##blk", ImVec2(std::max(4.0f, e.x - a.x - 9.0f), e.y - a.y));
         const bool hov = ImGui::IsItemHovered();
         if (ImGui::IsItemClicked(0)) newSel = static_cast<int>(i);
-        if (!readOnly && ImGui::IsItemClicked(1)) { selBlock_ = static_cast<int>(i); ImGui::OpenPopup("##blkmenu"); }
+        if (!readOnly && ImGui::IsItemClicked(1)) { selBlock_ = static_cast<int>(i); ImGui::OpenPopup(blkMenuId); }
         const bool sel = selBlock_ == static_cast<int>(i);
         dl->AddRectFilled(a, e, FnFill(fn), 5.0f);
         if (lc.degree == 0) DashedRect(dl, a, e, FnEdge(fn)); else dl->AddRect(a, e, FnEdge(fn), 5.0f);
@@ -961,6 +962,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         dl->AddLine(ImVec2(bx0 + pos * unit, by0), ImVec2(bx0 + pos * unit, by0 + bh), IM_COL32(255, 255, 255, 190), 2.0f);
     }
     if (ImGui::BeginPopup("##blkmenu")) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();   // Esc closes the menu (the keys wait while it is open)
         const bool okSel = selBlock_ >= 0 && selBlock_ < static_cast<int>(blocks.size());
         if (okSel) {
             const int b0 = blocks[static_cast<size_t>(selBlock_)].start;
