@@ -32,4 +32,16 @@ inline std::vector<std::string> ListKitFolders() {
     return out;
 }
 
+// C4b (e): a kit may also live in the project's own samples folder: "samples/kits/<name>" (relative to the project file's folder,
+// so it travels with the project). Factory kits stay "kits/<name>" beside the program.
+constexpr const char* kProjectKitPrefix = "samples/kits/";
+inline bool IsProjectKit(const std::string& folder) { return folder.rfind(kProjectKitPrefix, 0) == 0; }
+// The kit's name for the screen: "909" for "kits/909" and for "samples/kits/909".
+inline std::string KitShortName(const std::string& folder) {
+    if (IsProjectKit(folder)) return folder.substr(13);
+    if (folder.rfind("kits/", 0) == 0) return folder.substr(5);
+    const size_t s = folder.find_last_of('/');
+    return s == std::string::npos ? folder : folder.substr(s + 1);
+}
+
 } // namespace t8

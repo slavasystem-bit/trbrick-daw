@@ -499,9 +499,10 @@ void ContextPanel::DrawKitBlock(AppState& app, int ti, float width) {
     } else {
         const int n = static_cast<int>(kits.size());
         int cur = std::clamp(app.menuKitIndex, 0, n - 1);
-        for (int i = 0; i < n; ++i) if (kits[static_cast<size_t>(i)] == app.TrackKitFolder(scene, ti)) cur = i;
-        std::string name = kits[static_cast<size_t>(cur)];
-        if (name.rfind("kits/", 0) == 0) name = name.substr(5);
+        const std::string& playing = app.TrackKitFolder(scene, ti);
+        const bool inProject = IsProjectKit(playing);   // C4b (e): the project's own copy of a kit (samples/kits/...); < > step from the kit it was copied from
+        for (int i = 0; i < n; ++i) if (kits[static_cast<size_t>(i)] == playing || (inProject && KitShortName(kits[static_cast<size_t>(i)]) == KitShortName(playing))) cur = i;
+        std::string name = inProject ? KitShortName(playing) + " (PROJECT)" : KitShortName(kits[static_cast<size_t>(cur)]);
         SampleRowSpec ks;
         ks.id = "##kitRow"; ks.caption = "KIT"; ks.captionW = capW; ks.width = width; ks.label = name; ks.dot = vis::kAccent;
         ks.canStep = n > 1; ks.showHear = false;

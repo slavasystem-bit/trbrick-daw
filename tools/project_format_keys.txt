@@ -4,7 +4,7 @@
 #   2. change the format= line below to the new number and add the key.
 # An older TR-Brick that opens a file with a higher format number then saves a copy instead of writing over it (DATA-1), so
 # what it does not know is never lost. Keys written as "name" << index << "=" are listed as nameN.
-format=10
+format=11
 Level
 Ratio
 acid

@@ -310,7 +310,7 @@
 | Автокопії | `~/TR-Brick/app/backups/` | `імя-20261026-143200.t8proj`, лишається 10 |
 | Запис мастера (WAV) | `~/TR-Brick/app/recordings/` | `take_1793025120.wav` (число = секунди Unix) |
 | Стеми, MIDI, нотний текст | `~/TR-Brick/app/exports/` | `stems_1793...zip`, `capture_...mid` |
-| Власні кіти (дроп WAV) | `~/TR-Brick/app/kits/mykit`, `mykit_2` | змішані із заводськими |
+| Власні кіти (дроп WAV) | `samples/kits/<кіт>` поруч із файлом проєкту (з Ц4б е); старі `~/TR-Brick/app/kits/mykit`, `mykit_2` ще працюють | їдуть разом із проєктом |
 | Власні біти, пресети | `patterns/`, `presets/`, `grooves/` | теж поряд із програмою |
 | Налаштування | `ui_settings.cfg`, `imgui.ini` | у тій самій теці |
 

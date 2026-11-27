@@ -340,11 +340,13 @@ void BottomPanel::DrawRandomKit(AppState& app) {
         } else {
             const int n = static_cast<int>(kits.size());
             // the picker follows the kit that is actually loaded (new project, opened project)
-            for (int i = 0; i < n; ++i) if (kits[static_cast<size_t>(i)] == app.SceneKitFolder(app.project.currentPattern)) { app.menuKitIndex = i; break; }
+            const std::string& playing = app.SceneKitFolder(app.project.currentPattern);
+            const bool inProject = IsProjectKit(playing);   // C4b (e): the project's own copy of a kit (samples/kits/...)
+            for (int i = 0; i < n; ++i) if (kits[static_cast<size_t>(i)] == playing || (inProject && KitShortName(kits[static_cast<size_t>(i)]) == KitShortName(playing))) { app.menuKitIndex = i; break; }
             const int cur = std::clamp(app.menuKitIndex, 0, n - 1);
-            std::string name = kits[static_cast<size_t>(cur)];
-            if (name.rfind("kits/", 0) == 0) name = name.substr(5);
-            const KitInfo* ki = FindKitInfo(name);
+            const std::string shortName = KitShortName(inProject ? playing : kits[static_cast<size_t>(cur)]);
+            const std::string name = inProject ? shortName + " (PROJECT)" : shortName;
+            const KitInfo* ki = FindKitInfo(shortName);
             if (ImGui::Button("<##kitPrev", ImVec2(24, btnH - 2))) LoadKit(app, kits[static_cast<size_t>((cur - 1 + n) % n)]);
             ImGui::SameLine(0, 3);
             if (NameButton("##kitOpen", 120.0f, name, ki ? ImU32(vis::kAccent) : ImU32(vis::kTextDim))) OpenKitBrowser(app);

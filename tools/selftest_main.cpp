@@ -2449,21 +2449,103 @@ int main(int argc, char** argv) {
             check(clickDb(DrumSlot::Kick, 2) > clickDb(DrumSlot::Kick, 0) + 10.0, "k1: the new 808 SNAP kick has a far stronger click than the old 808 kick");
             for (int v : {2, 3, 4}) { auto b = k8.Variant(DrumSlot::Kick, v); float m = 0; if (b) for (float x : b->data) m = std::max(m, std::fabs(x)); check(m <= 1.0f && m > 0.8f, "k1: new kick levels are natural and never clip"); }
         }
-        // (8) a dropped WAV replaces one slot in a private copy of the kit
+        // (8) C4b (e): a dropped WAV is ADDED to the drum as its next sample, in the project's own copy of the kit
         {
+            namespace fs = std::filesystem;
+            const std::string pdir = "selftest_tmp_dropproj";
+            std::error_code ec; fs::remove_all(pdir, ec); fs::create_directories(pdir, ec);
             AppState da; da.engine.Init(sr); da.sequencer.Init(&da.engine, &da.project);
+            da.projectPath = pdir + "/p.t8proj";
             da.project.kitFolder = "kits/electro"; da.engine.GetKit()->LoadFromFolder(da.project.kitFolder, sr);
+            da.SyncSceneKits(true);
             std::vector<float> w(24000); for (int i = 0; i < 24000; ++i) w[i] = 0.5f * std::sin(2.0 * 3.14159265358979 * 300.0 * i / 48000.0);
             WriteWavPCM24("selftest_tmp_drop.wav", w, 1, 48000);
+            auto countFiles = [](const std::string& d) { int n = 0; std::error_code e; for (const auto& f : fs::directory_iterator(d, e)) if (f.is_regular_file()) ++n; return n; };
+            const int factoryFiles = countFiles("kits/electro");
+            const int hatsBefore = da.SceneKitVariantCount(0, static_cast<int>(DrumSlot::ClosedHat));
+            const int kickVarBefore = da.CurrentPattern().tracks[0].defaultVariant;
             da.seqCursorTrack = 3;   // a drum track (closed hat)
+            da.CurrentPattern().tracks[3].steps[0].active = true; da.CurrentPattern().tracks[3].steps[0].variant = 0;
             const bool okDrop = da.AssignSampleToSlot("selftest_tmp_drop.wav");
-            check(okDrop && da.CurrentPattern().kitFolder.rfind("kits/mykit", 0) == 0 && da.project.kitFolder == "kits/electro", "drop: the sample goes into a private kit, the factory kit is untouched");
-            auto hb = da.engine.GetKit()->Variant(DrumSlot::ClosedHat, 0);
-            check(hb && hb->frames() > 21800 && hb->frames() < 22100 && da.engine.GetKit()->VariantCount(DrumSlot::ClosedHat) == 1, "drop: the slot has the dropped sample (converted to the engine rate) and no old takes");
-            check(da.engine.GetKit()->VariantCount(DrumSlot::Kick) >= 2, "drop: the other slots keep the copied kit");
+            check(okDrop && da.CurrentPattern().kitFolder == "samples/kits/electro" && da.project.kitFolder == "kits/electro" && fs::is_directory(pdir + "/samples/kits/electro"),
+                  "c4b e: the dropped sample goes into the project's own copy of the kit (samples/kits/electro beside the project)");
+            check(countFiles("kits/electro") == factoryFiles, "c4b e: the factory kit beside the program is untouched");
+            const Track& ht = da.CurrentPattern().tracks[3];
+            check(da.SceneKitVariantCount(0, static_cast<int>(DrumSlot::ClosedHat)) == hatsBefore + 1 && ht.defaultVariant == hatsBefore && ht.steps[0].variant == kAutoVariant,
+                  "c4b e: the file is added as the next sample of the drum (nothing replaced) and every step plays it");
+            auto hb = da.engine.GetKit()->Variant(DrumSlot::ClosedHat, ht.defaultVariant);
+            check(hb && hb->frames() > 21800 && hb->frames() < 22100, "c4b e: the engine plays the dropped sample at once (converted to the engine rate)");
+            check(da.engine.GetKit()->VariantCount(DrumSlot::Kick) >= 2 && da.CurrentPattern().tracks[0].defaultVariant == kickVarBefore, "c4b e: the other drums keep their samples in the copied kit");
+            da.Undo();
+            check(da.CurrentPattern().kitFolder.empty() && da.CurrentPattern().tracks[3].steps[0].variant == 0, "c4b e: one Undo brings the kit and the sample the drum had back");
+            da.Redo();
+            const bool okDrop2 = da.AssignSampleToSlot("selftest_tmp_drop.wav");   // a second file: the same project kit, one more take
+            check(okDrop2 && da.CurrentPattern().kitFolder == "samples/kits/electro" && da.CurrentPattern().tracks[3].defaultVariant == hatsBefore + 1
+                  && da.SceneKitVariantCount(0, static_cast<int>(DrumSlot::ClosedHat)) == hatsBefore + 2, "c4b e: a second drop adds one more take to the same project kit");
+            // SAVE AS into another folder takes the project's kits along
+            const std::string pdir2 = pdir + "/other";
+            fs::create_directories(pdir2, ec);
+            da.CopySamplesTo(pdir2 + "/q.t8proj");
+            check(countFiles(pdir2 + "/samples/kits/electro") == countFiles(pdir + "/samples/kits/electro"), "c4b e: SAVE AS copies the project's own kits beside the new file");
+            // the file keeps the kit as a name inside the project folder
+            Project lp;
+            check(SaveProject(da.project, pdir + "/p.t8proj", false) && LoadProject(lp, pdir + "/p.t8proj") && lp.patterns[0].kitFolder == "samples/kits/electro",
+                  "c4b e: the project file names its own kit relative to its folder (samples/kits/electro)");
+            {   // review of #47: SAVE AS into a folder whose samples/kits/electro holds ANOTHER take under the same file name
+                const std::string pdir3 = pdir + "/third", ours = pdir + "/samples/kits/electro", theirs = pdir3 + "/samples/kits/electro";
+                fs::create_directories(theirs, ec);
+                std::string last;
+                for (const auto& f : fs::directory_iterator(ours, ec)) { fs::copy_file(f.path(), theirs + "/" + f.path().filename().string(), fs::copy_options::overwrite_existing, ec); const std::string n = f.path().filename().string(); if (n.rfind("chh_", 0) == 0 && (last.empty() || n.size() > last.size() || (n.size() == last.size() && n > last))) last = n; }
+                std::vector<float> other(30000, 0.25f);
+                WriteWavPCM24(theirs + "/" + last, other, 1, 48000);   // the other project's take, same name
+                da.CopySamplesTo(pdir3 + "/q.t8proj");
+                bool undoOld = false;
+                for (const auto& e : da.undoStack) if (e.pattern.kitFolder == "samples/kits/electro") undoOld = true;
+                check(da.CurrentPattern().kitFolder == "samples/kits/electro_2" && !undoOld && fs::is_directory(pdir3 + "/samples/kits/electro_2"),
+                      "c4b e: SAVE AS next to a different kit of the same name copies ours under a free name and points the project (and Undo) at it");
+                check(AppState::SameFileBytes(ours + "/" + last, pdir3 + "/samples/kits/electro_2/" + last) && !AppState::SameFileBytes(ours + "/" + last, theirs + "/" + last),
+                      "c4b e: the moved project keeps its own take; the other project's kit is untouched");
+            }
+            {   // a kit there with only our own files (one missing): used as it is and filled up, no second copy
+                da.CurrentPattern().kitFolder = "samples/kits/electro";
+                const std::string pdir4 = pdir + "/fourth", ours = pdir + "/samples/kits/electro", same = pdir4 + "/samples/kits/electro";
+                fs::create_directories(same, ec);
+                int n = 0; std::string skipped;
+                for (const auto& f : fs::directory_iterator(ours, ec)) { if (n++ == 0) { skipped = f.path().filename().string(); continue; } fs::copy_file(f.path(), same + "/" + f.path().filename().string(), ec); }
+                da.CopySamplesTo(pdir4 + "/q.t8proj");
+                check(da.CurrentPattern().kitFolder == "samples/kits/electro" && !fs::exists(pdir4 + "/samples/kits/electro_2") && fs::exists(same + "/" + skipped),
+                      "c4b e: a kit there with exactly our files is used as it is (the missing file is added)");
+            }
+            {   // review of #47: the real SAVE AS writes the file AFTER the kit got its free name, so a reopen plays our take
+                namespace ud = t8::userdirs;
+                ud::SetRootsForTest(pdir + "/Documents", pdir + "/Service");
+                const std::string ours = pdir + "/samples/kits/electro", theirs = ud::ProjectsDir() + "/samples/kits/electro";
+                fs::create_directories(theirs, ec);
+                std::string last;
+                for (const auto& f : fs::directory_iterator(ours, ec)) { if (!f.is_regular_file()) continue; fs::copy_file(f.path(), theirs + "/" + f.path().filename().string(), fs::copy_options::overwrite_existing, ec); const std::string n = f.path().filename().string(); if (n.rfind("chh_", 0) == 0 && (last.empty() || n.size() > last.size() || (n.size() == last.size() && n > last))) last = n; }
+                std::vector<float> other(30000, 0.25f);
+                WriteWavPCM24(theirs + "/" + last, other, 1, 48000);
+                const bool saved = da.SaveProjectAs("ST Kit Move");
+                Project back;
+                check(saved && da.CurrentPattern().kitFolder == "samples/kits/electro_2" && !da.IsEditedNow() && LoadProject(back, da.projectPath) && back.patterns[0].kitFolder == "samples/kits/electro_2",
+                      "c4b e: SAVE AS writes the kit's new name into the file (a reopen plays our own take, not the other project's)");
+                da.SyncSceneKits();
+                const auto ht = da.SceneKitVariantBuffer(0, static_cast<int>(DrumSlot::ClosedHat), da.CurrentPattern().tracks[3].defaultVariant);
+                check(ht && ht->frames() > 21800 && ht->frames() < 22100, "c4b e: after SAVE AS the hat still plays the dropped sample");
+                ud::SetRootsForTest("selftest_data/Documents", "selftest_data/Service");
+            }
             da.seqCursorTrack = 6;
             check(!da.AssignSampleToSlot("selftest_tmp_drop.wav"), "drop: a synth track refuses a sample");
-            std::error_code ec; std::filesystem::remove_all(da.CurrentPattern().kitFolder, ec); std::remove("selftest_tmp_drop.wav");
+            fs::remove_all(pdir, ec); std::remove("selftest_tmp_drop.wav");
+        }
+        {   // C4b (e): a project kit name that would climb out of the project folder is dropped when the file is read
+            namespace fs = std::filesystem;
+            const std::string f = "selftest_tmp_kitname.t8proj";
+            Project p0; p0.patterns[0].kitFolder = "samples/kits/../../etc"; p0.patterns[1].kitFolder = "samples/kits/909"; p0.kitFolder = "samples/kits/a/b";
+            Project lp;
+            check(SaveProject(p0, f, false) && LoadProject(lp, f) && lp.patterns[0].kitFolder.empty() && lp.patterns[1].kitFolder == "samples/kits/909" && lp.kitFolder == Project{}.kitFolder,
+                  "c4b e: a kit name with .. or a deeper path is not read (it could point outside the project)");
+            std::remove(f.c_str()); std::remove((f + ".bak").c_str());
         }
         // (9) fills play the sample the track is set to, not always the first one
         {
@@ -3239,7 +3321,7 @@ int main(int argc, char** argv) {
                           "fill c4b: 1/2 BEAT on a brick and on a scene survives a save / load");
                     {   // review of PR 44: a 0 in a file from before format 10 is not half a beat (it was never written; it reads as 1 beat, as before)
                         std::ifstream in("selftest_arr.t8proj"); std::string t((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
-                        const size_t at = t.find("format=10"); if (at != std::string::npos) t.replace(at, 9, "format=9");
+                        const std::string cur = "format=" + std::to_string(kProjectFormatVersion); const size_t at = t.find(cur); if (at != std::string::npos) t.replace(at, cur.size(), "format=9");
                         { std::ofstream out("selftest_arr.t8proj", std::ios::trunc); out << t; }
                         Project po; check(LoadProject(po, "selftest_arr.t8proj") && po.songChain[1].fill.beats == 1 && po.patterns[1].fill.beats == 1,
                                           "fill c4b: a fill length of 0 in a format 9 file reads as 1 beat");
