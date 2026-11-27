@@ -6,7 +6,6 @@
 #include "ValueField.h"
 #include "FillSampleRow.h"
 #include "DynPresets.h"
-#include "ChordEditor.h"
 #include "core/ArrangeEnergy.h"
 #include "core/ArrangeAuto.h"
 #include "imgui.h"
@@ -18,6 +17,16 @@
 #include <string>
 
 namespace t8::desktop {
+
+namespace {
+// C2 part 3b: a chord slot opens in CHORD LAB (the chord editor window is gone): the bank goes on, the slot is edited, the lab opens.
+void OpenChordLabOn(AppState& app, int slot) {
+    if (!app.project.chordBankOn) app.SetChordBank(true);
+    app.EditChordSceneOnly(slot);
+    app.OpenTool(AppState::Tool::ChordLab);
+}
+} // namespace
+
 
 namespace {
 
@@ -310,9 +319,9 @@ void ChainPanel::Draw(AppState& app) {
             if (ImGui::InvisibleButton("##chordslot", ImVec2(sw, kChordH))) app.LaunchChordScene(c);
             const bool hov = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
             if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) { chordMenuSlot_ = c; chordMenuOpenRequest_ = true; }
-            if (hov && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) OpenChordEditor(app, c);
+            if (hov && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) OpenChordLabOn(app, c);
             if (hov && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-                Hint("Chord scene %d: %s\nClick: edit + launch%s  -  Double-click: chord editor  -  Right-click: menu\nThe drums / bass scenes keep playing; chords change on the same boundary.",
+                Hint("Chord scene %d: %s\nClick: edit + launch%s  -  Double-click: CHORD LAB on this slot  -  Right-click: menu\nThe drums / bass scenes keep playing; chords change on the same boundary.",
                                   c + 1, empty ? "(empty)" : app.ChordSceneLabel(c).c_str(),
                                   app.sequencer.LaunchQuantize() == 0 ? "" : " (quantized, see LAUNCH)");
             ImU32 fill = sounding ? IM_COL32(44, 34, 70, 255) : (hov ? IM_COL32(34, 30, 52, 255) : IM_COL32(26, 24, 40, 255));
@@ -513,7 +522,7 @@ void ChainPanel::Draw(AppState& app) {
         int c = chordMenuSlot_;
         if (c >= 0 && c < kNumChordScenes) {
             ImGui::TextDisabled("CHORD SCENE %d", c + 1);
-            if (ImGui::MenuItem("Chord editor...")) OpenChordEditor(app, c);
+            if (ImGui::MenuItem("Open in CHORD LAB")) OpenChordLabOn(app, c);
             ImGui::Separator();
             if (ImGui::MenuItem("Edit only (do not launch)")) { if (!proj.chordBankOn) app.SetChordBank(true); app.EditChordSceneOnly(c); }
             if (ImGui::MenuItem("Copy this scene's chords here")) { if (!proj.chordBankOn) app.SetChordBank(true); app.CopyPatternChordsToScene(c); }
@@ -580,7 +589,6 @@ void ChainPanel::Draw(AppState& app) {
     }
 
     DrawSceneFillEditor(app);
-    DrawChordEditor(app);
     ImGui::PopID();
 }
 
