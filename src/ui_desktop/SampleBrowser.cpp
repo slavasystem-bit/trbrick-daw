@@ -88,6 +88,7 @@ void SampleBrowser::PushRecent(const std::string& favKey) {
 
 void SampleBrowser::Open(AppState& app, AppState::LibTarget target, int brick) {
     target_ = target; brick_ = brick;
+    items_.clear(); vis_.clear();   // LIVE-5: the list is built on the next frame (Prepare); never show another target's files meanwhile
     sampleTarget_ = app.libSampleTarget;
     drumTrack_ = std::clamp(app.seqCursorTrack, 0, kNumDrumTracks - 1);
     scene_ = std::clamp(app.project.currentPattern, 0, kNumSlotsTotal - 1);
@@ -412,6 +413,13 @@ const std::pair<std::string, unsigned>& SampleBrowser::Guess(const std::string& 
     return g->second;
 }
 
+void SampleBrowser::Prepare(AppState& app) {
+    if (!open_ && !wantOpen_) return;
+    // a source that needs data still on its way (a kit bank, the kit scan) is rebuilt every frame until it is there
+    if (waitKit_ || waitLib_) dirty_ = true;   // the kit or the library is still being read
+    if (dirty_) Rebuild(app);
+}
+
 void SampleBrowser::Draw(AppState& app) {
     if (wantOpen_) { ImGui::OpenPopup("##sampleBrowser"); wantOpen_ = false; open_ = true; }
     if (!open_) return;
@@ -427,9 +435,6 @@ void SampleBrowser::Draw(AppState& app) {
         return;
     }
     ImGui::PopStyleVar();
-    // a source that needs data still on its way (a kit bank, the kit scan) is rebuilt every frame until it is there
-    if (waitKit_ || waitLib_) dirty_ = true;   // the kit or the library is still being read
-    if (dirty_) Rebuild(app);
     const int n = static_cast<int>(vis_.size());
     const std::string who = Who(app);
 
