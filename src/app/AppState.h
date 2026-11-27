@@ -4143,7 +4143,7 @@ struct AppState {
     // the new folder may already hold a kit of that name with OTHER takes under the same file names (chh_3.wav): then the kit is
     // copied under a free name (<kit>_2 ...) and the document is pointed at it, so it keeps playing exactly its own samples.
     // A kit there that only holds the same files (or fewer of them) is used and filled up.
-    void CopyProjectKitsTo(const std::string& from, const std::string& to) {
+    std::map<std::string, std::string> CopyProjectKitsTo(const std::string& from, const std::string& to) {
         namespace fs = std::filesystem;
         std::error_code ec;
         std::set<std::string> kits;   // "samples/kits/<kit>"
@@ -4169,18 +4169,22 @@ struct AppState {
             for (const auto& f : fs::directory_iterator(src, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), dst / f.path().filename(), fs::copy_options::skip_existing, ec);
             if (name != k) renamed[k] = name;
         }
-        if (!renamed.empty()) {
-            std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
-            ForEachKitName([&](std::string& k) { auto it = renamed.find(k); if (it != renamed.end()) k = it->second; });
-        }
+        RenameKits(renamed);
         if (!kits.empty()) kitsDirty_ = true;   // read again from the new folder
+        return renamed;   // old name -> new name (SAVE AS puts them back if the file cannot be written)
+    }
+    void RenameKits(const std::map<std::string, std::string>& renamed) {
+        if (renamed.empty()) return;
+        std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
+        ForEachKitName([&](std::string& k) { auto it = renamed.find(k); if (it != renamed.end()) k = it->second; });
+        kitsDirty_ = true;
     }
     // SAVE AS into another folder: the samples the project uses are copied beside the new file (nothing is moved or deleted).
-    void CopySamplesTo(const std::string& newProjectPath) {
+    std::map<std::string, std::string> CopySamplesTo(const std::string& newProjectPath) {
         namespace fs = std::filesystem;
         const std::string from = SamplesDir(), to = DirNameOf(newProjectPath) + "/samples";
         std::error_code ec;
-        if (fs::equivalent(from, to, ec)) return;
+        if (fs::equivalent(from, to, ec)) return {};
         std::set<std::string> files;
         for (int i = 0; i < kNumSlotsTotal; ++i) {
             const Pattern& pt = project.patterns[static_cast<size_t>(i)];
@@ -4192,10 +4196,11 @@ struct AppState {
             fs::create_directories(fs::path(to) / "transitions", ec);
             for (const auto& f : fs::directory_iterator(tfrom, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), fs::path(to) / "transitions" / f.path().filename(), fs::copy_options::skip_existing, ec);
         }
-        CopyProjectKitsTo(from, to);   // C4b (e)
-        if (files.empty()) return;
+        std::map<std::string, std::string> renamed = CopyProjectKitsTo(from, to);   // C4b (e)
+        if (files.empty()) return renamed;
         fs::create_directories(to, ec);
         for (const std::string& f : files) fs::copy_file(fs::path(from) / f, fs::path(to) / f, fs::copy_options::skip_existing, ec);
+        return renamed;
     }
 
     // Program start: hands the engine the sound of the project that was just opened (synth / chord patches, samples of the
@@ -4677,14 +4682,18 @@ struct AppState {
         std::string path = UniqueProjectPathForName(clean);
         std::string oldName = project.name;
         { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); project.name = clean; }
+        // v44.50: the samples go with the project. First, so the file names the kits as they are there (C4b e: a kit may get a
+        // free name next to another project's kit of the same name).
+        const std::map<std::string, std::string> renamed = CopySamplesTo(path);
         if (!SaveSnapshot(path)) {
+            std::map<std::string, std::string> back; for (const auto& kv : renamed) back[kv.second] = kv.first;
+            RenameKits(back);   // the open project stays where it is: its kits keep their names there
             { std::lock_guard<SceneMutex> lock(sequencer.PatternMutex()); project.name = oldName; }
             SetStatus("SAVE AS FAILED: " + path); statusMessageTimer = 8.0f;
             return false;
         }
         docNewerFormat = 0;   // the copy is this version's own file
         DropRecovery();   // the old document's copy (the Untitled file, or Recovery/<old>.t8proj)
-        CopySamplesTo(path);   // v44.50: the samples of the sampler go with the project (C4b e: and its own kits)
         projectPath = path;
         projectFilesCacheValid = false;
         MarkSaved();

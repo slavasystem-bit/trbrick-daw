@@ -7,7 +7,7 @@
   row shows such a kit as "<kit> (PROJECT)". One Undo brings back the previous kit and sample.
 - Project format 11: `kitFolder` / `trackKit` may be `samples/kits/<kit>`, relative to the project's folder; a name with `..`
   or a deeper path is not read. An older TR-Brick keeps the file and saves a copy. Older `kits/mykit...` kits keep working.
-- SAVE AS into a folder whose `samples/kits/<kit>` holds other takes under the same file names copies the kit under a free
+- SAVE AS (which now copies the samples before it writes the file) into a folder whose `samples/kits/<kit>` holds other takes under the same file names copies the kit under a free
   name (`<kit>_2` ...) and points the project, its Undo steps and the clipboards at it, so it keeps playing its own samples.
 - At start the project kit is read from beside the project file (no false "drums will be silent" warning).
 - Kit banks are cached by their place on disk, so two projects with a kit of the same name never share a bank.

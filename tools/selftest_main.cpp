@@ -2516,6 +2516,24 @@ int main(int argc, char** argv) {
                 check(da.CurrentPattern().kitFolder == "samples/kits/electro" && !fs::exists(pdir4 + "/samples/kits/electro_2") && fs::exists(same + "/" + skipped),
                       "c4b e: a kit there with exactly our files is used as it is (the missing file is added)");
             }
+            {   // review of #47: the real SAVE AS writes the file AFTER the kit got its free name, so a reopen plays our take
+                namespace ud = t8::userdirs;
+                ud::SetRootsForTest(pdir + "/Documents", pdir + "/Service");
+                const std::string ours = pdir + "/samples/kits/electro", theirs = ud::ProjectsDir() + "/samples/kits/electro";
+                fs::create_directories(theirs, ec);
+                std::string last;
+                for (const auto& f : fs::directory_iterator(ours, ec)) { if (!f.is_regular_file()) continue; fs::copy_file(f.path(), theirs + "/" + f.path().filename().string(), fs::copy_options::overwrite_existing, ec); const std::string n = f.path().filename().string(); if (n.rfind("chh_", 0) == 0 && (last.empty() || n.size() > last.size() || (n.size() == last.size() && n > last))) last = n; }
+                std::vector<float> other(30000, 0.25f);
+                WriteWavPCM24(theirs + "/" + last, other, 1, 48000);
+                const bool saved = da.SaveProjectAs("ST Kit Move");
+                Project back;
+                check(saved && da.CurrentPattern().kitFolder == "samples/kits/electro_2" && !da.IsEditedNow() && LoadProject(back, da.projectPath) && back.patterns[0].kitFolder == "samples/kits/electro_2",
+                      "c4b e: SAVE AS writes the kit's new name into the file (a reopen plays our own take, not the other project's)");
+                da.SyncSceneKits();
+                const auto ht = da.SceneKitVariantBuffer(0, static_cast<int>(DrumSlot::ClosedHat), da.CurrentPattern().tracks[3].defaultVariant);
+                check(ht && ht->frames() > 21800 && ht->frames() < 22100, "c4b e: after SAVE AS the hat still plays the dropped sample");
+                ud::SetRootsForTest("selftest_data/Documents", "selftest_data/Service");
+            }
             da.seqCursorTrack = 6;
             check(!da.AssignSampleToSlot("selftest_tmp_drop.wav"), "drop: a synth track refuses a sample");
             fs::remove_all(pdir, ec); std::remove("selftest_tmp_drop.wav");
