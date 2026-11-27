@@ -70,6 +70,7 @@ void Sequencer::Stop() {
     chordNoteOffScheduled_ = false;
     chordHeldCount_ = 0;
     perfOn_ = false; perfPrevCount_ = 0;
+    liveQ_.store(false);
     fillWas_ = false; fillPosPrev_ = -1; fillActiveUi_.store(false);
     engine_->FillSampleStop();
     ApplyStepOverlay();   // not playing: the arrangement mutes let go
@@ -213,6 +214,64 @@ void Sequencer::PerfEmit() {
     });
     ++perfTick_;
     if (lo > perf_.span + 1.0) perfOn_ = false;   // every release is out
+}
+
+// One chord starts: the plain way (one stack, held for lenSteps, ratchets, ties), or performed through the scene's PLAY layer.
+void Sequencer::StartChord(const Pattern& p, std::array<int8_t, 6> cNotes, int cCount, int lenSteps, float velocity, double off, int ratchet, bool slideFirst) {
+    ratchet = std::clamp(ratchet, 1, 4);
+    auto hitPos = [&](int k) { return off + static_cast<double>(k) * (1.0 - off) / static_cast<double>(ratchet); };
+    const ChordPlay& cpl = p.chordPlay;
+    if (!cpl.IsDefault() && ChordPlayIsHeldStack(cpl)) {
+        // C2 (review of PR 46): STACK at gate 100 % with OCTAVES / SMOOTH VOICES is still one held chord: it goes the plain way with
+        // the voiced notes, so a pad that spans the loop or a SLIDE chord ties instead of re-attacking, and ratchets still work
+        ChordPlay one = cpl; one.octaves = 1;
+        int8_t base[kMaxChordVoices], voiced[kMaxChordVoices];
+        const int baseN = ChordPerfVoice(cNotes.data(), cCount, one, perfPrev_.data(), perfPrevCount_, base);
+        ChordPlay dbl = cpl; dbl.smooth = false;
+        const int vn = ChordPerfVoice(base, baseN, dbl, nullptr, 0, voiced);
+        perfPrevCount_ = baseN;
+        for (int k = 0; k < baseN; ++k) perfPrev_[static_cast<size_t>(k)] = base[k];
+        for (int k = 0; k < kMaxChordVoices; ++k) cNotes[static_cast<size_t>(k)] = k < vn ? voiced[k] : 60;
+        cCount = vn;
+    } else if (!cpl.IsDefault()) {
+        // C2: the PLAY layer performs the chord over its length (ratchets are not used: RHYTHM is the way to re-strike)
+        if (chordNoteOffScheduled_ || chordHeldCount_ > 0 || perfOn_) PerfStop(off);
+        chordNoteOffScheduled_ = false;
+        chordHeldCount_ = 0;
+        ChordPerf& c = perf_;
+        c.play = cpl;
+        ChordPlay one = cpl; one.octaves = 1;   // the chord as voiced (SMOOTH VOICES), without the OCTAVES copies: the chord "before" next time
+        int8_t base[kMaxChordVoices];
+        const int baseN = ChordPerfVoice(cNotes.data(), cCount, one, perfPrev_.data(), perfPrevCount_, base);
+        ChordPlay dbl = cpl; dbl.smooth = false;
+        c.count = ChordPerfVoice(base, baseN, dbl, nullptr, 0, c.notes.data());
+        perfPrevCount_ = baseN;
+        for (int k = 0; k < baseN; ++k) perfPrev_[static_cast<size_t>(k)] = base[k];
+        c.span = std::max(1, lenSteps);
+        c.rate = ChordPerfRateSteps(cpl, p.stepsPerBeat);
+        c.velocity = velocity;
+        c.strike = perfStrikes_++;
+        perfOn_ = true;
+        perfTick_ = 0;
+        perfStart_ = std::clamp(off, 0.0, 0.999);
+        PerfEmit();
+        return;
+    }
+    if (perfOn_) PerfStop(off);   // back to the plain chord: the performed one lets go first
+    chordHeldCount_ = cCount;
+    chordNoteOffTick_ = std::max(1, lenSteps);   // steps left until the release
+    chordNoteOffScheduled_ = true;
+    RatchetEvent ev;
+    ev.isDrum = false;
+    ev.isChord = true;
+    ev.chordNotes = cNotes;
+    ev.chordCount = cCount;
+    ev.velocity = velocity;
+    for (int r = 0; r < ratchet; ++r) {
+        // A tied step goes in as slide=true so the engines keep the running envelopes (no re-attack / filter restart).
+        ev.slide = r == 0 && slideFirst;
+        ScheduleHit(hitPos(r), ev);
+    }
 }
 
 void Sequencer::FireTick(int tick) {
@@ -443,6 +502,29 @@ void Sequencer::FireTick(int tick) {
         }
     }
 
+    // C2: a chord clicked in CHORD LAB while the loop plays starts on the next beat (LAUNCH NOW: the next step) through the same performer,
+    // and holds until the next chord of the loop: it stands in for the rest of the block it lands in.
+    bool liveNow = false;
+    if (liveQ_.load()) {
+        const int q = launchQuant_.load() == 0 ? 1 : std::max(1, StepsPerBeat());
+        if (tick % q == 0) {
+            liveQ_.store(false);
+            liveNow = true;
+            const Track& ct = StepTrack(p, kChordTrackIndex);
+            const int len = std::max(1, ct.useOwnLength ? ct.length : p.masterLength);
+            const int idx = ChordStepIndex(tick, len);
+            int span = len;
+            for (int d = 1; d < len; ++d) {
+                const Step& st = ct.steps[static_cast<size_t>((idx + d) % len)];
+                if (st.active && st.chordSize > 0) { span = d; break; }
+            }
+            perfDue = false;
+            StartChord(p, liveQNotes_, liveQCount_, span, liveQVel_, 0.0, 1, false);
+            liveStart_.store(idx); liveLen_.store(span); liveRecLen_.store(std::max(1, std::min(span, len - idx)));   // REC never writes past the loop end
+            liveSerial_.fetch_add(1);
+        }
+    }
+
     for (int i = 0; i < kNumTracks; ++i) {
         Track& t = const_cast<Track&>(StepTrack(p, i));
 
@@ -538,61 +620,9 @@ void Sequencer::FireTick(int tick) {
             std::array<int8_t, 6> cNotes = step.chordNotes;
             int cCount = step.chordSize;
             if (chordLiveSlot_ >= 0 && chordLiveCount_ > 0) { cNotes = chordLiveNotes_; cCount = chordLiveCount_; }
-            if (cCount == 0) continue;
-            const ChordPlay& cpl = p.chordPlay;
+            if (cCount == 0 || liveNow) continue;   // C2: a chord played live from CHORD LAB took this tick
             perfDue = false;   // a new chord: the one being performed stops here
-            if (!cpl.IsDefault() && ChordPlayIsHeldStack(cpl)) {
-                // C2 (review of PR 46): STACK at gate 100 % with OCTAVES / SMOOTH VOICES is still one held chord: it goes the plain way with
-                // the voiced notes, so a pad that spans the loop or a SLIDE chord ties instead of re-attacking, and ratchets still work
-                ChordPlay one = cpl; one.octaves = 1;
-                int8_t base[kMaxChordVoices], voiced[kMaxChordVoices];
-                const int baseN = ChordPerfVoice(cNotes.data(), cCount, one, perfPrev_.data(), perfPrevCount_, base);
-                ChordPlay dbl = cpl; dbl.smooth = false;
-                const int vn = ChordPerfVoice(base, baseN, dbl, nullptr, 0, voiced);
-                perfPrevCount_ = baseN;
-                for (int k = 0; k < baseN; ++k) perfPrev_[static_cast<size_t>(k)] = base[k];
-                for (int k = 0; k < kMaxChordVoices; ++k) cNotes[static_cast<size_t>(k)] = k < vn ? voiced[k] : 60;
-                cCount = vn;
-            } else if (!cpl.IsDefault()) {
-                // C2: the PLAY layer performs the chord over its length (ratchets are not used: RHYTHM is the way to re-strike)
-                if (chordNoteOffScheduled_ || chordHeldCount_ > 0 || perfOn_) PerfStop(off);
-                chordNoteOffScheduled_ = false;
-                chordHeldCount_ = 0;
-                ChordPerf& c = perf_;
-                c.play = cpl;
-                ChordPlay one = cpl; one.octaves = 1;   // the chord as voiced (SMOOTH VOICES), without the OCTAVES copies: the chord "before" next time
-                int8_t base[kMaxChordVoices];
-                const int baseN = ChordPerfVoice(cNotes.data(), cCount, one, perfPrev_.data(), perfPrevCount_, base);
-                ChordPlay dbl = cpl; dbl.smooth = false;
-                c.count = ChordPerfVoice(base, baseN, dbl, nullptr, 0, c.notes.data());
-                perfPrevCount_ = baseN;
-                for (int k = 0; k < baseN; ++k) perfPrev_[static_cast<size_t>(k)] = base[k];
-                c.span = std::max(1, static_cast<int>(step.lengthSteps));
-                c.rate = ChordPerfRateSteps(cpl, p.stepsPerBeat);
-                c.velocity = velocity;
-                c.strike = perfStrikes_++;
-                perfOn_ = true;
-                perfTick_ = 0;
-                perfStart_ = std::clamp(off, 0.0, 0.999);
-                PerfEmit();
-                continue;
-            }
-            if (perfOn_) PerfStop(off);   // back to the plain chord: the performed one lets go first
-            chordHeldCount_ = cCount;
-            int lenSteps = std::max(1, static_cast<int>(step.lengthSteps));
-            chordNoteOffTick_ = lenSteps;   // steps left until the release
-            chordNoteOffScheduled_ = true;
-            RatchetEvent ev;
-            ev.isDrum = false;
-            ev.isChord = true;
-            ev.chordNotes = cNotes;
-            ev.chordCount = cCount;
-            ev.velocity = velocity;
-            for (int r = 0; r < ratchet; ++r) {
-                // A tied step goes in as slide=true so the engines keep the running envelopes (no re-attack / filter restart).
-                ev.slide = r == 0 && (step.slide || chordTie);
-                ScheduleHit(hitPos(r), ev);
-            }
+            StartChord(p, cNotes, cCount, std::max(1, static_cast<int>(step.lengthSteps)), velocity, off, ratchet, step.slide || chordTie);
         } else if (t.type == TrackType::Sampler) {
             // v44.50: ONE-SHOT: the note picks the pitch, the sample plays on its own (no note-off); a ratchet re-strikes it
             RatchetEvent ev;

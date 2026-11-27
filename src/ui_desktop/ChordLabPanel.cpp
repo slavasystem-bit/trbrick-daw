@@ -107,6 +107,38 @@ void ChordLabPanel::Audition(AppState& app, const LabChord& c) {
     auditionUntil_ = ImGui::GetTime() + 0.9;
 }
 
+// C2: a click on a chord. While the loop plays it is played live: from the next beat, through PLAY, until the next chord of the loop
+// (REC WHAT I PLAY then writes it there). Stopped, it is only heard (Audition).
+void ChordLabPanel::Hear(AppState& app, const LabChord& c) {
+    if (!app.sequencer.IsPlaying()) { Audition(app, c); return; }
+    const std::vector<int> n = c.Notes(48);
+    int8_t notes[kMaxChordVoices];
+    const int cnt = std::min<int>(kMaxChordVoices, static_cast<int>(n.size()));
+    for (int i = 0; i < cnt; ++i) notes[i] = static_cast<int8_t>(n[static_cast<size_t>(i)]);
+    {
+        SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB LIVE");
+        app.sequencer.QueueLiveChord(notes, cnt, 0.85f);
+    }
+    liveChord_ = c;
+    liveWait_ = true;
+    app.SetStatus("CHORD LAB: " + c.name + (app.sequencer.LaunchQuantize() == 0 ? " FROM THE NEXT STEP" : " FROM THE NEXT BEAT") + (recLive_ ? " (REC)" : ""));
+}
+
+// C2: REC WHAT I PLAY: a live chord that has started is written into the loop where it sounded (one undo step each).
+void ChordLabPanel::TakeLiveChord(AppState& app) {
+    const uint32_t ser = app.sequencer.LiveChordSerial();
+    if (ser == liveSerial_) return;
+    liveSerial_ = ser;
+    if (!liveWait_) return;
+    liveWait_ = false;
+    if (!recLive_ || abBefore_ || app.sequencer.PlayPatternIndex() != SceneShown(app)) return;
+    if (app.project.chordBankOn && app.sequencer.ChordSceneCur() != app.project.chordSceneEdit) {   // another slot is playing: its places are not this one's
+        app.SetStatus("CHORD LAB: NOT RECORDED - ANOTHER CHORD SLOT IS PLAYING");
+        return;
+    }
+    Place(app, liveChord_, app.sequencer.LiveChordStart(), app.sequencer.LiveChordRecLen());
+}
+
 // Takes the room [start, end) away from the blocks that are in it: a block that starts inside goes, one that reaches into it is shortened.
 void ChordLabPanel::Carve(Track& tr, int start, int end) {
     for (const Blk& b : Blocks(tr)) {
@@ -480,8 +512,8 @@ void ChordLabPanel::DrawWhatFits(AppState& app, ImDrawList* dl, ImVec2 a, float 
         if (ImGui::IsItemClicked(0)) {
             adviceSel_ = i;
             Select(ad.chord->row, ad.chord->col);
-            Audition(app, *ad.chord);
-            if (ImGui::IsMouseDoubleClicked(0)) Place(app, *ad.chord, slot.start, slot.len);
+            if (ImGui::IsMouseDoubleClicked(0)) { liveWait_ = false; Place(app, *ad.chord, slot.start, slot.len); if (!app.sequencer.IsPlaying()) Audition(app, *ad.chord); }
+            else Hear(app, *ad.chord);
         }
         if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0, 5.0f) && dragRow_ < 0) { dragRow_ = ad.chord->row; dragCol_ = ad.chord->col; }
         const bool sel = i == adviceSel_;
@@ -655,12 +687,13 @@ void ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, f
 }
 
 void ChordLabPanel::Draw(AppState& app, float W, float H) {
-    if (!opened_) { opened_ = true; Rebuild(app); selBlock_ = -1; labMark_ = app.UndoMark(); abBefore_ = false; }
+    if (!opened_) { opened_ = true; Rebuild(app); selBlock_ = -1; labMark_ = app.UndoMark(); abBefore_ = false; liveSerial_ = app.sequencer.LiveChordSerial(); liveWait_ = false; }
     if (!abBefore_) {   // which chords are shown: the edited slot (bank on) or the scene's own (bank off, nothing changed yet)
         const int now = app.project.chordBankOn ? std::clamp(app.project.chordSceneEdit, 0, kNumChordScenes - 1) : -1;
         if (now != jam_) { jam_ = now; selBlock_ = -1; }
     } else if (app.project.chordBankOn) abBefore_ = false;   // something else switched the bank on (undo, a pad): B again
     Rebuild(app);
+    TakeLiveChord(app);
     if (auditionUntil_ > 0.0 && ImGui::GetTime() > auditionUntil_) { app.engine.ChordAuditionOff(); auditionUntil_ = 0.0; }
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -763,7 +796,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
             if (hov && !ImGui::IsMouseDown(0)) {
                 char fit[80] = "";
                 if (mel_.notes > 0) std::snprintf(fit, sizeof fit, "  -  holds %d of %d notes in bar %d", chip->covered, mel_.notes, slot.start / perBar + 1);
-                Hint("%s (%s, %s)%s%s  -  click: hear it  -  drag it into the loop  -  double-click: put it in bar %d",
+                Hint("%s (%s, %s)%s%s  -  click: hear it (while the loop plays: it sounds from the next beat)  -  drag it into the loop  -  double-click: put it in bar %d",
                      chip->name.c_str(), chip->roman.c_str(), LabFnName(fn), chip->degree == 0 ? ", borrowed" : "", fit, slot.start / perBar + 1);
             }
             ImGui::PopID();
@@ -772,8 +805,8 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
     if (clickedRow >= 0) {
         Select(clickedRow, clickedCol);
         for (const LabChord& c : pal_) if (c.row == clickedRow && c.col == clickedCol) {
-            Audition(app, c);
-            if (dbl && !readOnly) Place(app, c, slot.start, slot.len);
+            if (dbl && !readOnly) { liveWait_ = false; Place(app, c, slot.start, slot.len); if (!app.sequencer.IsPlaying()) Audition(app, c); }
+            else Hear(app, c);
         }
     }
     {   // legend
@@ -804,6 +837,14 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
             ChoiceEnd();
         }
         if (ImGui::IsItemHovered()) Hint("Start the loop from a typical progression, in this key.");
+        ImGui::SameLine(0, 4);
+        {
+            const bool rec = recLive_;
+            if (rec) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(170, 40, 48, 255));
+            if (MiniButton(rec ? "\xE2\x97\x8F REC WHAT I PLAY" : "\xE2\x97\x8B REC WHAT I PLAY", 150.0f)) recLive_ = !recLive_;
+            if (rec) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) Hint("While the loop plays, a click on a chord sounds from the next beat until the next chord of the loop. With REC on, every chord you play that way is written into the loop where it sounded (each one undoable).");
+        }
         ImGui::SameLine(0, 4);
         if (MiniButton("EMPTY", 58.0f)) ClearJam(app);
         if (ImGui::IsItemHovered()) Hint("Take every chord out of the loop (undoable). The scene's own chords are not touched.");
@@ -952,7 +993,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
                 fg->AddRect(ImVec2(bx0 + s * unit, blkTop), ImVec2(bx0 + (s + ln) * unit, blkBot), vis::kAccent, 5.0f, 0, 2.0f);
             }
             if (!ImGui::IsMouseDown(0)) {
-                if (overLoop) { Audition(app, *dc); Place(app, *dc, s, ln); Select(dragRow_, dragCol_); }
+                if (overLoop) { if (!app.sequencer.IsPlaying()) Audition(app, *dc); Place(app, *dc, s, ln); Select(dragRow_, dragCol_); }
                 dragRow_ = dragCol_ = -1;
             }
         } else dragRow_ = dragCol_ = -1;

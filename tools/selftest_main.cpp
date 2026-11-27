@@ -2307,6 +2307,45 @@ int main(int argc, char** argv) {
         int plain = 0; for (const auto& e : ev4) if (e.isChord) ++plain;
         check(held == plain && held == 3 && heldN == 6,
               "c2 play: STACK at gate 100 % with OCTAVES 2 goes the plain way: one 6-note chord per loop, struck as the plain chord is (a tie over the restart)");
+        {   // C2 part 2b: a chord played live from CHORD LAB starts on the next beat and holds until the next chord of the loop
+            sc.chordPlay = ChordPlay{};
+            const uint32_t ser0 = ps.LiveChordSerial();
+            pe.Capture().Start(); ps.Play();
+            auto renderTo = [&](double secs) { const int n = static_cast<int>(secs * kSampleRate); for (int d = 0; d < n; d += 256) ps.RenderAndAdvance(pbuf.data(), std::min(256, n - d), kSampleRate); };
+            renderTo(0.3);
+            const int8_t fNotes[3] = {53, 57, 60};
+            { std::lock_guard<SceneMutex> lk(ps.PatternMutex()); ps.QueueLiveChord(fNotes, 3, 0.85f); }
+            check(ps.LiveChordQueued() && ps.LiveChordSerial() == ser0, "c2 live: the chord waits for the beat");
+            renderTo(1.9);   // to t = 2.2 s
+            ps.Stop();
+            std::vector<std::pair<double, int>> ch; for (const auto& e : pe.Capture().Events()) if (e.isChord) ch.push_back({e.timeSeconds, e.notes[0]});
+            check(ch.size() == 3 && ch[0].second == 57 && ch[1].second == 53 && std::fabs(ch[1].first - 0.5) < 0.01 && ch[2].second == 57 && std::fabs(ch[2].first - 2.0) < 0.01,
+                  "c2 live: F clicked at 0.3 s sounds from the next beat (0.5 s) until the loop's next chord (Am again at 2.0 s)");
+            check(ps.LiveChordSerial() == ser0 + 1 && ps.LiveChordStart() == 4 && ps.LiveChordLen() == 12 && !ps.LiveChordQueued(),
+                  "c2 live: where it went is known (step 4, 12 steps): REC WHAT I PLAY writes it there");
+            { std::lock_guard<SceneMutex> lk(ps.PatternMutex()); ps.QueueLiveChord(fNotes, 3, 0.85f); }
+            ps.Stop();
+            check(!ps.LiveChordQueued(), "c2 live: a stop drops a chord that was still waiting");
+            // review of PR 49: REC never writes past the loop end (an empty loop; a loop whose only chord sits on step 8)
+            auto liveAt = [&](double secs) {
+                pe.Capture().Start(); ps.Play();
+                renderTo(secs);
+                { std::lock_guard<SceneMutex> lk(ps.PatternMutex()); ps.QueueLiveChord(fNotes, 3, 0.85f); }
+                renderTo(0.6);
+                ps.Stop();
+            };
+            cs = Step{};
+            liveAt(0.3);
+            check(ps.LiveChordStart() == 4 && ps.LiveChordLen() == 16 && ps.LiveChordRecLen() == 12,
+                  "c2 live: in an empty loop the chord holds round the loop, but REC writes only to the loop end (12 steps from step 4)");
+            Step& s8 = sc.tracks[kChordTrackIndex].steps[8];
+            s8.active = true; s8.chordSize = 3; s8.chordNotes = {57, 60, 64, 0, 0, 0}; s8.lengthSteps = 16;
+            liveAt(1.3);   // queued after step 10: starts on step 12, holds until step 8 comes round
+            check(ps.LiveChordStart() == 12 && ps.LiveChordLen() == 12 && ps.LiveChordRecLen() == 4,
+                  "c2 live: with the only chord on step 8, a chord from step 12 sounds 12 steps but REC writes 4 (to the loop end)");
+            s8 = Step{};
+            cs.active = true; cs.chordSize = 3; cs.chordNotes = {57, 60, 64, 0, 0, 0}; cs.lengthSteps = 16;
+        }
         ps.Stop();
         // saved with the scene, only when changed
         sc.chordPlay = ChordPlay{3, 2, 60, 2, 1, true};
@@ -5892,6 +5931,9 @@ int main(int argc, char** argv) {
             check(lab.find("void ChordLabPanel::UndoAll") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB\");\n        n = app.UndoBackTo(labMark_);") != std::string::npos &&
                   lab.find("labMark_ = app.UndoMark();") != std::string::npos,
                   "c2 ui: UNDO ALL goes back to the marker taken at open, under the scene lock");
+            check(lab.find("app.sequencer.QueueLiveChord(notes, cnt, 0.85f);") != std::string::npos && lab.find("Place(app, liveChord_, app.sequencer.LiveChordStart(), app.sequencer.LiveChordRecLen());") != std::string::npos &&
+                  lab.find("REC WHAT I PLAY") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB LIVE\");") != std::string::npos,
+                  "c2 ui: a click while the loop plays queues a live chord under the lock; REC WHAT I PLAY writes it where it sounded");
             check(lab.find("void ChordLabPanel::DrawPlay") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB PLAY\");\n        app.PushUndo();") != std::string::npos &&
                   lab.find("ChordPerfEvents(c, t, t + 1.0") != std::string::npos,
                   "c2 ui: PLAY edits the scene's ChordPlay as one undo step under the lock, and draws the same events the sequencer plays");

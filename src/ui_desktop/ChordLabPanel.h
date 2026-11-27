@@ -31,6 +31,8 @@ private:
     const LabChord* Selected() const;
     void Select(int row, int col) { selRow_ = row; selCol_ = col; }
     void Audition(AppState& app, const LabChord& c);
+    void Hear(AppState& app, const LabChord& c);
+    void TakeLiveChord(AppState& app);
     void Place(AppState& app, const LabChord& c, int start, int len);
     void Carve(Track& tr, int start, int end);
     void Resize(AppState& app, int blockIndex, int newEnd);
@@ -69,6 +71,10 @@ private:
     int dragRow_ = -1, dragCol_ = -1;    // a palette chip being dragged towards the loop
     int resizeBlk_ = -1;                 // a block edge being dragged
     double auditionUntil_ = 0.0;
+    bool recLive_ = false;               // C2: REC WHAT I PLAY
+    LabChord liveChord_;                 // the chord last played live (waits for the sequencer to start it)
+    bool liveWait_ = false;
+    uint32_t liveSerial_ = 0;
 };
 
 } // namespace t8::desktop
