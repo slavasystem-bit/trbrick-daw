@@ -109,8 +109,6 @@ struct AppState {
     bool synthViewChordSlot = false;
 
     // Chord generator state (progression browse + settings)
-    // Chord generator: which named progression template is browsed (CUSTOM is a UI-level entry in front of the list)
-    int chdProgressionIndex = 0;
     // CUSTOM hand-built progression: four scale degrees (default I-IV-V-I)
     static constexpr int kNumCustomChordSlots = 4;
     std::array<int, kNumCustomChordSlots> chdCustomDegrees = {1, 4, 5, 1};
@@ -130,21 +128,14 @@ struct AppState {
             chdLiveKey_ = project.randomizerKeyRoot;
             chdLiveScale_ = project.randomizerScale;
         }
-        Chord c = BuildChord(chdLiveKey_, chdLiveScale_, chdCustomDegrees[chdLiveSlot], chdComplex, 3);
+        Chord c = BuildChord(chdLiveKey_, chdLiveScale_, chdCustomDegrees[chdLiveSlot], false, 3);
         int8_t notes[kMaxChordVoices];
         int n = std::min(static_cast<int>(c.notes.size()), kMaxChordVoices);
         for (int i = 0; i < n; ++i) notes[i] = static_cast<int8_t>(c.notes[i]);
         sequencer.SetChordLive(chdLiveSlot, notes, n);
     }
-    bool chdCustomSelected = true;   // the browse cursor is on CUSTOM (the hand-built 4-chord loop)
-    bool chdComplex = false;                       // SIMPLE (triads) vs COMPLEX (7th chords)
-    ChordOutputMode chdOutputMode = ChordOutputMode::Stack;
-    ArpStyle chdArpStyle = ArpStyle::Up;
-    int chdArpRateSteps = 1;                        // 1/2/4 steps per arpeggiated note
-    // 0 = AUTO (divide the pattern's masterLength evenly across however
-    // many chords are in the applied progression), else a fixed step count
-    // per chord (4/8/16) regardless of progression length or pattern length.
-    int chdChordLengthSteps = 0;
+    // C2 part 3b: the VOICING settings (triad / 7th, STACK / ARP, arp style and rate, chord length) are gone with their block: the
+    // generator writes held triads, and how they are played is the scene's PLAY layer (Pattern::chordPlay).
 
     int menuKitIndex = 0;   // kit currently browsed to
 
@@ -2115,16 +2106,12 @@ struct AppState {
     // "wipe then rebuild" way ApplyGenrePattern/RandomizeMelodic do. Shared
     // by ApplyChordProgression (a named template) and RandomizeChordProgression
     // (a freshly generated one) below -- undoable (PATTERN-scoped, like
-    // those two), but the CHORDS tab's own SETTINGS (chdComplex/
-    // chdOutputMode/chdArpStyle/etc, all plain AppState fields) stay
-    // deliberately out of Undo's coverage, same "settings vs. pattern data"
-    // split the rest of this file already draws.
+    // those two).
     // v44.49: `undo` = false when a caller (ApplyStyle) has already made the one undo step; `lenOverride` > 0 sets the length of one
-    // chord in steps; `forceStack` writes held chords whatever the CHORDS tab's output mode is.
-    void ApplyDegreeSequence(const std::vector<int>& degrees, const std::string& label, bool undo = true, int lenOverride = 0, bool forceStack = false) {
+    // chord in steps. C2 part 3b: always held triads (one step per chord); ARP / STRUM / RHYTHM are the PLAY layer, not baked steps.
+    void ApplyDegreeSequence(const std::vector<int>& degrees, const std::string& label, bool undo = true, int lenOverride = 0) {
         if (degrees.empty()) return;
         if (undo) PushUndo();
-        std::mt19937& rng = RngEngine();
         Pattern& pat = CurrentPattern();
         int len = pat.masterLength;
         Track& t = StepTrack(pat, kChordTrackIndex);
@@ -2138,7 +2125,7 @@ struct AppState {
         }
 
         int numChords = static_cast<int>(degrees.size());
-        int chordLen = lenOverride > 0 ? lenOverride : (chdChordLengthSteps > 0 ? chdChordLengthSteps : std::max(1, len / numChords));
+        int chordLen = lenOverride > 0 ? lenOverride : std::max(1, len / numChords);
         // C3 -- a warm pad/comping register, deliberately distinct from the
         // bass (octaves 1-2) and lead (C3-C5) bands the RANDOM tab's
         // melodic randomizers already use, so a chord doesn't automatically
@@ -2148,53 +2135,17 @@ struct AppState {
         int stepPos = 0;
         for (int ci = 0; ci < numChords && stepPos < len && stepPos < kMaxSteps; ++ci) {
             Chord chord = BuildChord(project.randomizerKeyRoot, project.randomizerScale,
-                                      degrees[ci], chdComplex, kAnchorOctave);
+                                      degrees[ci], false, kAnchorOctave);
             int span = std::min({chordLen, len - stepPos, kMaxSteps - stepPos});
             if (span <= 0) break;
             int n = std::min(static_cast<int>(chord.notes.size()), kMaxChordVoices);
 
-            if (forceStack || chdOutputMode == ChordOutputMode::Stack) {
-                // One held step carrying all `n` notes at once for the
-                // chord's whole span -- a real chord (see ChordVoice.h).
-                Step& s = t.steps[stepPos];
-                s.active = true;
-                s.chordSize = static_cast<uint8_t>(n);
-                for (int i = 0; i < kMaxChordVoices; ++i) s.chordNotes[i] = static_cast<int8_t>(i < n ? chord.notes[i] : 60);
-                s.lengthSteps = static_cast<uint8_t>(span);
-            } else {
-                // Arpeggio: a single-note hit every chdArpRateSteps steps
-                // within this chord's span, cycling the chord's tones per
-                // chdArpStyle -- chordSize=1 per step, so this plays back
-                // through the exact same "1 note = a normal note" path as
-                // a Stack chord with n==1, nothing arpeggio-specific needed
-                // downstream in Sequencer/ChordVoice.
-                int rate = std::max(1, chdArpRateSteps);
-                int hit = 0;
-                for (int off = 0; off < span; off += rate) {
-                    int idx = 0;
-                    if (n > 1) {
-                        switch (chdArpStyle) {
-                            case ArpStyle::Up:   idx = hit % n; break;
-                            case ArpStyle::Down: idx = (n - 1) - (hit % n); break;
-                            case ArpStyle::UpDown: {
-                                int period = 2 * (n - 1);
-                                int m = hit % period;
-                                idx = (m < n) ? m : period - m;
-                                break;
-                            }
-                            case ArpStyle::Random:
-                                idx = std::uniform_int_distribution<int>(0, n - 1)(rng);
-                                break;
-                        }
-                    }
-                    Step& s = t.steps[stepPos + off];
-                    s.active = true;
-                    s.chordSize = 1;
-                    s.chordNotes[0] = static_cast<int8_t>(chord.notes[idx]);
-                    s.lengthSteps = static_cast<uint8_t>(std::min(rate, span - off));
-                    ++hit;
-                }
-            }
+            // One held step carrying all `n` notes at once for the chord's whole span -- a real chord (see ChordVoice.h).
+            Step& s = t.steps[stepPos];
+            s.active = true;
+            s.chordSize = static_cast<uint8_t>(n);
+            for (int i = 0; i < kMaxChordVoices; ++i) s.chordNotes[i] = static_cast<int8_t>(i < n ? chord.notes[i] : 60);
+            s.lengthSteps = static_cast<uint8_t>(span);
             stepPos += span;
         }
         SyncMixer(pat);
@@ -2373,7 +2324,7 @@ struct AppState {
                 const int chordSteps = std::max(1, sd.chordBeats * spb);
                 std::vector<int> degs;
                 if (!base.empty()) for (int at = 0, k = 0; at < len; at += chordSteps, ++k) degs.push_back(base[static_cast<size_t>(k) % base.size()]);
-                ApplyDegreeSequence(degs, "", false, chordSteps, true);
+                ApplyDegreeSequence(degs, "", false, chordSteps);
             }
             say("NOTES");
         }

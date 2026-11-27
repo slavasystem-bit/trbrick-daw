@@ -5850,13 +5850,21 @@ int main(int argc, char** argv) {
 
     {   // v44.46: CHORD LAB is honest
         auto slurp = [](const std::string& path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
-        const std::string panel = slurp("src/ui_desktop/ChordLabPanel.cpp"), coreSrc = slurp("src/core/ChordLab.h"), ctx = slurp("src/ui_desktop/ContextPanel.cpp"), edit = slurp("src/ui_desktop/ChordEditor.h");
+        const std::string panel = slurp("src/ui_desktop/ChordLabPanel.cpp"), coreSrc = slurp("src/core/ChordLab.h"), ctx = slurp("src/ui_desktop/ContextPanel.cpp");
         check(coreSrc.find("LabNextChords") == std::string::npos && panel.find("LabNextChords") == std::string::npos && panel.find("\"NEXT\"") == std::string::npos, "v44.46: the NEXT prediction is gone");
         check(coreSrc.find("LabFunction") == std::string::npos, "v44.46: WHY has no sentence about what a chord wants");
         check(panel.find("\"JAM\", \"SOUND\"") == std::string::npos && panel.find("BACK TO THE JAM") != std::string::npos && panel.find("soundBody_") != std::string::npos, "v44.46 / C2 part 3: the whole chord instrument is one press away in CHORD LAB (ALL KNOBS..., BACK TO THE JAM)");
         check(panel.find("LabMelodyFromRange(pat, SrcTracks(), b.start") != std::string::npos && panel.find("RefreshMatch(app,") != std::string::npos, "v44.46: MATCH is read under every block and for the selected block");
         check(ctx.find("BlockBegin(\"PROGRESSION\")") == std::string::npos && ctx.find("BlockBegin(\"CUSTOM CHORDS\")") == std::string::npos && ctx.find("OPEN CHORD LAB") != std::string::npos, "v44.46: PROGRESSION and CUSTOM CHORDS are gone from the CHORDS tab, CHORD LAB opens from it");
-        check(ctx.find("c.quality") == std::string::npos && edit.find("LabPcName(sp.root)") != std::string::npos, "v44.46: one way to name a chord (no CMIN next to Cm)");
+        check(ctx.find("c.quality") == std::string::npos, "v44.46: one way to name a chord (no CMIN next to Cm)");
+        {   // C2 part 3b: VOICING, the CHORD EDITOR window and the CHORD column of RANDOM / KIT are gone; a chord slot opens in CHORD LAB
+            const std::string bottom = slurp("src/ui_desktop/BottomPanel.cpp"), chainSrc = slurp("src/ui_desktop/ChainPanel.cpp");
+            std::ifstream gone("src/ui_desktop/ChordEditor.h");
+            check(!gone.good() && ctx.find("BlockBegin(\"VOICING\")") == std::string::npos && ctx.find("CHORD EDITOR") == std::string::npos &&
+                  bottom.find("column(\"chord\"") == std::string::npos && chainSrc.find("OpenChordLabOn(app, c)") != std::string::npos &&
+                  chainSrc.find("app.OpenTool(AppState::Tool::ChordLab)") != std::string::npos,
+                  "c2: VOICING, CHORD EDITOR and the CHORD column of RANDOM / KIT are gone; a chord slot opens in CHORD LAB");
+        }
         // WHY names the scale as it is: C dorian is not C minor
         const auto palD = BuildLabPalette(0, 1, false);
         const auto whyD = LabWhy(palD[0], nullptr, 0, 1, LabMelody{});

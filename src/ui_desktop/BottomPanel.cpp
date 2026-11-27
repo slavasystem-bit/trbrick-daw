@@ -519,14 +519,7 @@ void BottomPanel::DrawRandomKit(AppState& app) {
                [&, i] { app.RandomizeMelodicMode(i, app.rndDensityMode[i]); if (app.rndDensityMode[i] < 2) app.SetStatus(std::string("RANDOMIZED ") + kMel[i]); },
                [&, i] { app.ClearSynth(i); app.SetStatus(std::string(kMel[i]) + " CLEARED"); });
     }
-    ImGui::SameLine(0, 6);
-    {   // the chord column has no octave set (its chords are built around octave 3)
-        bool chdCx = app.chdComplex;
-        column("chord", "CHORD", -1, &chdCx,
-               [&] { app.RandomizeChordProgression(); },
-               [&] { app.ClearChordTrack(); app.SetStatus("CHORD TRACK CLEARED"); });
-        app.chdComplex = chdCx;
-    }
+    // C2 part 3b: no CHORD column here any more: chords are built in CHORD LAB (the instrument block keeps RANDOM and CLEAR)
     ImGui::EndGroup();
 }
 
