@@ -37,12 +37,27 @@ inline uint32_t PerfHash(uint32_t a, uint32_t b) {   // a small fixed mix: the s
     return h;
 }
 
+// A few notes, low to high. An insertion sort with a fixed bound: std::sort on these small arrays makes GCC 15 warn (array-bounds)
+// about a range it cannot prove, and the build treats warnings as errors.
+template <class T>
+inline void PerfSortSmall(T* a, int n) {
+    n = std::clamp(n, 0, kMaxChordVoices);
+    for (int i = 1; i < n; ++i) {
+        const T v = a[i];
+        int j = i - 1;
+        while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; --j; }
+        a[j + 1] = v;
+    }
+}
+
 inline double ChordPerfRateSteps(const ChordPlay& p, int stepsPerBeat) {
     return std::max(0.25, ChordPlayRateBeats(p.rate) * static_cast<double>(std::max(1, stepsPerBeat)));
 }
 
 // SMOOTH VOICES: the inversion of `in` (low to high) nearest the chord that sounded before. Without a chord before, `in` stays.
 inline int PerfSmooth(const int8_t* in, int n, const int8_t* prev, int prevN, int8_t* out) {
+    n = std::clamp(n, 0, kMaxChordVoices);
+    prevN = std::clamp(prevN, 0, kMaxChordVoices);
     for (int i = 0; i < n; ++i) out[i] = in[i];
     if (n <= 1 || prevN <= 0) return n;
     double prevMean = 0.0;
@@ -55,7 +70,7 @@ inline int PerfSmooth(const int8_t* in, int n, const int8_t* prev, int prevN, in
         for (int i = 0; i < n; ++i) c[i] = in[i];
         if (r > 0) for (int i = 0; i < r; ++i) c[i % n] += 12 * (1 + i / n);       // r lowest tones an octave up
         if (r < 0) for (int i = 0; i < -r; ++i) c[n - 1 - (i % n)] -= 12 * (1 + i / n);   // |r| highest tones an octave down
-        std::sort(c, c + n);
+        PerfSortSmall(c, n);
         if (c[0] < 36 || c[n - 1] > 96) continue;
         double cost = 0.0;
         if (n == prevN) for (int i = 0; i < n; ++i) cost += std::abs(c[i] - prev[i]);
@@ -73,14 +88,14 @@ inline int ChordPerfVoice(const int8_t* notes, int count, const ChordPlay& play,
     count = std::clamp(count, 0, kMaxChordVoices);
     int8_t s[kMaxChordVoices];
     for (int i = 0; i < count; ++i) s[i] = notes[i];
-    std::sort(s, s + count);
+    PerfSortSmall(s, count);
     int n = count;
     if (play.smooth) PerfSmooth(s, count, prev, prevN, out); else for (int i = 0; i < count; ++i) out[i] = s[i];
     if (play.mode != static_cast<uint8_t>(ChordPlayMode::Arp))
         for (int o = 1; o < play.octaves; ++o)
             for (int i = 0; i < count && n < kMaxChordVoices; ++i)
                 if (out[i] + 12 * o <= 108) out[n++] = static_cast<int8_t>(out[i] + 12 * o);
-    std::sort(out, out + n);
+    PerfSortSmall(out, n);
     return n;
 }
 
@@ -115,7 +130,7 @@ inline void ChordPerfEvents(const ChordPerf& c, double lo, double hi, F&& emit) 
             for (int i = 0; i < n; ++i) ord[i] = i;
             const int o = c.play.order;
             const bool down = o == 1 || (o == 2 && (c.strike & 1u));
-            if (down) std::reverse(ord, ord + n);
+            if (down) for (int i = 0; i < n / 2; ++i) std::swap(ord[i], ord[n - 1 - i]);
             if (o == 3) for (int i = n - 1; i > 0; --i) std::swap(ord[i], ord[PerfHash(c.strike, static_cast<uint32_t>(i)) % static_cast<uint32_t>(i + 1)]);
             for (int k = 0; k < n; ++k) put(k * dt, ord[k], c.notes[static_cast<size_t>(ord[k])], true);
             put(std::max(span * gate, spread + 0.01), -1, 0, false);
@@ -152,10 +167,13 @@ inline void ChordPerfEvents(const ChordPerf& c, double lo, double hi, F&& emit) 
             break;
         }
     }
-    std::stable_sort(buf.begin(), buf.begin() + nb, [](const ChordPerfEvent& a, const ChordPerfEvent& b) {
-        if (a.at != b.at) return a.at < b.at;
-        return !a.on && b.on;
-    });
+    auto before = [](const ChordPerfEvent& a, const ChordPerfEvent& b) { return a.at < b.at || (a.at == b.at && !a.on && b.on); };
+    for (int i = 1; i < nb; ++i) {   // a stable insertion sort (a few dozen events at most)
+        const ChordPerfEvent v = buf[static_cast<size_t>(i)];
+        int j = i - 1;
+        while (j >= 0 && before(v, buf[static_cast<size_t>(j)])) { buf[static_cast<size_t>(j + 1)] = buf[static_cast<size_t>(j)]; --j; }
+        buf[static_cast<size_t>(j + 1)] = v;
+    }
     for (int i = 0; i < nb; ++i) emit(buf[static_cast<size_t>(i)]);
 }
 

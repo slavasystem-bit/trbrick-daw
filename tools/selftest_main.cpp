@@ -3310,7 +3310,8 @@ int main(int argc, char** argv) {
                           "fill c4b: 1/2 BEAT on a brick and on a scene survives a save / load");
                     {   // review of PR 44: a 0 in a file from before format 10 is not half a beat (it was never written; it reads as 1 beat, as before)
                         std::ifstream in("selftest_arr.t8proj"); std::string t((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
-                        const size_t at = t.find("format=10"); if (at != std::string::npos) t.replace(at, 9, "format=9");
+                        const std::string cur = "format=" + std::to_string(kProjectFormatVersion);   // the format this program writes, whatever its number
+                        const size_t at = t.find(cur); if (at != std::string::npos) t.replace(at, cur.size(), "format=9");
                         { std::ofstream out("selftest_arr.t8proj", std::ios::trunc); out << t; }
                         Project po; check(LoadProject(po, "selftest_arr.t8proj") && po.songChain[1].fill.beats == 1 && po.patterns[1].fill.beats == 1,
                                           "fill c4b: a fill length of 0 in a format 9 file reads as 1 beat");
