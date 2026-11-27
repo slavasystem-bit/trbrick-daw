@@ -1265,6 +1265,8 @@ struct AppState {
     bool loopOn = true;        // LOOP: round the selected brick / range
     bool loopAll = false;      // v44.35: with LOOP on, round the WHOLE track (transitions between all bricks), whatever brick or range is selected / edited
     int selBrick = -1;         // the selected brick of the TRACK strip (the editor shows its scene); the first of a range
+    int orphanPopupsClosed = 0;   // popups closed by CloseOrphanPopups (Shell.cpp): each one is a bug (the uitest fails on it)
+    int spaceDownsRaw = 0, spaceDownsSeen = 0;   // Space presses as the window got them (main.cpp) / as HandleShortcuts last saw them
     int rollCopyFrame = -10, rollPasteFrame = -10;   // C1 (UI-8): frames in which Cmd+C / Cmd+V belong to the piano roll (notes selected / copied, mouse over it)
     int rollKeysFrame = -10;   // U6: the last ImGui frame in which the piano roll owned the arrow keys (selected notes + mouse over the roll)
     int selBrickHi = -1;       // the last brick of a selected range (U6), -1 = just selBrick

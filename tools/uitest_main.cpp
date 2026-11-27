@@ -70,7 +70,7 @@ struct Runner {
     ShellPanels& panels;
     DesktopFonts fonts;
     ImVec2 size{1440.0f, 900.0f};
-    int lockMisses = 0, badAudio = 0, frames = 0;
+    int lockMisses = 0, badAudio = 0, frames = 0, spaceFails = 0;
     int clicks = 0, clicksOnItems = 0, swept = 0;   // how many clicks landed on a button / field / grid cell (the test must really press things)
     std::vector<ImGuiID> pressed;        // every control that became active at least once
     std::vector<float> audio;
@@ -301,6 +301,65 @@ void Monkey(Runner& r, unsigned seed, int frames) {
     r.Calm();
 }
 
+// Space = play / stop on every screen, with every tool open, after chords were played live in CHORD LAB, and when the UI missed
+// the key-up of an earlier Space (urgent bug 2026-11-27: on a Mac Space stopped working after CHORD LAB).
+void SpaceKey(Runner& r) {
+    AppState& app = r.app;
+    auto expectToggle = [&](const char* what) {
+        const bool was = app.sequencer.IsPlaying();
+        r.Key(ImGuiKey_Space);
+        if (app.sequencer.IsPlaying() == was) { ++r.spaceFails; std::fprintf(stderr, "UITEST FAIL: Space did not %s: %s\n", was ? "stop" : "start", what); }
+    };
+    const AppState::Tool tools[] = {AppState::Tool::None, AppState::Tool::MixLab, AppState::Tool::ChordLab, AppState::Tool::MasterFx};
+    for (int tab : {2, 1}) {
+        if (tab == 1 && app.project.songChainLength == 0) { SceneLock lock(app.sequencer.PatternMutex(), "UITEST"); app.ThrowIntoChain(); }
+        for (AppState::Tool t : tools) {
+            char ph[96]; std::snprintf(ph, sizeof ph, "space: %s, tool %d", tab == 2 ? "LIVE" : "TRACK", static_cast<int>(t));
+            g_phase = ph;
+            app.uiTabRequest = tab; app.OpenTool(t); r.Frames(3);
+            expectToggle(ph); r.Frames(20); expectToggle(ph);
+        }
+        // chords played in CHORD LAB: heard while stopped, live while the loop plays
+        app.uiTabRequest = tab; app.OpenTool(AppState::Tool::ChordLab); r.Frames(3);
+        g_phase = std::string("space after chords in CHORD LAB, ") + (tab == 2 ? "LIVE" : "TRACK");
+        std::vector<ImVec2> chips;
+        for (const SeenControl& c : g_lastFrame) if (c.label == "##chip") chips.push_back(c.bb.GetCenter());
+        if (chips.empty()) { ++r.spaceFails; std::fprintf(stderr, "UITEST FAIL: no chord chips in CHORD LAB\n"); }
+        for (size_t i = 0; i < chips.size() && i < 3; ++i) { r.Click(chips[i]); r.Frames(5); }
+        expectToggle(g_phase.c_str());
+        for (size_t i = 3; i < chips.size() && i < 6; ++i) { r.Click(chips[i]); r.Frames(30); }
+        expectToggle(g_phase.c_str());
+        // a right-click on a chord of the loop opens its menu; after Esc Space works again (the menu used to be opened under the
+        // wrong id: it never showed and every key stayed dead)
+        app.sequencer.Stop(); r.Frames(2);
+        if (!chips.empty()) { r.Click(chips[0], 0, true); r.Frames(3); }   // double-click: the chord goes into the loop
+        std::vector<ImVec2> blocks;
+        for (const SeenControl& c : g_lastFrame) if (c.label == "##blk") blocks.push_back(c.bb.GetCenter());
+        if (blocks.empty()) { ++r.spaceFails; std::fprintf(stderr, "UITEST FAIL: no chord in the CHORD LAB loop to right-click\n"); }
+        else {
+            g_phase = std::string("space after the right-click menu of a loop chord, ") + (tab == 2 ? "LIVE" : "TRACK");
+            r.Click(blocks[0], 1); r.Frames(2);
+            bool shown = false;
+            for (const ImGuiPopupData& pd : ImGui::GetCurrentContext()->OpenPopupStack) if (pd.Window && pd.Window->Active) shown = true;
+            if (!shown) { ++r.spaceFails; std::fprintf(stderr, "UITEST FAIL: the right-click menu of a loop chord did not show\n"); }
+            r.Key(ImGuiKey_Escape); r.Frames(2);
+            expectToggle(g_phase.c_str());
+        }
+        app.sequencer.Stop(); app.OpenTool(AppState::Tool::None); r.Frames(2);
+    }
+    // the key-up of a Space got lost: the UI still holds Space, the window reports a new press
+    g_phase = "space after a lost key-up";
+    app.uiTabRequest = 2; r.Frames(2);
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiKey_Space, true); ++app.spaceDownsRaw; r.Frame();   // starts
+    r.Frames(3);
+    const bool was = app.sequencer.IsPlaying();
+    ++app.spaceDownsRaw; r.Frame();   // a new press, no key-up in between
+    if (app.sequencer.IsPlaying() == was) { ++r.spaceFails; std::fprintf(stderr, "UITEST FAIL: Space after a lost key-up did nothing\n"); }
+    io.AddKeyEvent(ImGuiKey_Space, false); r.Frame();
+    app.sequencer.Stop(); r.Frames(2);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -346,6 +405,7 @@ int main(int argc, char** argv) {
     ShellPanels panels;
     Runner r{app, panels, fonts};
     r.Frames(3);
+    SpaceKey(r);
     Tour(r);
     Sweep(r);
     const int tourFrames = r.frames;
@@ -357,12 +417,13 @@ int main(int argc, char** argv) {
     app.loader.Stop();
     ImGui::DestroyContext();
 
-    std::printf("uitest: %d frames (tour + sweep %d, %d labelled controls pressed one by one; monkey %d seeds x %d), %d clicks (%d on a control), %zu different controls pressed, scene lock misses %d, bad audio blocks %d\n",
-                r.frames, tourFrames, r.swept, seeds, frames, r.clicks, r.clicksOnItems, r.pressed.size(), r.lockMisses, r.badAudio);
+    std::printf("uitest: %d frames (tour + sweep %d, %d labelled controls pressed one by one; monkey %d seeds x %d), %d clicks (%d on a control), %zu different controls pressed, scene lock misses %d, bad audio blocks %d, Space failures %d\n",
+                r.frames, tourFrames, r.swept, seeds, frames, r.clicks, r.clicksOnItems, r.pressed.size(), r.lockMisses, r.badAudio, r.spaceFails);
     // a test that clicks into nothing proves nothing: at least one click in five must land on a control and many different ones must be pressed
     const bool reached = r.swept >= 100 && (seeds == 0 || (r.clicksOnItems * 5 > r.clicks && r.pressed.size() >= 50));
     if (!reached) std::printf("UITEST FAIL: the clicks did not reach the controls (is the screen drawn?)\n");
-    const bool ok = r.lockMisses == 0 && r.badAudio == 0 && reached;
+    if (app.orphanPopupsClosed > 0) std::printf("UITEST FAIL: %d popup(s) opened under one id and drawn under another (see 'closed a popup that was never drawn' above)\n", app.orphanPopupsClosed);
+    const bool ok = r.lockMisses == 0 && r.badAudio == 0 && r.spaceFails == 0 && app.orphanPopupsClosed == 0 && reached;
     std::printf("%s\n", ok ? "UI TEST PASSED" : "UI TEST FAILED");
     return ok ? 0 : 1;
 }
