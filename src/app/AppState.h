@@ -571,12 +571,52 @@ struct AppState {
     bool hasPatternClipboard = false;
     Pattern patternClipboard;
 
+    std::string patternClipDir_, trackClipDir_;   // C4b (e): the project folder the copy was made in (its kits are named from there)
     void CopyPattern() {
         patternClipboard = CurrentPattern();
         hasPatternClipboard = true;
+        patternClipDir_ = DirNameOf(projectPath);
+    }
+    // C4b (e): a scene / track copied in a project in another folder names kits of THAT folder (samples/kits/<kit>): they are copied
+    // into this project's samples/ first (under a free name when this folder has another kit of that name), and the names follow.
+    void BringKitsFrom(const std::string& clipDir, const std::vector<std::string*>& names) {
+        if (clipDir.empty() || clipDir == DirNameOf(projectPath)) return;
+        std::set<std::string> kits;
+        for (std::string* n : names) if (IsProjectKit(*n)) kits.insert(*n);
+        if (kits.empty()) return;
+        const std::map<std::string, std::string> renamed = CopyKitFolders(clipDir + "/samples", SamplesDir(), kits);
+        for (std::string* n : names) { auto it = renamed.find(*n); if (it != renamed.end()) *n = it->second; }
+        kitsDirty_ = true;
+    }
+    // Reads and copies kit files: call it BEFORE taking the scene lock (the audio thread waits on that lock), as every paste
+    // command does; Paste* call it again, which is then a no-op. The clipboards then name this folder's copies.
+    // A paste asked for from a panel drawn under the scene lock (the track menu): run by the shell next frame, outside any lock.
+    struct PasteRequest { int kind = 0, track = 0; };   // kind 1 = track onto `track`, 2 = whole scene
+    PasteRequest pasteRequest;
+    void RunPasteRequest() {
+        const PasteRequest r = pasteRequest;
+        if (r.kind == 0) return;
+        pasteRequest = {};
+        PrepareClipboardKits();
+        SceneLock lock(sequencer.PatternMutex(), "PASTE");
+        if (r.kind == 1) PasteTrack(r.track);
+        else SetStatus(PastePattern() ? "SCENE PASTED" : "CLIPBOARD EMPTY");
+    }
+    void PrepareClipboardKits() {
+        if (hasPatternClipboard) {
+            std::vector<std::string*> names = {&patternClipboard.kitFolder};
+            for (int t = 0; t < kNumDrumTracks; ++t) names.push_back(&patternClipboard.tracks[static_cast<size_t>(t)].kitFolder);
+            BringKitsFrom(patternClipDir_, names);
+            patternClipDir_ = DirNameOf(projectPath);
+        }
+        if (hasTrackClipboard) {
+            BringKitsFrom(trackClipDir_, {&trackClipboard.kitFolder});
+            trackClipDir_ = DirNameOf(projectPath);
+        }
     }
     bool PastePattern() {
         if (!hasPatternClipboard) return false;
+        PrepareClipboardKits();   // a no-op when the command already did it before its lock
         PushUndo();
         CurrentPattern() = patternClipboard;
         SyncMixer(CurrentPattern());
@@ -605,6 +645,7 @@ struct AppState {
         if (trackIndex < 0 || trackIndex >= kNumTracks) return;
         trackClipboard = CurrentPattern().tracks[trackIndex];
         hasTrackClipboard = true;
+        trackClipDir_ = DirNameOf(projectPath);
         SetStatus(trackClipboard.name + " TRACK COPIED");
     }
     void PasteTrack(int trackIndex) {
@@ -618,6 +659,7 @@ struct AppState {
             SetStatus("CAN'T PASTE: TYPE MISMATCH");
             return;
         }
+        PrepareClipboardKits();   // C4b (e): a no-op when the command already did it before its lock
         PushUndo();
         std::string keepName = dest.name;
         TrackType keepType = dest.type;
@@ -4144,10 +4186,18 @@ struct AppState {
     // copied under a free name (<kit>_2 ...) and the document is pointed at it, so it keeps playing exactly its own samples.
     // A kit there that only holds the same files (or fewer of them) is used and filled up.
     std::map<std::string, std::string> CopyProjectKitsTo(const std::string& from, const std::string& to) {
-        namespace fs = std::filesystem;
-        std::error_code ec;
         std::set<std::string> kits;   // "samples/kits/<kit>"
         ForEachKitName([&](std::string& k) { if (IsProjectKit(k)) kits.insert(k); });
+        std::map<std::string, std::string> renamed = CopyKitFolders(from, to, kits);
+        RenameKits(renamed);
+        if (!kits.empty()) kitsDirty_ = true;   // read again from the new folder
+        return renamed;   // old name -> new name (SAVE AS puts them back if the file cannot be written)
+    }
+    // The kit folders `kits` ("samples/kits/<kit>") from the samples folder `from` into `to`, each under its own name or, when `to`
+    // holds other files under that name, a free one. Returns old name -> new name for the renamed ones. A kit missing in `from` is skipped.
+    static std::map<std::string, std::string> CopyKitFolders(const std::string& from, const std::string& to, const std::set<std::string>& kits) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
         auto fits = [&](const fs::path& src, const fs::path& dst) {   // every file already in dst is the same file in src
             if (!fs::exists(dst, ec)) return true;
             if (!fs::is_directory(dst, ec)) return false;
@@ -4169,9 +4219,7 @@ struct AppState {
             for (const auto& f : fs::directory_iterator(src, ec)) if (f.is_regular_file(ec)) fs::copy_file(f.path(), dst / f.path().filename(), fs::copy_options::skip_existing, ec);
             if (name != k) renamed[k] = name;
         }
-        RenameKits(renamed);
-        if (!kits.empty()) kitsDirty_ = true;   // read again from the new folder
-        return renamed;   // old name -> new name (SAVE AS puts them back if the file cannot be written)
+        return renamed;
     }
     void RenameKits(const std::map<std::string, std::string>& renamed) {
         if (renamed.empty()) return;
@@ -4436,8 +4484,13 @@ struct AppState {
     // N1 (LIVE-2): the file is read, the kit folder written and the new bank built on the loader thread; the scene / drum that was
     // selected when it was asked for gets it then.
     struct SlotCopy { bool ok = false; std::string error, target; int variant = 0; DrumKit::BankPtr bank; };
+    // `reusable`: the project kits the open document names (a copy of the kit already there is used, not a second one); `follow`:
+    // the kit an earlier drop from the same kit, still in flight, chose (two quick drops on two drums land in one copy); `chosen`
+    // gets the kit this one used. A project kit nobody here names (another project's in a shared folder, or an earlier Untitled's)
+    // is never reused: the copy gets a free name, so takes and the 8-take limit stay this project's own.
     static SlotCopy CopySlotFile(const std::string& wavPath, const std::string& kitName, const std::string& kitDisk, const std::string& projDir,
-                                 int slotIndex, int rate, const DrumKit* kit) {   // any thread
+                                 int slotIndex, int rate, const DrumKit* kit, const std::set<std::string>& reusable,
+                                 const std::shared_ptr<const std::string>& follow, const std::shared_ptr<std::string>& chosen) {   // any thread (the loader)
         namespace fs = std::filesystem;
         SlotCopy r;
         SampleBuffer probe;
@@ -4448,7 +4501,19 @@ struct AppState {
             std::string base;
             for (char c : KitShortName(kitName)) if (c != '/' && c != '\\' && c != ':') base += c;
             if (base.empty() || base == "." || base == "..") base = "kit";
-            target = kProjectKitPrefix + base;
+            const std::string cand = kProjectKitPrefix + base;
+            auto isCopyName = [&](const std::string& n) {   // cand, or cand_<digits>
+                if (n == cand) return true;
+                if (n.size() <= cand.size() + 1 || n.compare(0, cand.size() + 1, cand + "_") != 0) return false;
+                return n.find_first_not_of("0123456789", cand.size() + 1) == std::string::npos;
+            };
+            target.clear();
+            if (follow && !follow->empty()) target = *follow;
+            else for (const std::string& n : reusable) if (isCopyName(n)) { target = n; break; }
+            if (target.empty()) {
+                target = cand;
+                for (int n = 2; fs::exists(projDir + "/" + target, ec) && n < 1000; ++n) target = cand + "_" + std::to_string(n);
+            }
             disk = projDir + "/" + target;
             fs::create_directories(disk, ec);
             if (ec || !fs::is_directory(disk, ec)) { r.error = "CANNOT CREATE " + target; return r; }
@@ -4468,8 +4533,11 @@ struct AppState {
         if (at == names.end()) { r.error = "CANNOT READ THE COPY IN " + target; return r; }
         r.variant = static_cast<int>(at - names.begin());
         r.ok = true; r.target = target;
+        if (chosen) *chosen = target;
         return r;
     }
+    std::map<std::string, std::shared_ptr<std::string>> dropChosen_;   // project folder | source kit -> the copy the latest drop from it chose
+    int dropsInFlight_ = 0;
     bool AssignSampleToSlot(const std::string& wavPath) {
         namespace fs = std::filesystem;
         const int trackIdx = std::clamp(seqCursorTrack, 0, kNumTracks - 1), scene = project.currentPattern;
@@ -4489,12 +4557,23 @@ struct AppState {
             const Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];
             return ownKit ? pt.tracks[static_cast<size_t>(trackIdx)].kitFolder : pt.kitFolder;
         };
-        loader.Post([res, wavPath, sceneKit, sceneKitDisk, projDir, slotIndex, rate, kit] { *res = CopySlotFile(wavPath, sceneKit, sceneKitDisk, projDir, slotIndex, rate, kit); },
+        std::set<std::string> reusable;
+        ForEachKitName([&](std::string& k) { if (IsProjectKit(k)) reusable.insert(k); });
+        const std::string dropKey = projDir + "|" + sceneKit;
+        std::shared_ptr<const std::string> follow;
+        if (dropsInFlight_ > 0) { auto f = dropChosen_.find(dropKey); if (f != dropChosen_.end()) follow = f->second; }
+        auto chosen = std::make_shared<std::string>();
+        dropChosen_[dropKey] = chosen;
+        ++dropsInFlight_;
+        loader.Post([res, wavPath, sceneKit, sceneKitDisk, projDir, slotIndex, rate, kit, reusable, follow, chosen] {
+                        *res = CopySlotFile(wavPath, sceneKit, sceneKitDisk, projDir, slotIndex, rate, kit, reusable, follow, chosen); },
                     [this, res, wavPath, scene, trackIdx, ownKit, trackName, key, prev, tok, gen, kitOf, projDir] {
+            if (--dropsInFlight_ <= 0) { dropsInFlight_ = 0; dropChosen_.clear(); }
             if (!res->ok) { SetStatus(res->error); statusMessageTimer = 6.0f; return; }
             if (gen != docGen_) { SetStatus("SAMPLE NOT SET: ANOTHER PROJECT IS OPEN NOW (KIT WRITTEN: " + res->target + ")"); return; }
             if (projDir != DirNameOf(projectPath)) { SetStatus("SAMPLE NOT SET: THE PROJECT WAS SAVED IN ANOTHER FOLDER MEANWHILE - ADD IT AGAIN"); statusMessageTimer = 6.0f; InvalidateFolderCaches(); return; }
-            if (!RequestIsNewest(key, tok) || kitOf() != prev) { SetStatus("SAMPLE NOT SET: THE KIT WAS CHANGED MEANWHILE (KIT WRITTEN: " + res->target + ")"); InvalidateFolderCaches(); return; }
+            // the kit may have become this very copy meanwhile (an earlier drop on another drum of the same kit): that is no change
+            if (!RequestIsNewest(key, tok) || (kitOf() != prev && kitOf() != res->target)) { SetStatus("SAMPLE NOT SET: THE KIT WAS CHANGED MEANWHILE (KIT WRITTEN: " + res->target + ")"); InvalidateFolderCaches(); return; }
             {
                 std::lock_guard<SceneMutex> lock(sequencer.PatternMutex());
                 Pattern& pt = project.patterns[static_cast<size_t>(std::clamp(scene, 0, kNumSlotsTotal - 1))];

@@ -2652,6 +2652,41 @@ int main(int argc, char** argv) {
                 check(ht && ht->frames() > 21800 && ht->frames() < 22100, "c4b e: after SAVE AS the hat still plays the dropped sample");
                 ud::SetRootsForTest("selftest_data/Documents", "selftest_data/Service");
             }
+            {   // review of #47 (nit 1): a copy of the kit in this folder that the project does not name (another project's, an older
+                // Untitled's) is not reused: the new copy gets a free name and starts from the factory kit
+                const std::string fdir = pdir + "/fresh";
+                fs::create_directories(fdir + "/samples/kits/electro", ec);
+                for (const auto& f : fs::directory_iterator(pdir + "/samples/kits/electro", ec)) fs::copy_file(f.path(), fdir + "/samples/kits/electro/" + f.path().filename().string(), ec);   // with the takes added above
+                AppState fa; fa.engine.Init(sr); fa.sequencer.Init(&fa.engine, &fa.project);
+                fa.projectPath = fdir + "/n.t8proj";
+                fa.project.kitFolder = "kits/electro"; fa.SyncSceneKits(true);
+                const int factoryHats = fa.SceneKitVariantCount(0, static_cast<int>(DrumSlot::ClosedHat));
+                fa.seqCursorTrack = 3;
+                check(fa.AssignSampleToSlot("selftest_tmp_drop.wav") && fa.CurrentPattern().kitFolder == "samples/kits/electro_2" && fa.CurrentPattern().tracks[3].defaultVariant == factoryHats
+                      && fa.SceneKitVariantCount(0, static_cast<int>(DrumSlot::ClosedHat)) == factoryHats + 1,
+                      "c4b e: a copy of the kit this project does not name is not reused");
+                fa.seqCursorTrack = 4;
+                check(fa.AssignSampleToSlot("selftest_tmp_drop.wav") && fa.CurrentPattern().kitFolder == "samples/kits/electro_2", "c4b e: the project's own copy is reused by its next drop");
+                // review of #47 (nit 4): a scene copied here and pasted into a project in another folder brings its kit along
+                fa.CopyPattern();
+                const std::string odir = pdir + "/elsewhere";
+                fs::create_directories(odir, ec);
+                fa.projectPath = odir + "/o.t8proj";
+                fa.project.currentPattern = 1;
+                check(fa.PastePattern() && fa.CurrentPattern().kitFolder == "samples/kits/electro_2" && fs::exists(odir + "/samples/kits/electro_2/chh.wav"),
+                      "c4b e: a scene pasted into a project in another folder brings its own kit along");
+                fs::create_directories(pdir + "/elsewhere2/samples/kits/electro_2", ec);
+                WriteWavPCM24(pdir + "/elsewhere2/samples/kits/electro_2/chh.wav", std::vector<float>(1000, 0.1f), 1, 48000);   // another kit of that name there
+                fa.CopyPattern();
+                fa.projectPath = pdir + "/elsewhere2/o.t8proj";
+                fa.project.currentPattern = 2;
+                fa.PrepareClipboardKits();   // what a paste command does before it takes the scene lock (review of #48)
+                check(fa.patternClipboard.kitFolder == "samples/kits/electro_2_2" && fs::exists(pdir + "/elsewhere2/samples/kits/electro_2_2/chh.wav"),
+                      "c4b e: the kit files are copied before the paste takes the scene lock");
+                fa.pasteRequest = {2, 0};
+                fa.RunPasteRequest();   // the track menu's paste, run by the shell outside the lock
+                check(fa.CurrentPattern().kitFolder == "samples/kits/electro_2_2" && fa.pasteRequest.kind == 0, "c4b e: ... under a free name when that folder has another kit of the name");
+            }
             da.seqCursorTrack = 6;
             check(!da.AssignSampleToSlot("selftest_tmp_drop.wav"), "drop: a synth track refuses a sample");
             fs::remove_all(pdir, ec); std::remove("selftest_tmp_drop.wav");
@@ -7345,6 +7380,17 @@ int main(int argc, char** argv) {
             for (const auto& e : fs::directory_iterator("kits")) if (!kitsBefore.count(e.path().filename().string())) made.push_back(e.path());
             for (const auto& m : made) fs::remove_all(m);
             a.InvalidateFolderCaches();
+        }
+        {   // review of #47 (nit 2): two quick drops on two drums of a factory kit both land, in ONE copy of the kit
+            a.LoadKitFolder("kits/electro"); finish();
+            const int snBefore = a.SceneKitVariantCount(a.project.currentPattern, 1), clBefore = a.SceneKitVariantCount(a.project.currentPattern, 2);
+            a.seqCursorTrack = 1; a.AssignSampleToSlot(dir + "/in.wav");
+            a.seqCursorTrack = 2; a.AssignSampleToSlot(dir + "/in.wav");   // the first is still being copied
+            finish();
+            const Pattern& pt = a.CurrentPattern();
+            check(pt.kitFolder == "samples/kits/electro" && !fs::exists(dir + "/samples/kits/electro_2") && pt.tracks[1].defaultVariant == snBefore && pt.tracks[2].defaultVariant == clBefore
+                  && a.SceneKitVariantCount(a.project.currentPattern, 1) == snBefore + 1 && a.SceneKitVariantCount(a.project.currentPattern, 2) == clBefore + 1,
+                  "c4b e: two quick drops on two drums of one kit both land in one project copy");
         }
         {   // a folder rescan that started before an invalidation is not swapped in
             a.RescanFoldersInBackground();
