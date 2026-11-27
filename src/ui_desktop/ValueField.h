@@ -27,6 +27,9 @@
 
 namespace t8::desktop {
 
+// C3 (review of #54): the PITCH fader's notch at 0 % stays as narrow as the old fader's (+-0.2 %), so +0.3 % can be set.
+inline constexpr float kPitchNotchPct = 0.2f;
+
 struct ValueSpec {
     float lo = 0.0f, hi = 1.0f;
     float step = 0.01f;         // value change per pixel of drag
@@ -45,6 +48,7 @@ struct ValueSpec {
     // Bar look (faders, pan): a track with a thumb instead of a text field; the number is drawn by the caller or typed.
     bool bar = false;
     bool fromCenter = false;    // bar: fills from the middle, snaps to the middle (pan)
+    float notch = -1.0f;        // fromCenter: the half-width of the snap to the middle, in value units (< 0 = 3 % of the range)
     float meter = -1.0f;        // bar: level meter along the bottom edge (0..1.3), < 0 = none
     ImU32 color = vis::kAccent; // bar: fill colour (the track's colour)
     float height = 0.0f;        // 0 = the frame height
@@ -73,7 +77,7 @@ struct Edit { ImGuiID id = 0; char buf[32] = {0}; bool focus = false; };
 inline Edit& E() { static Edit e; return e; }
 inline float Snap(float v, const ValueSpec& s) {
     v = std::clamp(v, s.lo, s.hi);
-    if (s.fromCenter) { const float mid = (s.lo + s.hi) * 0.5f; if (std::fabs(v - mid) < (s.hi - s.lo) * 0.03f) v = mid; }   // a notch at the middle
+    if (s.fromCenter) { const float mid = (s.lo + s.hi) * 0.5f; if (std::fabs(v - mid) < (s.notch >= 0.0f ? s.notch : (s.hi - s.lo) * 0.03f)) v = mid; }   // a notch at the middle
     return s.integer ? std::round(v) : v;
 }
 // The pure rules (no ImGui), shared with the self-test.

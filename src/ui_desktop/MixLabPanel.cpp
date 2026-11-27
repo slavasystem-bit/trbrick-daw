@@ -3,6 +3,7 @@
 #include "TrackStyle.h"
 #include "LiveWidgets.h"
 #include "InfoLine.h"
+#include "ValueField.h"
 #include "core/TrackEq.h"
 #include "imgui.h"
 #include <algorithm>
@@ -707,33 +708,29 @@ void MixLabPanel::DrawChannel(AppState& app, float w, float h) {
     }
 
     // level and pan
+    // C3 (UI-3): LEVEL and PAN are ValueField bars like every other fader: a drag moves from where the value is (a click does not
+    // jump), Shift = finer, Option+click = the default, double click = type, Esc during a drag puts it back.
     auto slider = [&](const char* id, float x, float y, float sw, float v, float lo, float hi, const char* label, const std::string& text, float def, const std::function<void(float)>& set) {
         dl->AddText(ImVec2(x, y + 1), vis::kTextDim, label);
         const float tx = x + 40.0f, tw = sw - 40.0f - 52.0f;
-        const float u = std::clamp((v - lo) / (hi - lo), 0.0f, 1.0f);
-        dl->AddRectFilled(ImVec2(tx, y + 7), ImVec2(tx + tw, y + 11), vis::kInset, 2.0f);
-        const float x0z = tx + tw * std::clamp((0.0f - lo) / (hi - lo), 0.0f, 1.0f);
-        if (lo < 0.0f) dl->AddRectFilled(ImVec2(std::min(x0z, tx + tw * u), y + 7), ImVec2(std::max(x0z, tx + tw * u), y + 11), col, 2.0f);
-        else dl->AddRectFilled(ImVec2(tx, y + 7), ImVec2(tx + tw * u, y + 11), col, 2.0f);
-        dl->AddCircleFilled(ImVec2(tx + tw * u, y + 9), 6.0f, vis::kText);
+        ImGui::SetCursorScreenPos(ImVec2(tx, y));
+        ValueSpec sp = BarSpec(lo, hi, def, tw);
+        sp.fromCenter = lo < 0.0f; sp.color = col; sp.height = 18.0f; sp.scale = 100.0f; sp.fmt = "%.0f";
+        float nv = v;
+        const ValueResult r = ValueField(id, &nv, sp, tw);
+        const bool hov = ImGui::IsItemHovered();
+        if (r.changed) set(std::clamp(nv, lo, hi));
+        if (r.finished) reanalyse_ = true;
         dl->AddText(ImVec2(tx + tw + 8.0f, y + 1), vis::kText, text.c_str());
-        ImGui::SetCursorScreenPos(ImVec2(tx - 6.0f, y));
-        ImGui::InvisibleButton(id, ImVec2(tw + 12.0f, 18.0f));
-        if (ImGui::IsItemActive()) {
-            const float k = ImGui::GetIO().KeyShift ? 0.25f : 1.0f; (void)k;
-            set(std::clamp(lo + (hi - lo) * std::clamp((ImGui::GetIO().MousePos.x - tx) / tw, 0.0f, 1.0f), lo, hi));
-        }
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) { set(def); reanalyse_ = true; }
-        if (ImGui::IsItemDeactivated()) reanalyse_ = true;
-        return ImGui::IsItemHovered();
+        return hov;
     };
     const float sy = wp.y + h - 58.0f, sw = (w - 28.0f) * 0.5f;
     char vb[24]; std::snprintf(vb, sizeof vb, "%.0f%%", static_cast<double>(tk.volume * 100.0f));
     if (slider("##lvl", wp.x + 10.0f, sy, sw, tk.volume, 0.0f, 1.0f, "LEVEL", vb, 0.8f, [&](float v) { EditStrip(app, chan_, [v](Track& t) { t.volume = std::round(v * 100.0f) / 100.0f; }); }))
-        Hint("%s level. Drag to change, double-click = 80%%. The picture follows when you let go.", MixTrackName(chan_));
+        Hint("%s level. Drag to change (Shift = finer), Option+click = 80%%, double click = type. The picture follows when you let go.", MixTrackName(chan_));
     char pb[24]; if (std::fabs(tk.pan) < 0.005f) std::snprintf(pb, sizeof pb, "C"); else std::snprintf(pb, sizeof pb, "%s %.0f", tk.pan < 0 ? "L" : "R", static_cast<double>(std::fabs(tk.pan) * 100.0f));
     if (slider("##pan", wp.x + 18.0f + sw, sy, sw, tk.pan, -1.0f, 1.0f, "PAN", pb, 0.0f, [&](float v) { EditStrip(app, chan_, [v](Track& t) { t.pan = std::fabs(v) < 0.04f ? 0.0f : std::round(v * 100.0f) / 100.0f; }); }))
-        Hint("%s pan. Drag to change, double-click = centre.", MixTrackName(chan_));
+        Hint("%s pan. Drag to change (Shift = finer), Option+click = centre, double click = type.", MixTrackName(chan_));
 
     // where this instrument is part of a fight
     std::string line = "Not part of any overlap.";

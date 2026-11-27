@@ -5665,6 +5665,29 @@ int main(int argc, char** argv) {
                   vfd::ParseTyped("2000 Hz", cut, &pos) && nearlyEqual(cut.toTyped(pos), 2000.0f, 2.0f),
                   "c2 ui: 800 typed into CUTOFF is 800 Hz, not 18 kHz (fromTyped)");
         }
+        {   // C3 part 1 (UI-2, UI-3): the instrument cells, PITCH and the MIX LAB faders follow the same gestures as every ValueField
+            auto slurp3 = [](const char* path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+            const std::string pc = slurp3("src/ui_desktop/ParamCell.h"), cx = slurp3("src/ui_desktop/ContextPanel.cpp"),
+                              hd = slurp3("src/ui_desktop/HeaderPanel.cpp"), ml = slurp3("src/ui_desktop/MixLabPanel.cpp");
+            check(pc.find("interaction::IsFine() ? interaction::kFineFactor") != std::string::npos && pc.find("interaction::IsReset()") != std::string::npos &&
+                  pc.find("HintGestures(") != std::string::npos, "c3: an instrument cell drags finer with Shift, resets with Option+click and names its gestures");
+            check(cx.find("if (r.reset) {   // C3 (UI-2)") != std::string::npos && cx.find("if (r.reset && paramIndex > 0)") != std::string::npos,
+                  "c3: Option+click puts the default back on mixer / kick / sample cells and on patch knobs");
+            check(hd.find("ValueField(\"##pitchFader\"") != std::string::npos && hd.find("MousePos.x - p0.x") == std::string::npos,
+                  "c3: the PITCH fader moves from where it is (no jump to the click)");
+            {   // review of #54: the PITCH notch at 0 is +-0.2 %, so small values can be set (typed, dragged)
+                for (float lim : {8.0f, 16.0f}) {
+                    t8::desktop::ValueSpec ps = t8::desktop::BarSpec(-lim, lim, 0.0f, 150.0f);
+                    ps.fromCenter = true; ps.notch = t8::desktop::kPitchNotchPct; ps.unit = " %";
+                    float tv = 0.0f;
+                    check(vfd::ParseTyped("0.3", ps, &tv) && nearlyEqual(tv, 0.3f, 0.001f) && vfd::ParseTyped("0.1", ps, &tv) && tv == 0.0f &&
+                          nearlyEqual(vfd::DragValue(0.0f, 40.0f, true, ps), 40.0f * ps.step * 0.1f, 0.001f),
+                          lim < 10.0f ? "c3: PITCH (+-8 %) takes 0.3 % typed and a fine drag, 0.1 % snaps to 0" : "c3: PITCH (+-16 %) takes 0.3 % typed and a fine drag, 0.1 % snaps to 0");
+                }
+            }
+            check(ml.find("ValueField(id, &nv, sp, tw)") != std::string::npos && ml.find("MousePos.x - tx") == std::string::npos,
+                  "c3: MIX LAB LEVEL / PAN move from where they are, Shift finer");
+        }
 
         AppState app;
         app.engine.Init(kSampleRate);

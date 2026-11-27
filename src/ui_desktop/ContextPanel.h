@@ -59,7 +59,7 @@ private:
     // cell helpers
     template <class Apply>
     void FloatCell(AppState& app, const char* id, const char* cap, float cur, float lo, float hi,
-                   float step, const char* text, Apply&& apply, bool dim = false);
+                   float step, const char* text, Apply&& apply, bool dim, float def);   // C3: `def` = what Option+click puts back
     int DiscreteCell(const char* id, const char* cap, const char* text, bool dim = false);
     void PatchCell(AppState& app, int ti, int paramIndex);
 
