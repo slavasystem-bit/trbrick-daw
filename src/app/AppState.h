@@ -4657,16 +4657,28 @@ struct AppState {
     // LIVE-5 (Mac measurement after #29): a copy of the whole project for DocHash / SaveSnapshot, without holding the scene lock for
     // the whole copy (with a big project that one hold reached about 3 ms, longer than a 128-frame buffer, and the sound dropped every
     // 2 s while the project was Edited). The head is copied under one short lock, then the scene slots kSlotsPerHold at a time, each
-    // under its own lock. The pieces fit together: only this (the screen) thread changes a project's structure, and it is busy here;
-    // the audio thread may flip a mute at the bar line or the played scene between two pieces, which the next check sees.
+    // under its own lock. Only this (the screen) thread changes a project's structure, and it is busy here. The audio thread does
+    // change one thing between pieces: a NEXT BAR switch (ApplyQueuedSwitches) writes mute / solo, and for linked scenes into every
+    // scene of the group, which may sit in two different pieces (review of #53). So the last hold copies the mute and solo of every
+    // live scene again: the copy then holds one moment's mutes for all scenes. (The played scene, which the audio thread may also
+    // move, is in the head and is not part of the file's meaning for DocHash.)
     static constexpr size_t kSlotsPerHold = 8;
+    void (*copyPieceHookForTest_)(AppState&) = nullptr;   // tests: called between two pieces, outside the lock
     void CopyProjectInPieces(Project& dst, const char* who) {
         { SceneLock lock(sequencer.PatternMutex(), who); static_cast<ProjectHead&>(dst) = project; }
         for (size_t i = 0; i < PatternBank::size(); i += kSlotsPerHold) {
+            if (copyPieceHookForTest_) copyPieceHookForTest_(*this);
             SceneLock lock(sequencer.PatternMutex(), who);
             const size_t end = std::min(i + kSlotsPerHold, PatternBank::size());
             for (size_t k = i; k < end; ++k) dst.patterns[k] = project.patterns[k];
         }
+        if (copyPieceHookForTest_) copyPieceHookForTest_(*this);
+        SceneLock lock(sequencer.PatternMutex(), who);
+        for (int sc = 0; sc < kNumLiveScenes; ++sc)
+            for (int t = 0; t < kNumTracks; ++t) {
+                dst.patterns[static_cast<size_t>(sc)].tracks[static_cast<size_t>(t)].mute = project.patterns[static_cast<size_t>(sc)].tracks[static_cast<size_t>(t)].mute;
+                dst.patterns[static_cast<size_t>(sc)].tracks[static_cast<size_t>(t)].solo = project.patterns[static_cast<size_t>(sc)].tracks[static_cast<size_t>(t)].solo;
+            }
     }
     bool SaveSnapshot(const std::string& path, bool keepHistory = true) {
         Project snap;

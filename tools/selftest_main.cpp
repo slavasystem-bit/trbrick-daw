@@ -7771,6 +7771,17 @@ int main(int argc, char** argv) {
         check(ProjectToString(snap) == ProjectToString(a.project) && snap.patterns[kNumPatterns].name == "last slot",
               "lock-5 pieces: the copy made piece by piece is the whole project (head, first and last slot)");
         check(!a.sequencer.PatternMutex().HeldByThisThread(), "lock-5 pieces: the lock is free after the copy");
+        {   // review of #53: a NEXT BAR mute on linked scenes 4 and 13 (two different pieces) lands while the copy is between them
+            a.project.sceneLink[3] = 1; a.project.sceneLink[12] = 1;
+            static int calls = 0; calls = 0;
+            a.copyPieceHookForTest_ = [](AppState& s) { if (++calls == 2) s.SetMuteScene(1, true, 3); };   // after the piece with scene 4
+            Project linked;
+            a.CopyProjectInPieces(linked, "TEST");
+            a.copyPieceHookForTest_ = nullptr;
+            check(a.project.patterns[12].tracks[1].mute && a.project.patterns[3].tracks[1].mute, "lock-5 pieces: (setup) the mute reached both linked scenes");
+            check(linked.patterns[3].tracks[1].mute && linked.patterns[12].tracks[1].mute,
+                  "lock-5 pieces: a bar-line mute between two pieces is in the copy for every linked scene (never half a group)");
+        }
         auto slurp = [](const std::string& path) { std::ifstream in(path, std::ios::binary); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
         const std::string st = slurp("src/app/AppState.h");
         check(st.find("snap = project") == std::string::npos && st.find("CopyProjectInPieces(snap, \"DocHash\")") != std::string::npos
