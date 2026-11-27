@@ -36,8 +36,9 @@ ImU32 RoleColor(SceneRole r) {
 std::string FillSummary(const FillRule& r) {
     if (r.when == FillWhen::Off) return "no fill";
     char b[96];
-    if (r.when == FillWhen::EveryBars) std::snprintf(b, sizeof b, "%s, last %d beat%s of every %d bars", FillKindName(r.kind), r.beats, r.beats == 1 ? "" : "s", r.everyBars);
-    else std::snprintf(b, sizeof b, "%s, last %d beat%s, %s", FillKindName(r.kind), r.beats, r.beats == 1 ? "" : "s", r.when == FillWhen::LastLoop ? "last pass" : "every pass");
+    const std::string len = FillLenLabel(r.beats);
+    if (r.when == FillWhen::EveryBars) std::snprintf(b, sizeof b, "%s, last %s of every %d bars", FillKindName(r.kind), len.c_str(), r.everyBars);
+    else std::snprintf(b, sizeof b, "%s, last %s, %s", FillKindName(r.kind), len.c_str(), r.when == FillWhen::LastLoop ? "last pass" : "every pass");
     return b;
 }
 
@@ -63,7 +64,7 @@ bool DrawFillRuleEditor(FillRule& r) {
     ImGui::TextUnformatted("LENGTH ");
     for (int b : kFillBeatChoices) {
         ImGui::SameLine(0, 4);
-        char lb[16]; std::snprintf(lb, sizeof lb, "%d BEAT%s##fb%d", b, b == 1 ? "" : "S", b);
+        char lb[24]; std::snprintf(lb, sizeof lb, "%s##fb%d", FillLenLabel(b, true).c_str(), b);
         if (ToggleButton(lb, r.beats == b, ImVec2(0, 0), ToggleTab())) { r.beats = static_cast<uint8_t>(b); ch = true; }
     }
     ImGui::TextUnformatted("TYPE   ");

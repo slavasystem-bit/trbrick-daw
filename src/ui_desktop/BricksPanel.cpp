@@ -440,7 +440,8 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
                 int sb = 1; for (int c : {1, 2, 4, 8, 16, 32, 64}) { sb = c; if (ppb * c >= 14.0f) break; }
                 for (int b = 0; b <= static_cast<int>(std::ceil(totalBars)); b += sb) dl->AddLine(ImVec2(X0 + b * ppb, yTop + yLane), ImVec2(X0 + b * ppb, yTop + yLane + laneH), IM_COL32(255, 255, 255, 12));
             }
-            auto snapChoice = [](double v, const int (&c)[4]) { int best = c[0]; for (int x : c) if (std::fabs(x - v) < std::fabs(best - v)) best = x; return best; };
+            auto snapChoice = [](double v, const auto& c) { int best = c[0]; for (int x : c) if (std::fabs(x - v) < std::fabs(best - v)) best = x; return best; };
+            auto snapFillBeats = [](double beats) { int best = kFillBeatChoices[0]; for (int x : kFillBeatChoices) if (std::fabs(FillBeatsOf(x) - beats) < std::fabs(FillBeatsOf(best) - beats)) best = x; return best; };
             static const int kTransBars[4] = {1, 2, 4, 8};
             static const char* kKindShort[kNumFillKinds] = {"BREAK", "HATS", "SNARE", "DROP OUT", "RANDOM", "SAMPLE"};
 
@@ -456,7 +457,7 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
                     const FillRule fr = cs.fillMode == FillMode::Off ? FillRule{} : (cs.fillMode == FillMode::Own ? cs.fill : pat.fill);
                     const double brickBars = barsOf[static_cast<size_t>(i)];
                     const double passBars = std::max(0.0625, static_cast<double>(ChainStepLoopSteps(pat, cs)) / (4.0 * ClampGrid(pat.stepsPerBeat)));
-                    const double fillBars = std::max(1, static_cast<int>(fr.beats)) / 4.0;
+                    const double fillBars = FillBeatsOf(fr.beats) / 4.0;
                     std::vector<std::pair<double, double>> blocks;   // (start bar inside the brick, length in bars)
                     const double shBars = fr.shiftBeats / 4.0;   // v44.25: the block sits this much earlier than the end of the pass / block
                     if (fr.when == FillWhen::LastLoop) { const double l = std::min(fillBars, passBars); blocks.push_back({brickBars - l - std::min(shBars, passBars - l), l}); }
@@ -531,18 +532,18 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
                         drag_ = Drag::None;
                     }
                     if (ImGui::IsItemActive() && drag_ == Drag::FillLen && dragBrick_ == i) {
-                        const int nb = snapChoice((dragRightX_ - mouse.x) / ppb * 4.0, kFillBeatChoices);
+                        const int nb = snapFillBeats((dragRightX_ - mouse.x) / ppb * 4.0);
                         FillRule nr = dragFill_; nr.beats = static_cast<uint8_t>(nb);
                         if (cs.fillMode != FillMode::Own || !(cs.fill == nr)) { cs.fillMode = FillMode::Own; cs.fill = NormalizeFill(nr); app.sequencer.RefreshArrangement(); }
-                        ValueTip("%d beat%s (%g bar%s)", nb, nb == 1 ? "" : "s", nb / 4.0, nb == 4 ? "" : "s");
+                        ValueTip("%s (%g bar%s)", FillLenLabel(nb).c_str(), FillBeatsOf(nb) / 4.0, nb == 4 ? "" : "s");
                     }
                     if (ImGui::IsItemDeactivated() && drag_ == Drag::FillLen) drag_ = Drag::None;
                     if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) { selectBrick(i); fxMenuBrick_ = i; fxMenuKind_ = 0; fxMenuOpen_ = true; }
                     if (onEdge) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
                     else if (hovBlock >= 0 || drag_ == Drag::FillMove) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                     if (hov && drag_ == Drag::None) {
-                        if (hovBlock >= 0) Hint("FILL on brick %d: %s, %d beat%s, %s\\n%s\\nDrag the block: move it (inside the brick or onto another brick).  Click: remove it.  Drag the left edge: 1 / 2 / 4 / 8 beats.  Right-click: kind, break, when, length, none.",
-                                                             i + 1, FillKindName(fr.kind), fr.beats, fr.beats == 1 ? "" : "s", FillWhenName(fr.when),
+                        if (hovBlock >= 0) Hint("FILL on brick %d: %s, %s, %s\\n%s\\nDrag the block: move it (inside the brick or onto another brick).  Click: remove it.  Drag the left edge: 1/2 / 1 / 2 / 4 / 8 beats.  Right-click: kind, break, when, length, none.",
+                                                             i + 1, FillKindName(fr.kind), FillLenLabel(fr.beats).c_str(), FillWhenName(fr.when),
                                                              own ? "This brick has its own fill." : (cs.fillMode == FillMode::Scene ? "Taken from the scene's fill (dragging gives the brick its own)." : ""));
                         else if (fr.when == FillWhen::Off) Hint("Click: add a fill at the end of brick %d (2 beats).  Right-click: more.", i + 1);
                     }
@@ -981,7 +982,7 @@ void BricksPanel::Draw(AppState& app, ChainPanel& /*chain*/, bool showDetails) {
                         for (int b : kFillBarChoices) { char lb[40]; std::snprintf(lb, sizeof lb, "EVERY %d BARS", b); if (ImGui::MenuItem(lb, nullptr, cs.fillMode == FillMode::Own && cs.fill.when == FillWhen::EveryBars && cs.fill.everyBars == b)) { nr.when = FillWhen::EveryBars; nr.everyBars = static_cast<uint8_t>(b); changed = true; } }
                         ImGui::EndMenu();
                     }
-                    if (ImGui::BeginMenu("Length")) { for (int b : kFillBeatChoices) { char lb[24]; std::snprintf(lb, sizeof lb, "%d beat%s", b, b == 1 ? "" : "s"); if (ImGui::MenuItem(lb, nullptr, cs.fillMode == FillMode::Own && cs.fill.beats == b)) { nr.beats = static_cast<uint8_t>(b); changed = true; } } ImGui::EndMenu(); }
+                    if (ImGui::BeginMenu("Length")) { for (int b : kFillBeatChoices) { const std::string lb = FillLenLabel(b); if (ImGui::MenuItem(lb.c_str(), nullptr, cs.fillMode == FillMode::Own && cs.fill.beats == b)) { nr.beats = static_cast<uint8_t>(b); changed = true; } } ImGui::EndMenu(); }
                     if (changed) { app.PushSoundUndo(); cs.fillMode = FillMode::Own; cs.fill = NormalizeFill(nr); app.sequencer.RefreshArrangement(); }
                     ImGui::Separator();
                     int fl = cs.levels.fillDb;
@@ -1476,13 +1477,13 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
             }
             if (ImGui::IsItemHovered()) Hint("WHEN: on the last loop of the brick, on every loop, or every few bars.");
             ImGui::SameLine(0, 4);
-            char ll[16]; std::snprintf(ll, sizeof ll, "%d BEAT%s", nr.beats, nr.beats == 1 ? "" : "S");
+            const std::string ll = FillLenLabel(nr.beats, true);
             ImGui::SetNextItemWidth(80);
-            if (ChoiceBegin("##flen", ll)) {
-                for (int b : kFillBeatChoices) { char lb[16]; std::snprintf(lb, sizeof lb, "%d BEAT%s", b, b == 1 ? "" : "S"); if (ImGui::Selectable(lb, nr.beats == b)) { nr.beats = static_cast<uint8_t>(b); ch = true; } }
+            if (ChoiceBegin("##flen", ll.c_str())) {
+                for (int b : kFillBeatChoices) { const std::string lb = FillLenLabel(b, true); if (ImGui::Selectable(lb.c_str(), nr.beats == b)) { nr.beats = static_cast<uint8_t>(b); ch = true; } }
                 ChoiceEnd();
             }
-            if (ImGui::IsItemHovered()) Hint("LENGTH: how many beats at the end the fill takes.");
+            if (ImGui::IsItemHovered()) Hint("LENGTH: how many beats at the end the fill takes (1/2 BEAT = a quick hit just before the next brick).");
             if (ch) { app.PushSoundUndo(); cs.fill = NormalizeFill(nr); refresh(); }
         }
         ImGui::SameLine(0, 10);
@@ -1498,7 +1499,7 @@ void BricksPanel::DrawInspector(AppState& app, ChainPanel& chain) {
             const FillRule& fr = cs.fillMode == FillMode::Own ? cs.fill : pat.fill;
             if (hasFill) {
                 const float lenBeats = std::max(1.0f, static_cast<float>(ChainStepBars(pat, cs)) * 4.0f);
-                const float w = std::clamp(static_cast<float>(fr.beats) / lenBeats, 0.06f, 1.0f) * (b.x - a.x - 4.0f);
+                const float w = std::clamp(static_cast<float>(FillBeatsOf(fr.beats)) / lenBeats, 0.06f, 1.0f) * (b.x - a.x - 4.0f);
                 dl->AddRectFilled(ImVec2(b.x - 2.0f - w, a.y + 3.0f), ImVec2(b.x - 2.0f, b.y - 3.0f), WithAlpha(colors::kFill, 120), 2.0f);
                 dl->AddLine(ImVec2(b.x - 2.0f - w, a.y + 3.0f), ImVec2(b.x - 2.0f - w, b.y - 3.0f), colors::kFill, 2.0f);
             }

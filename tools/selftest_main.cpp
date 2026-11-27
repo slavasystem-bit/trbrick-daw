@@ -3176,6 +3176,18 @@ int main(int argc, char** argv) {
                 fr.beats = 2;
                 check(act(fr, 3, 6, 12, 0, 1, 6).active && act(fr, 3, 5, 12, 0, 1, 5).active == false, "fill v44.5: on the triplet grid a beat is 3 steps");
                 check(!EvalFill(FillRule{}, 4, 15, 16, 0, 1, 15).active, "fill v44.5: no rule, no fill");
+                {   // C4b: HALF A BEAT
+                    FillRule h; h.when = FillWhen::EveryLoop; h.beats = static_cast<uint8_t>(kFillHalfBeat);
+                    check(act(h, 4, 14, 16, 0, 1, 14).active && act(h, 4, 14, 16, 0, 1, 14).total == 2 && !act(h, 4, 13, 16, 0, 1, 13).active,
+                          "fill c4b: 1/2 BEAT = the last 2 steps on the 1/16 grid");
+                    check(act(h, 8, 31, 32, 0, 1, 31).total == 4 && act(h, 3, 11, 12, 0, 1, 11).total == 1 && act(h, 1, 3, 4, 0, 1, 3).total == 1,
+                          "fill c4b: half a beat follows the grid (1/32 = 4 steps, triplets = 1 step, never 0)");
+                    check(NormalizeFill(h).beats == kFillHalfBeat && FillLenLabel(kFillHalfBeat) == "1/2 beat" && FillLenLabel(4, true) == "4 BEATS" && FillBeatsOf(kFillHalfBeat) == 0.5,
+                          "fill c4b: 1/2 BEAT survives the clean-up and has its own words");
+                    h.when = FillWhen::EveryBars; h.everyBars = 2; h.shiftBeats = 1;
+                    int on = 0; for (int t = 0; t < 32; ++t) if (act(h, 4, t, 32, 0, 1, t).active) { ++on; check(t == 26 || t == 27, "fill c4b: half a beat moved one beat earlier sits at steps 26-27"); }
+                    check(on == 2, "fill c4b: half a beat every 2 bars, moved a beat earlier, sounds 2 steps");
+                }
                 // --- persistence
                 Project pa;
                 pa.songChainLength = 3;
@@ -3195,6 +3207,15 @@ int main(int argc, char** argv) {
                       "arrangement v44.5: plain steps stay plain (an old project has no overlays)");
                 check(pb.patterns[1].role == SceneRole::Drop && pb.patterns[1].fill == FillRule{FillWhen::LastLoop, FillKind::SnareBuild, 1, 4, 0} && pb.patterns[0].role == SceneRole::None && pb.patterns[0].fill.when == FillWhen::Off,
                       "arrangement v44.5: the role and the fill of a scene survive a save / load");
+                {   // C4b: a half-beat fill survives a save / load (scene and brick), and a file from before stays as it was
+                    Project ph = pa;
+                    ph.songChain[1].fill.beats = static_cast<uint8_t>(kFillHalfBeat);
+                    ph.patterns[1].fill.beats = static_cast<uint8_t>(kFillHalfBeat);
+                    check(SaveProject(ph, "selftest_arr.t8proj"), "fill c4b: save a 1/2 BEAT fill");
+                    Project pr; check(LoadProject(pr, "selftest_arr.t8proj"), "fill c4b: load it");
+                    check(pr.songChain[1].fill.beats == kFillHalfBeat && pr.patterns[static_cast<size_t>(pr.songChain[1].patternIndex)].fill.beats != 99 && pr.patterns[1].fill.beats == kFillHalfBeat,
+                          "fill c4b: 1/2 BEAT on a brick and on a scene survives a save / load");
+                }
                 std::remove("selftest_arr.t8proj"); std::remove("selftest_arr.t8proj.bak");
                 // --- energy
                 Pattern ep;

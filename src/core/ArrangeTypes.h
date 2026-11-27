@@ -38,13 +38,22 @@ constexpr int kNumFillKinds = 6;
 inline const char* FillKindName(FillKind k) {
     switch (k) { case FillKind::Break: return "BREAK"; case FillKind::HatRoll: return "HAT ROLL"; case FillKind::SnareBuild: return "SNARE BUILD"; case FillKind::DropOut: return "DROP OUT"; case FillKind::Sample: return "SAMPLE"; default: return "RANDOM"; }
 }
-constexpr int kFillBeatChoices[4] = {1, 2, 4, 8};         // length of the fill in beats
+// Length of the fill in beats. 0 = HALF A BEAT (C4b: promised with FILL: SAMPLE); an older program reads 0 as 1 beat.
+constexpr int kFillHalfBeat = 0;
+constexpr int kFillBeatChoices[5] = {kFillHalfBeat, 1, 2, 4, 8};
+inline double FillBeatsOf(int beats) { return beats == kFillHalfBeat ? 0.5 : static_cast<double>(beats); }
+inline std::string FillLenLabel(int beats, bool upper = false) {   // "1/2 beat", "1 beat", "4 beats"
+    if (beats == kFillHalfBeat) return upper ? "1/2 BEAT" : "1/2 beat";
+    return std::to_string(beats) + (upper ? (beats == 1 ? " BEAT" : " BEATS") : (beats == 1 ? " beat" : " beats"));
+}
+// Steps the fill lasts on this grid. Half a beat is at least one step (on an odd grid it is rounded down).
+inline int FillStepsOf(int beats, int stepsPerBeat) { stepsPerBeat = std::max(1, stepsPerBeat); return beats == kFillHalfBeat ? std::max(1, stepsPerBeat / 2) : std::max(1, beats) * stepsPerBeat; }
 constexpr int kFillBarChoices[4] = {2, 4, 8, 16};         // N of EVERY N BARS
 
 struct FillRule {
     FillWhen when = FillWhen::Off;
     FillKind kind = FillKind::Break;
-    uint8_t beats = 2;        // 1, 2, 4 or 8
+    uint8_t beats = 2;        // 1, 2, 4 or 8; 0 = half a beat (kFillHalfBeat)
     uint8_t everyBars = 4;    // 2, 4, 8 or 16 (EveryBars only)
     uint8_t breakIndex = 0;   // 0 = a random break each time, otherwise 1 + index into the drum break library (Break kind)
     uint8_t shiftBeats = 0;   // v44.25: the fill is moved this many beats EARLIER than the end of the pass / of the N-bar block (drag on the lane)
@@ -63,8 +72,8 @@ struct FillRule {
 inline FillRule NormalizeFill(FillRule r) {
     if (static_cast<int>(r.when) >= kNumFillWhen) r.when = FillWhen::Off;
     if (static_cast<int>(r.kind) >= kNumFillKinds) r.kind = FillKind::Break;
-    auto snap = [](int v, const int (&c)[4]) { int best = c[0]; for (int x : c) if (std::abs(x - v) < std::abs(best - v)) best = x; return best; };
-    r.beats = static_cast<uint8_t>(snap(r.beats, kFillBeatChoices));
+    auto snap = [](int v, const auto& c) { int best = c[0]; for (int x : c) if (std::abs(x - v) < std::abs(best - v)) best = x; return best; };
+    r.beats = static_cast<uint8_t>(snap(r.beats, kFillBeatChoices));   // 0 stays HALF A BEAT
     r.everyBars = static_cast<uint8_t>(snap(r.everyBars, kFillBarChoices));
     r.shiftBeats = std::min<uint8_t>(r.shiftBeats, 64);
     r.sample[FillRule::kSampleMax - 1] = 0;
@@ -93,7 +102,7 @@ inline FillState EvalFill(const FillRule& r, int stepsPerBeat, int loopTick, int
     if (r.when == FillWhen::Off) return fs;
     stepsPerBeat = std::max(1, stepsPerBeat);
     loopLen = std::max(1, loopLen);
-    int total = std::max(1, static_cast<int>(r.beats)) * stepsPerBeat;
+    int total = FillStepsOf(r.beats, stepsPerBeat);
     switch (r.when) {
     case FillWhen::LastLoop:
         if (loopsTotal > 0 && loopIndex != loopsTotal - 1) return fs;
