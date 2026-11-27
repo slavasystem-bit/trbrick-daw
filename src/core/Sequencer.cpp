@@ -276,6 +276,7 @@ void Sequencer::FireTick(int tick) {
         if (tt.type == TrackType::Chord) {
             int cc = st.chordSize;
             if (chordLiveSlot_ >= 0 && chordLiveCount_ > 0) cc = chordLiveCount_;
+            if (!p.chordPlay.IsDefault()) cc = ChordPlayIsHeldStack(p.chordPlay) ? std::min(kMaxChordVoices, cc * std::clamp<int>(p.chordPlay.octaves, 1, 3)) : 0;   // C2: performed chords never tie
             if (cc > 0 && cc == chordHeldCount_ && st.ratchet <= 1) chordTie = true;
         } else if (tt.type != TrackType::Drum && st.ratchet <= 1) {
             if (tt.slotIndex >= 0 && tt.slotIndex < kNumSynthTracks) synthTie[tt.slotIndex] = true;
@@ -540,7 +541,19 @@ void Sequencer::FireTick(int tick) {
             if (cCount == 0) continue;
             const ChordPlay& cpl = p.chordPlay;
             perfDue = false;   // a new chord: the one being performed stops here
-            if (!cpl.IsDefault()) {
+            if (!cpl.IsDefault() && ChordPlayIsHeldStack(cpl)) {
+                // C2 (review of PR 46): STACK at gate 100 % with OCTAVES / SMOOTH VOICES is still one held chord: it goes the plain way with
+                // the voiced notes, so a pad that spans the loop or a SLIDE chord ties instead of re-attacking, and ratchets still work
+                ChordPlay one = cpl; one.octaves = 1;
+                int8_t base[kMaxChordVoices], voiced[kMaxChordVoices];
+                const int baseN = ChordPerfVoice(cNotes.data(), cCount, one, perfPrev_.data(), perfPrevCount_, base);
+                ChordPlay dbl = cpl; dbl.smooth = false;
+                const int vn = ChordPerfVoice(base, baseN, dbl, nullptr, 0, voiced);
+                perfPrevCount_ = baseN;
+                for (int k = 0; k < baseN; ++k) perfPrev_[static_cast<size_t>(k)] = base[k];
+                for (int k = 0; k < kMaxChordVoices; ++k) cNotes[static_cast<size_t>(k)] = k < vn ? voiced[k] : 60;
+                cCount = vn;
+            } else if (!cpl.IsDefault()) {
                 // C2: the PLAY layer performs the chord over its length (ratchets are not used: RHYTHM is the way to re-strike)
                 if (chordNoteOffScheduled_ || chordHeldCount_ > 0 || perfOn_) PerfStop(off);
                 chordNoteOffScheduled_ = false;

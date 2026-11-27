@@ -50,6 +50,9 @@ inline void PerfSortSmall(T* a, int n) {
     }
 }
 
+// STACK at gate 100 %: one held chord, played the plain way (it can tie across a loop restart and ratchet), only the notes are voiced.
+inline bool ChordPlayIsHeldStack(const ChordPlay& p) { return p.mode == static_cast<uint8_t>(ChordPlayMode::Stack) && p.gate >= 100; }
+
 inline double ChordPerfRateSteps(const ChordPlay& p, int stepsPerBeat) {
     return std::max(0.25, ChordPlayRateBeats(p.rate) * static_cast<double>(std::max(1, stepsPerBeat)));
 }

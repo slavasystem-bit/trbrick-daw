@@ -2299,6 +2299,14 @@ int main(int argc, char** argv) {
         auto ev2 = run(0.5);
         std::vector<double> strum; for (const auto& e : ev2) if (e.isChord) strum.push_back(e.timeSeconds);
         check(strum.size() == 3 && std::fabs(strum[1] - 0.0625) < 0.01 && std::fabs(strum[2] - 0.125) < 0.01, "c2 play: STRUM 1/16 rolls the three notes in over 1/8 s");
+        sc.chordPlay = ChordPlay{}; sc.chordPlay.octaves = 2; sc.chordPlay.smooth = true;   // review of PR 46: a held STACK with OCTAVES / SMOOTH
+        auto ev3 = run(4.5);   // two loop restarts of a chord that spans the loop
+        int held = 0; int heldN = 0; for (const auto& e : ev3) if (e.isChord) { ++held; heldN = e.noteCount; }
+        sc.chordPlay = ChordPlay{};
+        auto ev4 = run(4.5);
+        int plain = 0; for (const auto& e : ev4) if (e.isChord) ++plain;
+        check(held == plain && held == 3 && heldN == 6,
+              "c2 play: STACK at gate 100 % with OCTAVES 2 goes the plain way: one 6-note chord per loop, struck as the plain chord is (a tie over the restart)");
         ps.Stop();
         // saved with the scene, only when changed
         sc.chordPlay = ChordPlay{3, 2, 60, 2, 1, true};
@@ -5850,7 +5858,7 @@ int main(int argc, char** argv) {
                   lab.find("labMark_ = app.UndoMark();") != std::string::npos,
                   "c2 ui: UNDO ALL goes back to the marker taken at open, under the scene lock");
             check(lab.find("void ChordLabPanel::DrawPlay") != std::string::npos && lab.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB PLAY\");\n        app.PushUndo();") != std::string::npos &&
-                  lab.find("ChordPerfEvents(c, 0.0, c.span") != std::string::npos,
+                  lab.find("ChordPerfEvents(c, t, t + 1.0") != std::string::npos,
                   "c2 ui: PLAY edits the scene's ChordPlay as one undo step under the lock, and draws the same events the sequencer plays");
         }
         // melody: bass A A F F A F (on the beat) + a D passing note

@@ -625,11 +625,12 @@ void ChordLabPanel::DrawPlay(AppState& app, ImDrawList* dl, ImVec2 a, float w, f
     double onAt[kMaxChordVoices]; int onNote[kMaxChordVoices];
     for (int v = 0; v < kMaxChordVoices; ++v) { onAt[v] = -1.0; onNote[v] = 0; }
     auto close = [&](int v, double t) { if (onAt[v] >= 0.0) { bars.push_back({onAt[v], t, onNote[v]}); onAt[v] = -1.0; } };
-    ChordPerfEvents(c, 0.0, c.span + 0.001, [&](const ChordPerfEvent& e) {
-        if (e.on) { close(e.voice, e.at); onAt[static_cast<size_t>(e.voice)] = e.at; onNote[static_cast<size_t>(e.voice)] = e.note; }
-        else if (e.voice < 0) { for (int v = 0; v < kMaxChordVoices; ++v) close(v, e.at); }
-        else close(e.voice, e.at);
-    });
+    for (int t = 0; t <= static_cast<int>(c.span); ++t)   // one step at a time, as the sequencer asks (a fast ARP has more events than one call holds)
+        ChordPerfEvents(c, t, t + 1.0, [&](const ChordPerfEvent& e) {
+            if (e.on) { close(e.voice, e.at); onAt[static_cast<size_t>(e.voice)] = e.at; onNote[static_cast<size_t>(e.voice)] = e.note; }
+            else if (e.voice < 0) { for (int v = 0; v < kMaxChordVoices; ++v) close(v, e.at); }
+            else close(e.voice, e.at);
+        });
     for (int v = 0; v < kMaxChordVoices; ++v) close(v, c.span);
     if (bars.empty()) return;
     int lo = 127, hi = 0;
