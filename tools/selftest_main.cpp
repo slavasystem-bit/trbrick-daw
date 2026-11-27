@@ -7724,9 +7724,12 @@ int main(int argc, char** argv) {
         std::thread ui([&] { std::lock_guard<SceneMutex> lk(a.sequencer.PatternMutex()); held = true; while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1)); });
         while (!held) std::this_thread::yield();
         const auto t0 = std::chrono::steady_clock::now();
+        // The screen thread keeps the lock until `release`, which is set only after this returns: returning at all proves the
+        // callback does not wait for the screen. The wall-time bound is loose because a shared CI machine can deschedule the
+        // spinning thread for tens of ms (macOS runner: 32 ms once); `waited` is the limit the code itself checks.
         const bool got = a.sequencer.LockForAudio(5000, waited);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        check(!got && waited >= 5000 && ms < 30.0, "lock-5: a busy lock is given up after the limit (" + std::to_string(ms) + " ms), the callback plays silence instead of waiting");
+        check(!got && waited >= 5000 && ms < 200.0, "lock-5: a busy lock is given up after the limit (" + std::to_string(ms) + " ms), the callback plays silence instead of waiting");
         release = true; ui.join();
         check(a.sequencer.LockForAudio(5000, waited), "lock-5: once the screen lets go, the next buffer plays normally");
         a.sequencer.UnlockForAudio();
