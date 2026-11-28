@@ -17,6 +17,8 @@ private:
     void DrawCurve(AppState& app, const std::array<PumpSettings, kNumPumps>& np, float w, float h);
     void DrawPresets(AppState& app, std::array<PumpSettings, kNumPumps>& np, float w);
     int shownExtra_ = 0;   // pumps revealed with + ADD PUMP that are still empty
+    std::array<bool, kNumPumps> abOn_{};   // ALL OFF (A/B): which pumps were on before, so a second press puts them back
+    bool abOff_ = false;
     int sel_ = -1;         // the instrument shown on the right (-1 = the first one any pump reaches)
 };
 

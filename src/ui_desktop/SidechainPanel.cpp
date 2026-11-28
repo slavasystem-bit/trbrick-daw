@@ -97,7 +97,19 @@ void SidechainPanel::Draw(AppState& app, float width, float height) {
     const float colW = std::min(240.0f, (leftW - nameW - 30.0f) / static_cast<float>(kNumPumps));
 
     ImGui::BeginChild("ScLeft", ImVec2(leftW, height), ImGuiChildFlags_Borders);
+    ImGui::AlignTextToFramePadding();
     ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kPumpAmber), "SIDECHAIN - one hit turns other instruments down for a moment");
+    {   // ALL OFF (A/B): hear the mix without any pump, press again to get the same pumps back
+        bool anyOn = false;
+        for (const auto& p : np) anyOn = anyOn || p.on;
+        if (abOff_ && anyOn) abOff_ = false;   // a pump was switched on by hand meanwhile: that is the new state
+        ImGui::SameLine(leftW - 150.0f);
+        if (ToggleButton(abOff_ ? "ALL BACK ON (B)" : "ALL OFF (A/B)", abOff_, ImVec2(130, 0), ToggleRed()) && (anyOn || abOff_)) {
+            if (!abOff_) { for (int p = 0; p < kNumPumps; ++p) { abOn_[static_cast<size_t>(p)] = np[static_cast<size_t>(p)].on; np[static_cast<size_t>(p)].on = false; } abOff_ = true; }
+            else { for (int p = 0; p < kNumPumps; ++p) np[static_cast<size_t>(p)].on = abOn_[static_cast<size_t>(p)]; abOff_ = false; }
+        }
+        if (ImGui::IsItemHovered()) Hint(abOff_ ? "ALL BACK ON: the pumps that were on come back (B = with the pumps)." : "ALL OFF: switch every pump off to hear the mix without them (A); press again to get them back.");
+    }
     ImGui::Dummy(ImVec2(0, 4));
     ImGui::Dummy(ImVec2(nameW - 8.0f, kHeadH));
     for (int p = 0; p < shown; ++p) {
