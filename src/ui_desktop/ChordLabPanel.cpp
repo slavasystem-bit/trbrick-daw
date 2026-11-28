@@ -51,7 +51,10 @@ Track& ChordLabPanel::JamTrack(AppState& app) { return app.StepTrack(app.project
 
 // Every change goes through here first. Bank on: an ordinary undo step. Bank off: the draft starts (the scene's chords are copied into a
 // free slot and the bank goes on) as ONE undo step together with the change that follows. v44.44: opening the panel changes nothing.
+// The undo step (and the draft) change the project, so they are taken under the scene lock here; the callers that already hold it
+// (Place, Resize, ...) take it again (the lock is recursive). The length handle and the length menu call this without it.
 void ChordLabPanel::BeginEdit(AppState& app) {
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB EDIT");
     if (abBefore_) ListenAB(app, false);   // C2: a change always goes into the draft
     if (app.project.chordBankOn) app.PushUndo(); else app.StartChordDraft();
     jam_ = std::clamp(app.project.chordSceneEdit, 0, kNumChordScenes - 1);
