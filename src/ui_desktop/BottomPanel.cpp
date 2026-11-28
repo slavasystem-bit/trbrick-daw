@@ -50,11 +50,13 @@ const char* BeatCategory(const std::string& n) {
 } // namespace
 
 void BottomPanel::Draw(AppState& app) {
-    SceneLock lock(app.sequencer.PatternMutex(), "BROWSERS");
     ImGui::PushID("BottomPanel");
-    DrawRandomKit(app);
-    VSep();
-    DrawLive(app);
+    {   // LIVE-5: own name, so the XRUN hint tells these rows from the browser windows
+        SceneLock lock(app.sequencer.PatternMutex(), "RANDOM / LIVE ROWS");
+        DrawRandomKit(app);
+        VSep();
+        DrawLive(app);
+    }
     DrawBrowsers(app);
     ImGui::PopID();
 }
@@ -62,6 +64,10 @@ void BottomPanel::Draw(AppState& app) {
 // v44.26: the kit browser (and the audition) belong to every screen that has a KIT picker, not only to LIVE: the SOUND view of a drum
 // on TRACK asks for it with app.kitBrowserRequest too. Called once per frame by whichever screen is shown.
 void BottomPanel::DrawBrowsers(AppState& app) {
+    // LIVE-5 (Mac measurement after #53: the screen held the sound 39 ms, named BROWSERS): the SAMPLES list is built here, before
+    // the scene lock. Building it walks the whole library (thousands of names, genre / tag guesses, sorting) and lists samples/ on
+    // disk; it reads only this thread's caches and names in the project, which only this thread changes.
+    sampleBrowser_.Prepare(app);
     SceneLock lock(app.sequencer.PatternMutex(), "BROWSERS");
     ImGui::PushID("BottomPanelBrowsers");
     if (app.kitBrowserRequest) { app.kitBrowserRequest = false; OpenKitBrowser(app); }

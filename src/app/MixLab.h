@@ -55,10 +55,10 @@ public:
     enum class Phase { Idle, Running, Ready };
 
     // The fields a fix can touch, so UNDO ALL / A-B put back exactly these and nothing else of the track.
-    struct Snap {
-        float volume = 0.8f, pan = 0.0f, hpf = 20.0f, slope = 0.0f, lowDb = 0.0f, lowHz = 120.0f, midDb = 0.0f, midHz = 1000.0f, midQ = 1.0f, highDb = 0.0f, highHz = 6000.0f;
-        static Snap Of(const Track& t) { Snap s; s.volume = t.volume; s.pan = t.pan; s.hpf = t.eqHpfHz; s.slope = t.eqHpfSlope; s.lowDb = t.eqLowDb; s.lowHz = t.eqLowHz; s.midDb = t.eqMidDb; s.midHz = t.eqMidHz; s.midQ = t.eqMidQ; s.highDb = t.eqHighDb; s.highHz = t.eqHighHz; return s; }
-        void To(Track& t) const { t.volume = volume; t.pan = pan; t.eqHpfHz = hpf; t.eqHpfSlope = slope; t.eqLowDb = lowDb; t.eqLowHz = lowHz; t.eqMidDb = midDb; t.eqMidHz = midHz; t.eqMidQ = midQ; t.eqHighDb = highDb; t.eqHighHz = highHz; }
+    struct Snap : ChannelMix {
+        static constexpr uint8_t kParts = kChLevel | kChPan | kChEq;   // C3 part 2: level, pan and the channel EQ
+        static Snap Of(const Track& t) { Snap s; CopyChannel(s, t, kParts); return s; }
+        void To(Track& t) const { CopyChannel(t, *this, kParts); }
     };
     struct Tried { int track; Snap before, after; int spot; };
 

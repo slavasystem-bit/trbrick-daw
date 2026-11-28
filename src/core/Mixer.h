@@ -6,6 +6,7 @@
 #include "Effects.h"
 #include "TrackEq.h"
 #include "Stereo.h"
+#include "ChannelMix.h"
 #include <array>
 #include <atomic>
 #include <algorithm>
@@ -15,40 +16,19 @@ namespace t8 {
 
 class Mixer {
 public:
-    struct TrackState {
-        float volume = 0.8f;
-        float pan = 0.0f;
+    // The channel values (volume, pan, sends, insert FX, autopan, stereo, EQ) come from ChannelMix -- the same struct a
+    // scene's Track inherits, so SyncFromPattern copies them in one assignment (C3 part 2). Here: mute / solo and the
+    // audio-thread-only DSP state.
+    struct TrackState : ChannelMix {
         bool mute = false;
         bool solo = false;
-        float delaySend = 0.0f;  // 0..1, see Track::delaySend
-        float reverbSend = 0.0f; // 0..1, see Track::reverbSend
-        // Per-track insert FX knobs (mirrored from Track::insert* the same
-        // way delaySend/reverbSend above mirror Track::delaySend/
-        // reverbSend), plus the DSP instance itself -- see TrackInsertFx in
-        // Effects.h. Not applied by MixTrack() below; AudioEngine::Render
-        // calls insertFx.Process() on the raw dry buffer before MixTrack
-        // so it's applied pre-fader.
-        float insertDrive  = 0.0f;
-        float insertEqTilt = 0.0f;
-        float insertChorus = 0.0f;
+        // The DSP instances of the insert FX (TrackInsertFx in Effects.h; AudioEngine::Render runs it on the raw dry buffer,
+        // pre-fader), of the channel EQ (applied before the insert FX) and of the stereo stage.
         TrackInsertFx insertFx;
-        // Channel EQ (Track::eq* in Types.h) + its DSP state; applied before the insert FX.
-        float eqHpfHz = 20.0f, eqHpfSlope = 0.0f, eqLowDb = 0.0f, eqLowHz = 120.0f;
-        float eqMidDb = 0.0f, eqMidHz = 1000.0f, eqMidQ = 1.0f, eqHighDb = 0.0f, eqHighHz = 6000.0f;
         TrackEq eqDsp;
-        // Autopan (see Track::autopanRate/autopanDepth in Types.h) --
-        // mirrored the same way as insertDrive/insertEqTilt/insertChorus
-        // above, plus a runtime-only LFO phase (0..1, audio-thread-only,
-        // not persisted -- a fresh playback always starts mid-swing from
-        // center rather than trying to resume wherever a previous session
-        // left off, which nobody would notice or want preserved anyway).
-        float autopanRate  = 1.0f;
-        float autopanDepth = 0.0f;
-        float autopanPhase_ = 0.0f;
-        // Stereo (see Track::width / Track::spread): M/S width and the mono-compatible decorrelator
-        float width = 1.0f;
-        float spread = 0.0f;
         StereoWidth stereoDsp;
+        // Autopan LFO phase (0..1, audio-thread-only, not saved: a fresh playback starts from center).
+        float autopanPhase_ = 0.0f;
         std::atomic<float> peak{0.0f}; // updated by audio thread, read by UI
         // Ramped mute/solo gain -- audio-thread-only, not atomic. See
         // MixTrack() for why this exists: flipping mute/solo used to gate
@@ -139,29 +119,18 @@ public:
 
     // v44.5.1: mute / solo belong to each scene, so a scene change loads them with everything else (keepMuteSolo = false,
     // the default). keepMuteSolo = true is kept for callers that want to refresh the sound values only.
+    // C3 part 2: every channel value of one track (not mute / solo, not the DSP state) from a scene's Track.
+    void SyncChannel(int i, const ChannelMix& from) {
+        if (i >= 0 && i < kNumTracks) static_cast<ChannelMix&>(tracks[static_cast<size_t>(i)]) = from;
+    }
     void SyncFromPattern(const Pattern& p, bool keepMuteSolo = false) {
         kickSynth = p.kick;
         for (int i = 0; i < kNumTracks; ++i) {
-            tracks[i].volume = p.tracks[i].volume;
-            tracks[i].pan = p.tracks[i].pan;
+            SyncChannel(i, p.tracks[i]);
             if (!keepMuteSolo) {
                 tracks[i].mute = p.tracks[i].mute;
                 tracks[i].solo = p.tracks[i].solo;
             }
-            tracks[i].delaySend = p.tracks[i].delaySend;
-            tracks[i].reverbSend = p.tracks[i].reverbSend;
-            tracks[i].insertDrive = p.tracks[i].insertDrive;
-            tracks[i].insertEqTilt = p.tracks[i].insertEqTilt;
-            tracks[i].insertChorus = p.tracks[i].insertChorus;
-            tracks[i].autopanRate = p.tracks[i].autopanRate;
-            tracks[i].autopanDepth = p.tracks[i].autopanDepth;
-            tracks[i].width = p.tracks[i].width;
-            tracks[i].spread = p.tracks[i].spread;
-            tracks[i].eqHpfHz = p.tracks[i].eqHpfHz;     tracks[i].eqHpfSlope = p.tracks[i].eqHpfSlope;
-            tracks[i].eqLowDb = p.tracks[i].eqLowDb;     tracks[i].eqLowHz = p.tracks[i].eqLowHz;
-            tracks[i].eqMidDb = p.tracks[i].eqMidDb;     tracks[i].eqMidHz = p.tracks[i].eqMidHz;
-            tracks[i].eqMidQ = p.tracks[i].eqMidQ;
-            tracks[i].eqHighDb = p.tracks[i].eqHighDb;   tracks[i].eqHighHz = p.tracks[i].eqHighHz;
         }
     }
 

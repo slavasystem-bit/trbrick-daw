@@ -4,6 +4,7 @@
 // small chunks of this cheaply and predictably.
 
 #include "ArrangeTypes.h"
+#include "ChannelMix.h"
 #include <algorithm>
 #include <cctype>
 #include <array>
@@ -183,7 +184,7 @@ struct SampleEdit {
     bool operator!=(const SampleEdit& o) const { return !(*this == o); }
 };
 
-struct Track {
+struct Track : ChannelMix {
     TrackType type = TrackType::Drum;
     std::string name;
     int slotIndex = 0; // DrumSlot index if type==Drum, synth index (0-2) if type==Synth
@@ -211,8 +212,7 @@ struct Track {
     float swing = -1.0f;
     bool  grooveOn = true;   // v42: this track follows the pattern's groove
 
-    float volume = 0.8f;  // 0..1
-    float pan    = 0.0f;  // -1..1
+    // volume / pan, sends, insert FX, autopan, stereo and the channel EQ: see ChannelMix (ChannelMix.h).
     bool  mute   = false;
     bool  solo   = false;
 
@@ -220,57 +220,12 @@ struct Track {
     float drumTune  = 0.0f; // semitones, -24..+24
     float drumDecay = 1.0f; // 0.25..2.0, see DrumVoiceParams::decay
     SampleEdit edit;        // v44.52: START / LENGTH / ATTACK / FINE / GAIN / REVERSE of the sample (same as the sampler's)
-
-    // Effects sends -- how much of this track's signal feeds the shared
-    // delay/reverb buses (see FxSettings below and AudioEngine::Render).
-    // 0 = fully dry. Per-track like volume/pan, so different sends per
-    // pattern bank are possible (e.g. more reverb on a build-up pattern).
-    float delaySend  = 0.0f; // 0..1
-    float reverbSend = 0.0f; // 0..1
-
-    // Per-track INSERT effects -- applied to this track's own signal
-    // pre-fader (before volume/pan), unlike delaySend/reverbSend above
-    // which tap the POST-fader signal into the shared aux buses. See
-    // TrackInsertFx in Effects.h for the DSP. All default to 0 (off) so
-    // existing projects sound unchanged until a user dials one in.
-    float insertDrive  = 0.0f; // 0..1, per-track saturation (same curve as the master-bus DRIVE)
-    float insertEqTilt = 0.0f; // -1..1, one-knob tilt EQ: negative=darker, positive=brighter, 0=flat
-    float insertChorus = 0.0f; // 0..1, short modulated-delay chorus mix
-
-    // Autopan -- a 4th insert stage, own LFO rather than reusing the
-    // chorus LFO above (independent rate makes more sense for a stereo
-    // sweep than sharing a ~10-15ms chorus-tuned modulator). Applied to
-    // this track's `pan` in Mixer::MixTrack (added to the static pan
-    // value, clamped back to -1..1), not inside TrackInsertFx, since pan
-    // is already a per-block Mixer-level concept and doesn't need its own
-    // buffer stage. Both 0 by default (0 depth = no audible movement
-    // regardless of rate) so existing projects are unaffected.
-    float autopanRate  = 1.0f; // 0.05..8Hz, LFO speed
-    float autopanDepth = 0.0f; // 0..1, how far the pan swings each way
-
-    // Stereo image (v33, see Stereo.h): `width` scales the side signal (0 = mono, 1 = as is, 2 = double);
-    // `spread` adds a decorrelated, mono-compatible side signal built from the (high-passed) mid, which
-    // turns a mono source (hats, percussion, a plain synth voice) into a stereo one without touching the mono sum.
-    float width  = 1.0f;       // 0..2
-    float spread = 0.0f;       // 0..1
-
-    // Channel EQ (v29, see TrackEq.h): HPF + low shelf + mid bell + high shelf.
-    // Defaults are flat / off, so existing projects sound identical.
-    float eqHpfHz   = 20.0f;   // 20 = off .. 500
-    float eqHpfSlope = 0.0f;   // 0 = 12 dB/oct, 1 = 24 dB/oct
-    float eqLowDb   = 0.0f;    // -15..+15
-    float eqLowHz   = 120.0f;  // 30..500
-    float eqMidDb   = 0.0f;    // -15..+15
-    float eqMidHz   = 1000.0f; // 80..10000
-    float eqMidQ    = 1.0f;    // 0.3..6
-    float eqHighDb  = 0.0f;    // -15..+15
-    float eqHighHz  = 6000.0f; // 1500..16000
 };
 
 // Project-wide (not per-pattern) effects settings -- one shared delay
 // engine and one shared reverb engine for the whole set, plus a master-bus
 // distortion/drive stage. Individual tracks control how much of their own
-// signal reaches the delay/reverb via Track::delaySend/reverbSend above;
+// signal reaches the delay/reverb via ChannelMix::delaySend/reverbSend;
 // these are the "how the effect itself sounds" knobs, deliberately global
 // rather than per-pattern so dialing in a good delay/reverb once holds
 // across the whole set instead of needing to be redone per pattern bank.

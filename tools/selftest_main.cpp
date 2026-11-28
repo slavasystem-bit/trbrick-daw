@@ -60,7 +60,6 @@
 #include <set>
 #include <algorithm>
 #include <cstdio>
-#include <filesystem>
 #include <chrono>
 #include "core/ChordSpec.h"
 #include "core/SampleLibrary.h"
@@ -512,6 +511,7 @@ int main(int argc, char** argv) {
             const std::regex lit("\"([A-Za-z][A-Za-z0-9_]*)="), idx("\"([A-Za-z][A-Za-z0-9_]*)\" << \\w+ << \"=");
             for (std::sregex_iterator it(writer.begin(), writer.end(), lit), e; it != e; ++it) written.insert((*it)[1]);
             for (std::sregex_iterator it(writer.begin(), writer.end(), idx), e; it != e; ++it) written.insert((*it)[1].str() + "N");
+            for (const ChannelField& cf : kChannelFields) written.insert(cf.key);   // C3 part 2: the channel keys are written from ChannelMix.h
             std::string unknown;
             for (const auto& k : written) if (!listed.count(k)) unknown += " " + k;
             check(!src.empty() && listedFormat > 0, "n2 data-1: the writer and tools/project_format_keys.txt are found (run from the repository root)");
@@ -5883,6 +5883,99 @@ int main(int argc, char** argv) {
             check(ml.find("ValueField(id, &nv, sp, tw)") != std::string::npos && ml.find("MousePos.x - tx") == std::string::npos,
                   "c3: MIX LAB LEVEL / PAN move from where they are, Shift finer");
         }
+        {   // C3 part 2 (CODE-2): the channel values live in ONE place (ChannelMix + kChannelFields)
+            const Track tk{}; const Mixer::TrackState ts{}; const ChannelMix cm{};
+            bool defsOk = true, namesOk = true;
+            for (const ChannelField& cf : kChannelFields) {
+                defsOk = defsOk && tk.*cf.member == cf.def && ts.*cf.member == cf.def && cm.*cf.member == cf.def && cf.def >= cf.lo && cf.def <= cf.hi;
+                namesOk = namesOk && FindChannelField(cf.key) == &cf && FindChannelField(cf.member) == &cf;
+            }
+            check(defsOk && namesOk && kNumChannelFields == 20, "c3 code: every channel value has one row (key, range, default) and Track / mixer start from it");
+            check(ClampChannelValue(&ChannelMix::eqMidQ, 99.0f) == 6.0f && ClampChannelValue(&ChannelMix::eqHpfSlope, 0.7f) == 1.0f &&
+                  ClampChannelValue(&ChannelMix::width, std::nanf("")) == 1.0f && ClampChannelValue(&ChannelMix::pan, -3.0f) == -1.0f,
+                  "c3 code: a value set from the UI is kept in its range (switch 0 / 1, damaged = default)");
+            {   // copy / compare by part: MIX LAB's level + pan + EQ leaves the sends alone
+                Track a, b; b.volume = 0.3f; b.pan = 0.5f; b.eqMidDb = 4.0f; b.reverbSend = 0.9f; b.width = 1.7f;
+                CopyChannel(a, b, kChLevel | kChPan | kChEq);
+                check(a.volume == 0.3f && a.pan == 0.5f && a.eqMidDb == 4.0f && a.reverbSend == 0.0f && a.width == 1.0f &&
+                      SameChannel(a, b, kChLevel | kChPan | kChEq) && !SameChannel(a, b), "c3 code: copying part of a strip touches only that part");
+                MixLab::Snap sn = MixLab::Snap::Of(b); Track c; sn.To(c);
+                check(c.eqMidDb == 4.0f && c.volume == 0.3f && c.reverbSend == 0.0f, "c3 code: MIX LAB A / B keeps level, pan and EQ only");
+            }
+            {   // save -> load keeps every channel value; a damaged one is put back into range on load
+                Project pj; Track& t = pj.patterns[0].tracks[kNumDrumTracks];
+                float k = 0.0f;
+                for (const ChannelField& cf : kChannelFields) { t.*cf.member = cf.onOff ? 1.0f : std::round((cf.lo + (cf.hi - cf.lo) * (0.13f + 0.04f * k)) * 10.0f) / 10.0f; k += 1.0f; }   // 0.1 steps: exact through the text file
+                check(SaveProject(pj, "selftest_c3_channel.t8proj"), "c3 code: save a strip with every value set");
+                Project back;
+                check(LoadProject(back, "selftest_c3_channel.t8proj") && SameChannel(back.patterns[0].tracks[kNumDrumTracks], t, kChAll) && LastLoadFixedValues() == 0,
+                      "c3 code: every channel value comes back from the file");
+                std::ifstream in("selftest_c3_channel.t8proj"); std::string txt((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); in.close();
+                bool every = true;
+                for (const ChannelField& cf : kChannelFields) every = every && txt.find(std::string("\n") + cf.key + "=") != std::string::npos;
+                check(every, "c3 code: the file names every channel value by its old key");
+                const size_t at = txt.find("\neqMidQ=");
+                if (at != std::string::npos) {
+                    txt.replace(at, txt.find('\n', at + 1) - at, "\neqMidQ=40");
+                    const size_t w = txt.find("\nwidth=");
+                    txt.replace(w, txt.find('\n', w + 1) - w, "\nwidth=nan");
+                    std::ofstream out("selftest_c3_channel.t8proj"); out << txt; out.close();
+                    Project dam;
+                    check(LoadProject(dam, "selftest_c3_channel.t8proj") && dam.patterns[0].tracks[kNumDrumTracks].eqMidQ == 6.0f &&
+                          dam.patterns[0].tracks[kNumDrumTracks].width == 1.0f && LastLoadFixedValues() >= 2,
+                          "c3 code: a damaged EQ / width value in a file is put back into range (width was not checked before)");
+                }
+            }
+            {   // the setter writes the audio mixer only while the edited scene is the one playing
+                AppState da; da.engine.Init(kSampleRate); da.sequencer.Init(&da.engine, &da.project);
+                Project& pj = da.project; const int ti = kNumDrumTracks;
+                pj.currentPattern = 0; da.sequencer.SetSongModeActive(false); da.sequencer.Play();
+                da.engine.GetMixer().SyncFromPattern(pj.patterns[0]);
+                t8::desktop::SetChannelValue(da, ti, &ChannelMix::eqMidDb, 6.0f);
+                check(pj.patterns[0].tracks[ti].eqMidDb == 6.0f && da.engine.GetMixer().tracks[ti].eqMidDb == 6.0f, "c3 code: an EQ knob of the playing scene is heard at once");
+                da.sequencer.PinPlayToCurrent();
+                pj.currentPattern = 1;   // edit another scene while scene 1 plays on
+                t8::desktop::SetChannelValue(da, ti, &ChannelMix::eqMidDb, -9.0f);
+                const float kept = t8::desktop::SetChannelValue(da, ti, &ChannelMix::volume, 3.0f);
+                check(pj.patterns[1].tracks[ti].eqMidDb == -9.0f && da.engine.GetMixer().tracks[ti].eqMidDb == 6.0f && kept == 1.0f &&
+                      da.engine.GetMixer().tracks[ti].volume == pj.patterns[0].tracks[ti].volume,
+                      "c3 code: editing a scene that is not playing does not change the sound of the playing one");
+                da.sequencer.Stop();
+            }
+        }
+        {   // C3 (the person, 27.11): MASTER FX knobs follow the same rules; the mouse over any value + Up / Down = a step
+            auto slurp4 = [](const char* path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+            const std::string vf = slurp4("src/ui_desktop/ValueField.h"), kw = slurp4("src/ui_desktop/KnobWidgets.h"), fp = slurp4("src/ui_desktop/FxPanel.cpp"),
+                              sh = slurp4("src/ui_desktop/Shell.cpp"), pc = slurp4("src/ui_desktop/ParamCell.h"), cx = slurp4("src/ui_desktop/ContextPanel.cpp");
+            check(vf.find("interaction::NoteValueHover(wid)") != std::string::npos && vf.find("interaction::ArrowSteps(wid)") != std::string::npos &&
+                  sh.find("interaction::ClaimArrowsForHoveredValue();") != std::string::npos &&
+                  sh.find("interaction::ClaimArrowsForHoveredValue();") < sh.find("HandleShortcuts(app);"),
+                  "c3 keys: the value under the mouse takes Up / Down for the frame, before anything else reads them");
+            check(kw.find("ValueField(id, &v, sp, size.x)") != std::string::npos && kw.find("MouseDelta") == std::string::npos,
+                  "c3 keys: a MASTER FX knob is a ValueField (drag from where it is, Shift, Option+click, wheel, Up / Down, typing)");
+            size_t calls = 0, withDef = 0;
+            for (size_t at = fp.find("KnobAbsolute("); at != std::string::npos; at = fp.find("KnobAbsolute(", at + 1)) {
+                ++calls;
+                const std::string call = fp.substr(at, fp.find(';', at) - at);
+                if (call.find("kFxDef.") != std::string::npos || call.find("kChainDef.") != std::string::npos) ++withDef;
+            }
+            check(calls >= 11 && withDef == calls, "c3 keys: every MASTER FX knob has its default for Option+click");
+            check(pc.find("res.hovered = hovered;") != std::string::npos && cx.find("if (r.hovered) hoverNow_ = idx;") != std::string::npos &&
+                  cx.find("r.hoverStarted") == std::string::npos && cx.find("bool sel = (idx == KeyCell());") != std::string::npos,
+                  "c3 keys: in the instrument block Up / Down change the cell under the mouse only while the mouse is on it (review of #57)");
+            check(cx.find("keys_.coarse ? 4") == std::string::npos && cx.find("keys_.coarse && norm >= 0.0f) ? 5") == std::string::npos &&
+                  cx.find("fine ? interaction::kFineFactor : 1.0f") != std::string::npos && cx.find("keys_.coarse && step < 1.0f && !wholeSteps") != std::string::npos &&
+                  cx.find("false, -0.01f, true);") != std::string::npos,
+                  "c3 keys: Shift + arrows is finer on instrument cells too, never bigger (review of #57)");
+            bool noOwnDrag = true; std::string who;
+            for (const auto& e : std::filesystem::directory_iterator("src/ui_desktop")) {
+                const std::string name = e.path().filename().string();
+                if (name == "ValueField.h" || name == "ParamCell.h") continue;
+                const std::string txt = slurp4(e.path().string().c_str());
+                if (txt.find("MouseDelta") != std::string::npos || txt.find("SliderFloat(") != std::string::npos || txt.find("DragFloat(") != std::string::npos) { noOwnDrag = false; who += " " + name; }
+            }
+            check(noOwnDrag, "c3 keys: no control drags a value its own way (only ValueField and the instrument cell read the mouse movement)" + who);
+        }
 
         AppState app;
         app.engine.Init(kSampleRate);
@@ -6180,7 +6273,7 @@ int main(int argc, char** argv) {
                 check(!col.empty() && col.find("SceneLock lock(app.sequencer.PatternMutex(), \"CHORD LAB SOUND\");") != std::string::npos &&
                       col.find("\"CUTOFF\", \"ATTACK\", \"RELEASE\", \"WIDTH\", \"REVERB\", \"LEVEL\"") != std::string::npos &&
                       col.find("app.EditedPatch(true, 0)") != std::string::npos && col.find("app.PushEditedPatchToEngine(true, 0)") != std::string::npos &&
-                      col.find("&Mixer::TrackState::reverbSend, &Track::reverbSend") != std::string::npos && col.find("&Mixer::TrackState::volume, &Track::volume") != std::string::npos &&
+                      col.find("&ChannelMix::reverbSend") != std::string::npos && col.find("&ChannelMix::volume") != std::string::npos &&
                       col.find("if (r.started) app.PushUndo();") != std::string::npos && col.find("if (r.cancelled) app.DropLastUndo();") != std::string::npos &&
                       col.find("ApplyPresetToTrack(app, ti, n)") != std::string::npos && col.find("ALL KNOBS...") != std::string::npos &&
                       lab.find("SOUND \\xC2\\xB7 THE CHORD INSTRUMENT") != std::string::npos && lab.find("soundColumn_(app,") != std::string::npos,
@@ -8010,6 +8103,17 @@ int main(int argc, char** argv) {
                               "src/ui_desktop/ContextPanel.cpp", "src/ui_desktop/BricksPanel.cpp", "src/ui_desktop/MixerSync.h"})
             if (slurp(f).find("std::lock_guard<SceneMutex>") != std::string::npos) { unnamed = true; std::cout << "  unnamed scene lock in " << f << "\n"; }
         check(!unnamed, "lock-5 names: the screen's scene locks all have a name (the XRUN hint never says OTHER for them)");
+        {   // LIVE-5 (Mac, after #53: BROWSERS held the sound 39 ms): the SAMPLES list is built before the scene lock, never inside it
+            const std::string bp = slurp("src/ui_desktop/BottomPanel.cpp"), sb = slurp("src/ui_desktop/SampleBrowser.cpp");
+            const size_t db = bp.find("void BottomPanel::DrawBrowsers"), prep = bp.find("sampleBrowser_.Prepare(app);", db), lk = bp.find("SceneLock lock(", db);
+            const size_t draw = sb.find("void SampleBrowser::Draw(AppState& app) {"), drawEnd = sb.find("\n}\n", draw);
+            check(db != std::string::npos && prep != std::string::npos && lk != std::string::npos && prep < lk,
+                  "lock-5 browsers: DrawBrowsers builds the SAMPLES list before it takes the scene lock");
+            check(draw != std::string::npos && sb.substr(draw, drawEnd - draw).find("Rebuild(app)") == std::string::npos,
+                  "lock-5 browsers: the SAMPLES window never rebuilds its list while it draws (under the lock)");
+            check(sb.substr(draw, drawEnd - draw).find("++folderCounts_[") == std::string::npos && sb.find("++folderCounts_[") != std::string::npos,
+                  "lock-5 browsers: the LIBRARY FOLDERS counts are made in Prepare, not while drawing (review of #58)");
+        }
     }
     {   // N1 (LIVE-5 / LIVE-6): Settings > Audio rules
         using namespace t8::audiosettings;

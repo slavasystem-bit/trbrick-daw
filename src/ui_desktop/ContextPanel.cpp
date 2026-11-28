@@ -133,9 +133,9 @@ void DrawWaveIcon(ImDrawList* dl, ImVec2 a, ImVec2 b, const SynthPatch& p, ImU32
 
 template <class Apply>
 void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, float cur, float lo, float hi,
-                             float step, const char* text, Apply&& apply, bool dim, float def) {
+                             float step, const char* text, Apply&& apply, bool dim, float def, bool wholeSteps) {
     int idx = cellCounter_++;
-    bool sel = (idx == selCell_);
+    bool sel = (idx == KeyCell());
     float norm = hi > lo ? (cur - lo) / (hi - lo) : 0.0f;
     ParamCellResult r = ParamCell(id, cap, text, norm, sel, &accum_[std::min(idx, 95)], 3.0f, cellSize_, dim);
     if (r.reset) {   // C3 (UI-2): Option+click = the default, one undo step
@@ -145,16 +145,16 @@ void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, flo
     }
     int steps = r.steps;
     int key = 0;
-    if (sel) {
-        int mul = keys_.coarse ? 4 : 1;
-        if (keys_.up) key += mul;
-        if (keys_.down) key -= mul;
+    if (sel) {   // C3 (review of #57): Shift = finer, as everywhere
+        if (keys_.up) key += 1;
+        if (keys_.down) key -= 1;
     }
     if (r.clicked) selCell_ = idx;
+    if (r.hovered) hoverNow_ = idx;   // C3: Up / Down go to the cell under the mouse while it is there
     if (r.activated || key != 0) pendingUndo_ = true;
-    steps += key;
-    if (steps != 0) {
-        float nv = std::clamp(cur + steps * step, lo, hi);
+    if (steps != 0 || key != 0) {
+        const bool fine = keys_.coarse && step < 1.0f && !wholeSteps;   // review of #59: whole-number cells (STEPS, FINE, GAIN, ROOT, SWING %) keep the normal step
+        float nv = std::clamp(cur + steps * step + key * step * (fine ? interaction::kFineFactor : 1.0f), lo, hi);
         if (nv != cur) {
             if (pendingUndo_) { app.PushUndo(); pendingUndo_ = false; }
             apply(nv);
@@ -164,10 +164,11 @@ void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, flo
 
 int ContextPanel::DiscreteCell(const char* id, const char* cap, const char* text, bool dim) {
     int idx = cellCounter_++;
-    bool sel = (idx == selCell_);
+    bool sel = (idx == KeyCell());
     ParamCellResult r = ParamCell(id, cap, text, -1.0f, sel, &accum_[std::min(idx, 95)], 9.0f, cellSize_, dim);
     int steps = r.steps;
     if (r.clicked) selCell_ = idx;
+    if (r.hovered) hoverNow_ = idx;   // C3: Up / Down go to the cell under the mouse while it is there
     if (sel) {
         if (keys_.up) steps += 1;
         if (keys_.down) steps -= 1;
@@ -183,7 +184,7 @@ void ContextPanel::PatchCell(AppState& app, int ti, int paramIndex) {
     std::string val = FormatPatchParam(patch, paramIndex);
     float norm = PatchNorm(patch, name);
     int idx = cellCounter_++;
-    bool sel = (idx == selCell_);
+    bool sel = (idx == KeyCell());
     char id[24];
     std::snprintf(id, sizeof(id), "p%d", paramIndex);
     ParamCellResult r = ParamCell(id, cap.c_str(), val.c_str(), norm, sel, &accum_[std::min(idx, 95)],
@@ -209,10 +210,10 @@ void ContextPanel::PatchCell(AppState& app, int ti, int paramIndex) {
         steps = dir * n;
     }
     if (r.clicked) selCell_ = idx;
+    if (r.hovered) hoverNow_ = idx;   // C3: Up / Down go to the cell under the mouse while it is there
     if (sel) {
-        int mul = (keys_.coarse && norm >= 0.0f) ? 5 : 1;
-        if (keys_.up) steps += mul;
-        if (keys_.down) steps -= mul;
+        if (keys_.up) steps += 1;     // one step of the patch value (the smallest there is; C3: no bigger step with Shift)
+        if (keys_.down) steps -= 1;
     }
     int dir = steps > 0 ? 1 : -1;
     if (steps != 0) app.PushSoundUndo();
@@ -269,7 +270,7 @@ void ContextPanel::DrawHeader(AppState& app, int ti) {
     }
     if (ImGui::IsItemHovered()) Hint("Copy every sound parameter of this instrument (and its steps and effects) as text,\nto paste into a question.");
 
-    const char* hint = "LEFT / RIGHT  select      UP / DOWN  change      SHIFT  bigger steps";
+    const char* hint = "LEFT / RIGHT  select      UP / DOWN  change (the cell under the mouse)      SHIFT  finer";
     float hw = ImGui::CalcTextSize(hint).x;
     ImGui::SameLine();
     ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 16.0f, ImGui::GetWindowContentRegionMax().x - hw));
@@ -291,43 +292,43 @@ void ContextPanel::DrawCommonRow(AppState& app, int ti) {
     BlockBegin("SENDS");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.reverbSend * 100 + 0.5f));
     FloatCell(app, "rev", "REVERB", mt.reverbSend, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::reverbSend, &Track::reverbSend, v, 0.0f, 1.0f); }, false, TsDef().reverbSend);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::reverbSend, v); }, false, TsDef().reverbSend);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.delaySend * 100 + 0.5f));
     FloatCell(app, "del", "DELAY", mt.delaySend, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::delaySend, &Track::delaySend, v, 0.0f, 1.0f); }, false, TsDef().delaySend);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::delaySend, v); }, false, TsDef().delaySend);
     BlockEnd();
 
     BlockBegin("STEREO");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.width * 100 + 0.5f));
     FloatCell(app, "wid", "WIDTH", mt.width, 0.0f, 2.0f, 2.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::width, &Track::width, v, 0.0f, 2.0f); }, false, TsDef().width);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::width, v); }, false, TsDef().width);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.spread * 100 + 0.5f));
     FloatCell(app, "spr", "SPREAD", mt.spread, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::spread, &Track::spread, v, 0.0f, 1.0f); }, false, TsDef().spread);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::spread, v); }, false, TsDef().spread);
     BlockEnd();
 
     BlockBegin("INSERT FX");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.insertDrive * 100 + 0.5f));
     FloatCell(app, "drv", "DRIVE", mt.insertDrive, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertDrive, &Track::insertDrive, v, 0.0f, 1.0f); }, false, TsDef().insertDrive);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::insertDrive, v); }, false, TsDef().insertDrive);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%+d%%", static_cast<int>(std::lround(mt.insertEqTilt * 100)));
     FloatCell(app, "eq", "EQ TILT", mt.insertEqTilt, -1.0f, 1.0f, 2.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertEqTilt, &Track::insertEqTilt, v, -1.0f, 1.0f); }, false, TsDef().insertEqTilt);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::insertEqTilt, v); }, false, TsDef().insertEqTilt);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.insertChorus * 100 + 0.5f));
     FloatCell(app, "cho", "CHORUS", mt.insertChorus, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::insertChorus, &Track::insertChorus, v, 0.0f, 1.0f); }, false, TsDef().insertChorus);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::insertChorus, v); }, false, TsDef().insertChorus);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%.2fHZ", mt.autopanRate);
     FloatCell(app, "apr", "PAN RATE", mt.autopanRate, 0.05f, 8.0f, 0.1f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::autopanRate, &Track::autopanRate, v, 0.05f, 8.0f); }, false, TsDef().autopanRate);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::autopanRate, v); }, false, TsDef().autopanRate);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.autopanDepth * 100 + 0.5f));
     FloatCell(app, "apd", "PAN DEPTH", mt.autopanDepth, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::autopanDepth, &Track::autopanDepth, v, 0.0f, 1.0f); }, false, TsDef().autopanDepth);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::autopanDepth, v); }, false, TsDef().autopanDepth);
     BlockEnd();
 
     BlockBegin("LENGTH / FEEL");
@@ -347,7 +348,7 @@ void ContextPanel::DrawCommonRow(AppState& app, int ti) {
     if (t.swing < 0.0f) std::snprintf(buf, sizeof(buf), "SCENE");
     else std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(t.swing * 100.0f + 0.5f));
     FloatCell(app, "tsw", "SWING", t.swing < 0.0f ? -0.01f : t.swing, -0.01f, 0.75f, 0.01f, buf,
-              [&](float v) { t.swing = v < 0.0f ? -1.0f : std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 0.75f); }, false, -0.01f);
+              [&](float v) { t.swing = v < 0.0f ? -1.0f : std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 0.75f); }, false, -0.01f, true);
     BlockEnd(false);
 }
 
@@ -362,8 +363,8 @@ void ContextPanel::DrawEq(AppState& app, int ti, float availW) {
     const double sr = std::max(8000, app.engine.SampleRate());
     char buf[32];
 
-    auto setF = [&](float Mixer::TrackState::*mf, float Track::*tf, float v, float lo, float hi) {
-        SetTrackFloatField(app, ti, mf, tf, v, lo, hi);
+    auto setF = [&](float ChannelMix::*field, float v) {
+        SetChannelValue(app, ti, field, v);
     };
     auto fmtHz = [](char* b, size_t n, float f) {
         if (f >= 1000.0f) std::snprintf(b, n, "%.1fK", f / 1000.0f); else std::snprintf(b, n, "%.0fHZ", f);
@@ -424,25 +425,25 @@ void ContextPanel::DrawEq(AppState& app, int ti, float availW) {
         float db = std::clamp((p0.y + ch * 0.5f - mp.y) / (ch * 0.5f - 4.0f) * kEqMaxDb, -kEqMaxDb, kEqMaxDb);
         db = std::round(db * 2.0f) / 2.0f;
         switch (eqDrag_) {
-            case 0: setF(&Mixer::TrackState::eqHpfHz, &Track::eqHpfHz, f < 22.0f ? 20.0f : std::clamp(f, 20.0f, 500.0f), 20.0f, 500.0f); break;
-            case 1: setF(&Mixer::TrackState::eqLowHz, &Track::eqLowHz, f, 30.0f, 500.0f); setF(&Mixer::TrackState::eqLowDb, &Track::eqLowDb, db, -kEqMaxDb, kEqMaxDb); break;
-            case 2: setF(&Mixer::TrackState::eqMidHz, &Track::eqMidHz, f, 80.0f, 10000.0f); setF(&Mixer::TrackState::eqMidDb, &Track::eqMidDb, db, -kEqMaxDb, kEqMaxDb); break;
-            default: setF(&Mixer::TrackState::eqHighHz, &Track::eqHighHz, f, 1500.0f, 16000.0f); setF(&Mixer::TrackState::eqHighDb, &Track::eqHighDb, db, -kEqMaxDb, kEqMaxDb); break;
+            case 0: setF(&ChannelMix::eqHpfHz, f < 22.0f ? 20.0f : std::clamp(f, 20.0f, 500.0f)); break;
+            case 1: setF(&ChannelMix::eqLowHz, f); setF(&ChannelMix::eqLowDb, db); break;
+            case 2: setF(&ChannelMix::eqMidHz, f); setF(&ChannelMix::eqMidDb, db); break;
+            default: setF(&ChannelMix::eqHighHz, f); setF(&ChannelMix::eqHighDb, db); break;
         }
     }
     if (!ImGui::IsMouseDown(0)) eqDrag_ = -1;
     if (hov && ImGui::IsMouseDoubleClicked(0)) {   // flatten the node under the cursor
         int n = nearestNode();
         app.PushUndo();
-        if (n == 0) setF(&Mixer::TrackState::eqHpfHz, &Track::eqHpfHz, 20.0f, 20.0f, 500.0f);
-        else if (n == 1) setF(&Mixer::TrackState::eqLowDb, &Track::eqLowDb, 0.0f, -kEqMaxDb, kEqMaxDb);
-        else if (n == 2) setF(&Mixer::TrackState::eqMidDb, &Track::eqMidDb, 0.0f, -kEqMaxDb, kEqMaxDb);
-        else setF(&Mixer::TrackState::eqHighDb, &Track::eqHighDb, 0.0f, -kEqMaxDb, kEqMaxDb);
+        if (n == 0) setF(&ChannelMix::eqHpfHz, 20.0f);
+        else if (n == 1) setF(&ChannelMix::eqLowDb, 0.0f);
+        else if (n == 2) setF(&ChannelMix::eqMidDb, 0.0f);
+        else setF(&ChannelMix::eqHighDb, 0.0f);
         eqDrag_ = -1;
     }
     if (hov && ImGui::GetIO().MouseWheel != 0.0f) {   // wheel = mid band Q (width)
         app.PushUndo();
-        setF(&Mixer::TrackState::eqMidQ, &Track::eqMidQ, mt.eqMidQ * std::pow(1.12f, ImGui::GetIO().MouseWheel), 0.3f, 6.0f);
+        setF(&ChannelMix::eqMidQ, mt.eqMidQ * std::pow(1.12f, ImGui::GetIO().MouseWheel));
     }
     if (hov && !ImGui::IsMouseDown(0))
         Hint("Drag a dot: frequency (left / right) and gain (up / down)\nRed = low cut, teal = low shelf, orange = mid bell, blue = high shelf\nMouse wheel = width (Q) of the mid bell  -  double-click a dot = flatten it");
@@ -451,53 +452,53 @@ void ContextPanel::DrawEq(AppState& app, int ti, float availW) {
     // ---- cells ----
     int cells = 10;
     cellSize_.x = std::clamp((availW - cw - 5 * 19.0f - 6.0f * cells) / cells, 40.0f, 62.0f);
-    auto freqCell = [&](const char* id, const char* cap, float cur, float lo, float hi, float Mixer::TrackState::*mf, float Track::*tf, bool offAtMin, float defHz) {
+    auto freqCell = [&](const char* id, const char* cap, float cur, float lo, float hi, float ChannelMix::*tf, bool offAtMin, float defHz) {
         const float def = std::log2(defHz);
         if (offAtMin && cur <= 20.5f) std::snprintf(buf, sizeof(buf), "OFF"); else fmtHz(buf, sizeof(buf), cur);
         FloatCell(app, id, cap, std::log2(cur), std::log2(lo), std::log2(hi), 1.0f / 12.0f, buf,
-                  [&, mf, tf, lo, hi, offAtMin](float v) { float f = std::exp2(v); if (offAtMin && f < 22.0f) f = 20.0f; SetTrackFloatField(app, ti, mf, tf, f, lo, hi); }, false, def);
+                  [&, tf, offAtMin](float v) { float f = std::exp2(v); if (offAtMin && f < 22.0f) f = 20.0f; SetChannelValue(app, ti, tf, f); }, false, def);
     };
-    auto gainCell = [&](const char* id, float cur, float Mixer::TrackState::*mf, float Track::*tf) {
+    auto gainCell = [&](const char* id, float cur, float ChannelMix::*tf) {
         std::snprintf(buf, sizeof(buf), "%+.1fDB", cur);
         FloatCell(app, id, "GAIN", cur, -kEqMaxDb, kEqMaxDb, 0.5f, buf,
-                  [&, mf, tf](float v) { SetTrackFloatField(app, ti, mf, tf, std::round(v * 2.0f) / 2.0f, -kEqMaxDb, kEqMaxDb); }, false, 0.0f);
+                  [&, tf](float v) { SetChannelValue(app, ti, tf, std::round(v * 2.0f) / 2.0f); }, false, 0.0f);
     };
 
     BlockBegin("LOW CUT");
-    freqCell("hpf", "FREQ", mt.eqHpfHz, 20.0f, 500.0f, &Mixer::TrackState::eqHpfHz, &Track::eqHpfHz, true, TsDef().eqHpfHz);
+    freqCell("hpf", "FREQ", mt.eqHpfHz, 20.0f, 500.0f, &ChannelMix::eqHpfHz, true, TsDef().eqHpfHz);
     ImGui::SameLine(0, 6);
     int sl = DiscreteCell("hps", "SLOPE", mt.eqHpfSlope >= 0.5f ? "24 DB" : "12 DB", !ep.HpfOn());
-    if (sl != 0) { app.PushUndo(); setF(&Mixer::TrackState::eqHpfSlope, &Track::eqHpfSlope, mt.eqHpfSlope >= 0.5f ? 0.0f : 1.0f, 0.0f, 1.0f); }
+    if (sl != 0) { app.PushUndo(); setF(&ChannelMix::eqHpfSlope, mt.eqHpfSlope >= 0.5f ? 0.0f : 1.0f); }
     BlockEnd(true);
 
     BlockBegin("LOW SHELF");
-    gainCell("lg", mt.eqLowDb, &Mixer::TrackState::eqLowDb, &Track::eqLowDb);
+    gainCell("lg", mt.eqLowDb, &ChannelMix::eqLowDb);
     ImGui::SameLine(0, 6);
-    freqCell("lf", "FREQ", mt.eqLowHz, 30.0f, 500.0f, &Mixer::TrackState::eqLowHz, &Track::eqLowHz, false, TsDef().eqLowHz);
+    freqCell("lf", "FREQ", mt.eqLowHz, 30.0f, 500.0f, &ChannelMix::eqLowHz, false, TsDef().eqLowHz);
     BlockEnd(true);
 
     BlockBegin("MID BELL");
-    gainCell("mg", mt.eqMidDb, &Mixer::TrackState::eqMidDb, &Track::eqMidDb);
+    gainCell("mg", mt.eqMidDb, &ChannelMix::eqMidDb);
     ImGui::SameLine(0, 6);
-    freqCell("mf", "FREQ", mt.eqMidHz, 80.0f, 10000.0f, &Mixer::TrackState::eqMidHz, &Track::eqMidHz, false, TsDef().eqMidHz);
+    freqCell("mf", "FREQ", mt.eqMidHz, 80.0f, 10000.0f, &ChannelMix::eqMidHz, false, TsDef().eqMidHz);
     ImGui::SameLine(0, 6);
     std::snprintf(buf, sizeof(buf), "%.1f", mt.eqMidQ);
     FloatCell(app, "mq", "Q", std::log2(mt.eqMidQ), std::log2(0.3f), std::log2(6.0f), 1.0f / 12.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::eqMidQ, &Track::eqMidQ, std::exp2(v), 0.3f, 6.0f); }, false, std::log2(TsDef().eqMidQ));
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::eqMidQ, std::exp2(v)); }, false, std::log2(TsDef().eqMidQ));
     BlockEnd(true);
 
     BlockBegin("HIGH SHELF");
-    gainCell("hg", mt.eqHighDb, &Mixer::TrackState::eqHighDb, &Track::eqHighDb);
+    gainCell("hg", mt.eqHighDb, &ChannelMix::eqHighDb);
     ImGui::SameLine(0, 6);
-    freqCell("hf", "FREQ", mt.eqHighHz, 1500.0f, 16000.0f, &Mixer::TrackState::eqHighHz, &Track::eqHighHz, false, TsDef().eqHighHz);
+    freqCell("hf", "FREQ", mt.eqHighHz, 1500.0f, 16000.0f, &ChannelMix::eqHighHz, false, TsDef().eqHighHz);
     BlockEnd(false);
     ImGui::NewLine();
     if (ImGui::Button("FLAT##eqflat")) {
         app.PushUndo();
-        setF(&Mixer::TrackState::eqHpfHz, &Track::eqHpfHz, 20.0f, 20.0f, 500.0f);
-        setF(&Mixer::TrackState::eqLowDb, &Track::eqLowDb, 0.0f, -kEqMaxDb, kEqMaxDb);
-        setF(&Mixer::TrackState::eqMidDb, &Track::eqMidDb, 0.0f, -kEqMaxDb, kEqMaxDb);
-        setF(&Mixer::TrackState::eqHighDb, &Track::eqHighDb, 0.0f, -kEqMaxDb, kEqMaxDb);
+        setF(&ChannelMix::eqHpfHz, 20.0f);
+        setF(&ChannelMix::eqLowDb, 0.0f);
+        setF(&ChannelMix::eqMidDb, 0.0f);
+        setF(&ChannelMix::eqHighDb, 0.0f);
     }
     if (ImGui::IsItemHovered()) Hint("Reset every band of this track's EQ (frequencies stay where they are)");
     ImGui::SameLine(0, 10);
@@ -635,12 +636,12 @@ void ContextPanel::DrawDrum(AppState& app, int ti) {
     BlockBegin("OUTPUT");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.volume * 100 + 0.5f));
     FloatCell(app, "tvol", "VOLUME", mt.volume, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, v, 0.0f, 1.0f); }, false, TsDef().volume);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::volume, v); }, false, TsDef().volume);
     ImGui::SameLine(0, 6);
     if (std::fabs(mt.pan) < 0.015f) std::snprintf(buf, sizeof(buf), "C");
     else std::snprintf(buf, sizeof(buf), "%c%d", mt.pan < 0 ? 'L' : 'R', static_cast<int>(std::fabs(mt.pan) * 100 + 0.5f));
     FloatCell(app, "tpan", "PAN", mt.pan, -1.0f, 1.0f, 1.0f / 32.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::pan, &Track::pan, std::fabs(v) < 0.02f ? 0.0f : v, -1.0f, 1.0f); }, false, 0.0f);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::pan, std::fabs(v) < 0.02f ? 0.0f : v); }, false, 0.0f);
     BlockEnd(true);
 
     // ---- right: tabs (same place, same size as the synth's) ----
@@ -971,12 +972,12 @@ void ContextPanel::DrawSampler(AppState& app, int ti) {
     BlockBegin("OUTPUT");
     std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(mt.volume * 100 + 0.5f));
     FloatCell(app, "tvol", "VOLUME", mt.volume, 0.0f, 1.0f, 1.0f / 64.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, v, 0.0f, 1.0f); }, false, TsDef().volume);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::volume, v); }, false, TsDef().volume);
     ImGui::SameLine(0, 6);
     if (std::fabs(mt.pan) < 0.015f) std::snprintf(buf, sizeof(buf), "C");
     else std::snprintf(buf, sizeof(buf), "%c%d", mt.pan < 0 ? 'L' : 'R', static_cast<int>(std::fabs(mt.pan) * 100 + 0.5f));
     FloatCell(app, "tpan", "PAN", mt.pan, -1.0f, 1.0f, 1.0f / 32.0f, buf,
-              [&](float v) { SetTrackFloatField(app, ti, &Mixer::TrackState::pan, &Track::pan, std::fabs(v) < 0.02f ? 0.0f : v, -1.0f, 1.0f); }, false, 0.0f);
+              [&](float v) { SetChannelValue(app, ti, &ChannelMix::pan, std::fabs(v) < 0.02f ? 0.0f : v); }, false, 0.0f);
     BlockEnd(true);
 
     static const char* kTabs[4] = {"VOICE", "EQ", "FX", "AUTO"};
@@ -1488,9 +1489,9 @@ bool ContextPanel::DrawChordSoundColumn(AppState& app, ImVec2 a, float w) {
                 case 0: patch.cutoffHz = std::clamp(ChordCutoffHz(nv), 100.0f, 18000.0f); break;
                 case 1: patch.attack = std::clamp(ChordEnvMs(nv) / 1000.0f, 0.001f, 2.0f); break;
                 case 2: patch.release = std::clamp(ChordEnvMs(nv) / 1000.0f, 0.01f, 2.0f); break;
-                case 3: SetTrackFloatField(app, ti, &Mixer::TrackState::width, &Track::width, nv, 0.0f, 2.0f); break;
-                case 4: SetTrackFloatField(app, ti, &Mixer::TrackState::reverbSend, &Track::reverbSend, nv, 0.0f, 1.0f); break;
-                default: SetTrackFloatField(app, ti, &Mixer::TrackState::volume, &Track::volume, nv, 0.0f, 1.0f); break;
+                case 3: SetChannelValue(app, ti, &ChannelMix::width, nv); break;
+                case 4: SetChannelValue(app, ti, &ChannelMix::reverbSend, nv); break;
+                default: SetChannelValue(app, ti, &ChannelMix::volume, nv); break;
             }
             if (k < 3) { app.PushEditedPatchToEngine(true, 0); presetIdx_[slot] = -1; }
         }
@@ -1516,6 +1517,7 @@ void ContextPanel::Draw(AppState& app, const DpadKeys& keys) {
 
     if (hearOffAt_ > 0.0 && ImGui::GetTime() >= hearOffAt_) StopHear(app);   // v44.53: HEAR of a SAMPLE synth lets go of its note
     keys_ = keys;
+    hoverPrev_ = hoverNow_; hoverNow_ = -1;   // C3: the cell the mouse was on last frame takes Up / Down this frame
     cellCounter_ = 0;
     cellSize_ = ImVec2(60.0f, 60.0f);
     // LEFT / RIGHT move the selection through last frame's cell list.
