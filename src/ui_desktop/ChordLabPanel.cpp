@@ -206,7 +206,13 @@ void ChordLabPanel::Resize(AppState& app, int bi, int newEnd) {
 void ChordLabPanel::MoveBlock(AppState& app, int bi, int to, bool copy) {
     SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
-    if (bi < 0 || bi >= static_cast<int>(Blocks(JamTrack(app)).size())) return;
+    {   // nothing moves (a key at the edge of the loop, a drop on the same step): no undo step
+        const Track& cur = JamTrack(app);
+        const std::vector<Blk> cb = Blocks(cur);
+        if (bi < 0 || bi >= static_cast<int>(cb.size())) return;
+        const Blk b = cb[static_cast<size_t>(bi)];
+        if (std::clamp(to, 0, std::max(0, TrackLoop(cur, pat) - b.len)) == b.start) return;
+    }
     BeginEdit(app);
     Track& tr = JamTrack(app);   // the draft slot when this change started the draft
     const std::vector<Blk> bl = Blocks(tr);
@@ -230,6 +236,11 @@ void ChordLabPanel::MoveBlock(AppState& app, int bi, int to, bool copy) {
 void ChordLabPanel::SetLoopLen(AppState& app, int len) {
     SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
+    {   // the length it already has: no undo step
+        const Track& cur = JamTrack(app);
+        const bool scene = len <= 0 || len == pat.masterLength;
+        if (scene ? !cur.useOwnLength : (cur.useOwnLength && cur.length == std::clamp(len, 1, kMaxSteps))) return;
+    }
     BeginEdit(app);
     Track& tr = JamTrack(app);
     if (len <= 0 || len == pat.masterLength) { tr.useOwnLength = false; tr.length = std::clamp(pat.masterLength, 1, kMaxSteps); }
