@@ -277,7 +277,6 @@ void Sequencer::StartChord(const Pattern& p, std::array<int8_t, 6> cNotes, int c
 void Sequencer::FireTick(int tick) {
     SceneLock lock(patternMutex_, "Sequencer::FireTick");
     ApplyRepeaterRequest(false, tick);
-    engine_->PumpTick(tick, StepsPerBeat());   // sidechain pumps whose source is a steady beat (Every 1/4, 1/8, 1/16)
     // Queued chord-scene launch (see LaunchChordScene)
     {
         int pc = pendingChordScene_.load();
@@ -313,6 +312,20 @@ void Sequencer::FireTick(int tick) {
     // advancing the tick) -- clear defensively and rebuild fresh for the
     // step that's starting now.
     pendingRatchets_.clear();
+    {   // (after the clear above) sidechain pumps whose source is a steady beat (Every 1/4, 1/8, 1/16): the off-beats follow the scene's swing, like the hats
+        const int spb = StepsPerBeat();
+        const unsigned mask = engine_->PumpBeatMask(tick, spb);
+        if (mask) {
+            const float sw = std::clamp(PlayPattern().swing, 0.0f, 0.75f);
+            const double off = spb == 4 ? ((tick & 1) ? sw * 0.5 : 0.0) : (spb == 8 ? (((tick >> 1) & 1) ? static_cast<double>(sw) : 0.0) : 0.0);
+            for (int p = 0; p < kNumPumps; ++p) {
+                if (!(mask & (1u << p))) continue;
+                if (off <= 0.0) { engine_->PumpFire(p); continue; }
+                RatchetEvent ev; ev.isDrum = false; ev.pumpIndex = static_cast<int8_t>(p);
+                ScheduleHit(off, ev);
+            }
+        }
+    }
     bool perfDue = perfOn_;   // C2: the chord being performed goes on in this tick unless a new chord starts (see the chord branch)
 
     // TIE detection: a step that (a) has SLIDE set, or (b) is as long as its
@@ -844,7 +857,9 @@ void Sequencer::AdvanceSongChain() {
 
 void Sequencer::FireRatchetEvent(const RatchetEvent& ev) {
     SceneLock lock(patternMutex_, "Sequencer::FireRatchetEvent");
-    if (ev.isDrum) {
+    if (ev.pumpIndex >= 0) {
+        engine_->PumpFire(ev.pumpIndex);
+    } else if (ev.isDrum) {
         engine_->TriggerDrum(ev.drumSlot, ev.velocity, ev.drumVariant, ev.drumParams);
     } else if (ev.isSampler) {
         engine_->SamplerNoteOn(ev.synthNote, ev.velocity);

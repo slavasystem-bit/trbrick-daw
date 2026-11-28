@@ -62,7 +62,19 @@ void AudioEngine::PumpSourceHit(int sourceTrack) {
 }
 
 void AudioEngine::PumpTick(int tick, int stepsPerBeat) {
+    const unsigned mask = PumpBeatMask(tick, stepsPerBeat);
+    for (int p = 0; p < kNumPumps; ++p) if (mask & (1u << p)) PumpFire(p);
+}
+
+void AudioEngine::PumpFire(int p) {
+    if (p < 0 || p >= kNumPumps) return;
     std::lock_guard<std::mutex> lock(mutex_);
+    if (mixer_.fx.pumps[static_cast<size_t>(p)].on) pumpEnv_[static_cast<size_t>(p)].Trigger();
+}
+
+unsigned AudioEngine::PumpBeatMask(int tick, int stepsPerBeat) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unsigned mask = 0;
     const int spb = std::max(1, stepsPerBeat);
     for (int p = 0; p < kNumPumps; ++p) {
         const PumpSettings& ps = mixer_.fx.pumps[static_cast<size_t>(p)];
@@ -70,8 +82,9 @@ void AudioEngine::PumpTick(int tick, int stepsPerBeat) {
         // hits per beat: 1, 2 or 4. A grid step lands on such a hit when tick * perBeat is a whole multiple of the grid; on a
         // triplet grid (3 or 6 steps a beat) straight 1/8 and 1/16 hits fall between the steps, so only the ones on a step fire.
         const int perBeat = ps.source == kPumpSourceEvery4 ? 1 : (ps.source == kPumpSourceEvery8 ? 2 : 4);
-        if ((static_cast<long long>(tick) * perBeat) % spb == 0) pumpEnv_[static_cast<size_t>(p)].Trigger();
+        if ((static_cast<long long>(tick) * perBeat) % spb == 0) mask |= 1u << p;
     }
+    return mask;
 }
 
 void AudioEngine::PumpPrepareBlock(int numFrames, double samplesPerSixteenth) {

@@ -156,6 +156,7 @@ set(T8_UI_SOURCES
     src/ui_desktop/FxPanel.cpp
     src/ui_desktop/PianoRollPanel.cpp
     src/ui_desktop/MixLabPanel.cpp
+    src/ui_desktop/SidechainPanel.cpp
     src/ui_desktop/ChordLabPanel.cpp
     src/ui_desktop/Shell.cpp
 )

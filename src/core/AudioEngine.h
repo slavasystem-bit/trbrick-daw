@@ -77,6 +77,10 @@ public:
     // Sidechain pumps: the sequencer calls this on every grid step while it plays (`tick` = its step counter, `stepsPerBeat` =
     // the grid), which fires the pumps whose source is a steady beat (Every 1/4, 1/8, 1/16). See PumpSettings in Types.h.
     void PumpTick(int tick, int stepsPerBeat);
+    // The same split in two, so the sequencer can swing the off-beat hits: which steady-beat pumps land on this grid step
+    // (bit p = pump p), and fire pump p now (if it is still on).
+    unsigned PumpBeatMask(int tick, int stepsPerBeat);
+    void PumpFire(int p);
     // For the UI: how far pump p is down right now (0 = untouched, 1 = fully), updated once per audio block.
     // The UI's way to change the pumps: under the engine lock, so a drag in MIX LAB never lands half-copied in a Render block.
     void SetPumps(const std::array<PumpSettings, kNumPumps>& pumps) { std::lock_guard<std::mutex> lock(mutex_); mixer_.fx.pumps = pumps; }

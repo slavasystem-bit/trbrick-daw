@@ -595,6 +595,7 @@ private:
         std::array<int8_t, 6> chordNotes{};
         int chordCount = 0;
         bool slide = false;    // v39: a delayed main hit carries its legato / tie flag
+        int8_t pumpIndex = -1;       // sidechain: a steady-beat pump fired on a swung off-beat (see FireTick)
         bool isChordVoice = false;   // C2: one tone of the PLAY layer: voice >= 0 starts / releases it, voice -1 releases the whole pool
         int8_t chordVoice = -1;
         bool chordOn = false;

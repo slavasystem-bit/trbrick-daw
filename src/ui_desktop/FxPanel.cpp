@@ -2,7 +2,7 @@
 #include "KnobWidgets.h"
 #include "LiveWidgets.h"
 #include "ValueField.h"
-#include "core/MixAnalysis.h"
+#include "MixLabPanel.h"
 #include "Visual.h"
 #include "imgui.h"
 #include "InfoLine.h"
@@ -108,28 +108,17 @@ void FxPanel::Draw(AppState& app) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ---- SIDECHAIN: pump 1's Bass row (the full pumps editor comes with MIX LAB > SIDECHAIN) -------------
-    PumpSettings& p0 = fx.pumps[0];
-    const size_t bassRow = static_cast<size_t>(kNumDrumTracks);
-    char scTitle[96];
-    std::snprintf(scTitle, sizeof(scTitle), "SIDECHAIN  PUMP 1: %s -> Bass", p0.source < kNumTracks ? MixTrackName(p0.source) : "steady beat");
-    ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "%s", scTitle);
-    bool scOn = p0.on;
-    Check("ENABLED", &scOn);
-    ImGui::SameLine(0, 24);
-    float newScAmount = p0.depth[bassRow];
-    char scaBuf[8]; std::snprintf(scaBuf, sizeof(scaBuf), "%d%%", static_cast<int>(p0.depth[bassRow] * 100 + 0.5f));
-    KnobColumn("AMOUNT", scaBuf, [&] {
-        newScAmount = KnobAbsolute("sca", p0.depth[bassRow], 0.0f, 1.0f, "PUMP 1: BASS DOWN BY %.0f%%", kKnobSize, kFxDef.pumps[0].depth[bassRow], 100.0f);
-    });
-    ImGui::SameLine(0, 18);
-    float newScRelease = p0.releaseMs;
-    char screlBuf[12];
-    if (p0.releaseDiv >= 0) std::snprintf(screlBuf, sizeof(screlBuf), "%s", PumpReleaseDivName(p0.releaseDiv));
-    else std::snprintf(screlBuf, sizeof(screlBuf), "%dMS", static_cast<int>(p0.releaseMs + 0.5f));
-    KnobColumn("RELEASE", screlBuf, [&] {
-        newScRelease = KnobAbsolute("screl", p0.releaseMs, 10.0f, 1000.0f, "PUMP 1 RELEASE %.0fMS", kKnobSize, kFxDef.pumps[0].releaseMs, 1.0f);
-    });
+    // ---- SIDECHAIN: lives in MIX LAB > SIDECHAIN (4 pumps); here only where it went and how it stands ----------------
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "SIDECHAIN");
+        int on = 0;
+        for (const auto& pp : fx.pumps) if (pp.on) ++on;
+        ImGui::SameLine(0, 12);
+        ImGui::TextDisabled(on ? "%d pump(s) on - edited in MIX LAB > SIDECHAIN" : "all pumps off - edited in MIX LAB > SIDECHAIN", on);
+        ImGui::SameLine(0, 12);
+        if (ImGui::Button("OPEN SIDECHAIN")) { MixLabPanel::requestSidechain = true; app.OpenTool(AppState::Tool::MixLab); }
+        if (ImGui::IsItemHovered()) Hint("SIDECHAIN moved to MIX LAB: up to 4 pumps, any instrument or a steady beat turning any instruments down.");
+    }
 
     // Single sync point at the end -- same "mutate the project copy, push
     // once to the live Mixer::fx copy" shape FxView.cpp's AdjustFxParam
@@ -138,8 +127,7 @@ void FxPanel::Draw(AppState& app) {
     // app.project.fx by reference).
     bool changed = (newFeedback != fx.delayFeedback) || (newTone != fx.delayTone) || (newPing != fx.delayPingPong) || (newDelayLevel != fx.delayLevel) ||
                    (newSize != fx.reverbSize) || (newRevLevel != fx.reverbLevel) || (newDamp != fx.reverbDamp) || (newPre != fx.reverbPreMs) ||
-                   (newDrive != fx.distortionDrive) || (scOn != p0.on) ||
-                   (newScAmount != p0.depth[bassRow]) || (newScRelease != p0.releaseMs);
+                   (newDrive != fx.distortionDrive);
     if (changed) app.PushSoundUndo();
     fx.delayFeedback = newFeedback;
     fx.delayTone = newTone;
@@ -150,10 +138,6 @@ void FxPanel::Draw(AppState& app) {
     fx.reverbDamp = newDamp;
     fx.reverbPreMs = newPre;
     fx.distortionDrive = newDrive;
-    if (newScRelease != p0.releaseMs) p0.releaseDiv = -1;   // turning the knob means milliseconds again
-    p0.on = scOn;
-    p0.depth[bassRow] = newScAmount;
-    p0.releaseMs = newScRelease;
     if (changed) {
         app.engine.GetMixer().fx = fx;
     }
