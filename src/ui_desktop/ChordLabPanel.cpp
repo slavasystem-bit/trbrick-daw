@@ -3,12 +3,15 @@
 #include "LiveWidgets.h"
 #include "InfoLine.h"
 #include "ValueField.h"
+#include "StepGlyphs.h"
+#include "TrackStyle.h"
 #include "core/ChordProgressions.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <mutex>
+#include <numeric>
 #include <string>
 
 namespace t8::desktop {
@@ -37,6 +40,10 @@ void Wrap(ImDrawList* dl, ImVec2 p, float maxW, ImU32 col, const std::string& te
 
 int PerBar(const Pattern& pat) { return std::max(1, 4 * pat.stepsPerBeat); }
 int PerBeat(const Pattern& pat) { return std::max(1, pat.stepsPerBeat); }
+// C3 chord grid: the chord loop is the chord track's length, as the sequencer plays it (the scene's LEN unless set apart with LEN).
+// Nothing in CHORD LAB changes it any more except the LEN choice (no growing when a chord is dropped or recorded past the end).
+constexpr int kSynthRows = kNumSynthTracks;   // the rows of notes under the chords
+int TrackLoop(const Track& t, const Pattern& p) { return std::clamp(t.useOwnLength ? t.length : p.masterLength, 1, kMaxSteps); }
 
 }  // namespace
 
@@ -151,18 +158,12 @@ void ChordLabPanel::Carve(Track& tr, int start, int end) {
     }
 }
 
-static void FitLoop(Track& tr, int perBar) {
-    int end = 0;
-    for (int j = 0; j < kMaxSteps; ++j) { const Step& s = tr.steps[static_cast<size_t>(j)]; if (s.active && s.chordSize > 0) end = std::max(end, j + std::max(1, static_cast<int>(s.lengthSteps))); }
-    int len = std::max(perBar, ((end + perBar - 1) / perBar) * perBar);
-    tr.useOwnLength = true; tr.length = std::min(len, kMaxSteps);
-}
-
 void ChordLabPanel::Place(AppState& app, const LabChord& c, int start, int len) {
     SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
-    start = std::clamp(start, 0, kMaxSteps - 1);
-    len = std::clamp(len, 1, kMaxSteps - start);
+    const int loop = TrackLoop(JamTrack(app), pat);
+    if (start < 0 || start >= loop) return;   // C3: a chord goes inside the loop or nowhere (the loop does not grow)
+    len = std::clamp(len, 1, loop - start);
     BeginEdit(app);
     Track& tr = JamTrack(app);
     Carve(tr, start, start + len);
@@ -171,7 +172,6 @@ void ChordLabPanel::Place(AppState& app, const LabChord& c, int start, int len) 
     s.chordSize = static_cast<uint8_t>(std::min<int>(kMaxChordVoices, static_cast<int>(n.size())));
     for (int i = 0; i < kMaxChordVoices; ++i) s.chordNotes[static_cast<size_t>(i)] = static_cast<int8_t>(i < s.chordSize ? n[static_cast<size_t>(i)] : 0);
     tr.steps[static_cast<size_t>(start)] = s;
-    FitLoop(tr, PerBar(pat));
     const std::vector<Blk> bl = Blocks(tr);
     for (size_t i = 0; i < bl.size(); ++i) if (bl[i].start == start) selBlock_ = static_cast<int>(i);
 }
@@ -183,13 +183,13 @@ void ChordLabPanel::Resize(AppState& app, int bi, int newEnd) {
     const std::vector<Blk> bl = Blocks(tr);
     if (bi < 0 || bi >= static_cast<int>(bl.size())) return;
     const Blk b = bl[static_cast<size_t>(bi)];
-    const int beat = PerBeat(pat);
-    newEnd = std::clamp(newEnd, b.start + beat, kMaxSteps);
+    const int step = 1;   // C3: lengths snap to a step, as in the sequencer
+    newEnd = std::clamp(newEnd, b.start + step, std::max(b.start + step, TrackLoop(tr, pat)));
     if (bi + 1 < static_cast<int>(bl.size())) {
         const Blk nb = bl[static_cast<size_t>(bi) + 1];
         const int nbEnd = nb.start + nb.len;
         if (b.start + b.len == nb.start) {                       // neighbours: the edge between them moves
-            newEnd = std::min(newEnd, nbEnd - beat);
+            newEnd = std::min(newEnd, nbEnd - step);
             if (newEnd != nb.start) {
                 Step moved = tr.steps[static_cast<size_t>(nb.start)];
                 tr.steps[static_cast<size_t>(nb.start)] = Step{};
@@ -199,7 +199,52 @@ void ChordLabPanel::Resize(AppState& app, int bi, int newEnd) {
         } else newEnd = std::min(newEnd, nb.start);
     }
     tr.steps[static_cast<size_t>(b.start)].lengthSteps = static_cast<uint8_t>(newEnd - b.start);
-    FitLoop(tr, PerBar(pat));
+}
+
+// C3: a chord dragged to another step (with Option: a copy). It takes the room it lands on (the chords there give way, as when a chord
+// is dropped from the palette) and never leaves the loop. One undo step.
+void ChordLabPanel::MoveBlock(AppState& app, int bi, int to, bool copy) {
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
+    const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
+    {   // nothing moves (a key at the edge of the loop, a drop on the same step): no undo step
+        const Track& cur = JamTrack(app);
+        const std::vector<Blk> cb = Blocks(cur);
+        if (bi < 0 || bi >= static_cast<int>(cb.size())) return;
+        const Blk b = cb[static_cast<size_t>(bi)];
+        if (std::clamp(to, 0, std::max(0, TrackLoop(cur, pat) - b.len)) == b.start) return;
+    }
+    BeginEdit(app);
+    Track& tr = JamTrack(app);   // the draft slot when this change started the draft
+    const std::vector<Blk> bl = Blocks(tr);
+    if (bi >= static_cast<int>(bl.size())) return;
+    const Blk b = bl[static_cast<size_t>(bi)];
+    const int loop = TrackLoop(tr, pat);
+    to = std::clamp(to, 0, std::max(0, loop - b.len));
+    if (to == b.start) return;
+    const int len = std::max(1, std::min(b.len, loop - to));
+    Step s = tr.steps[static_cast<size_t>(b.start)];
+    if (!copy) tr.steps[static_cast<size_t>(b.start)] = Step{};
+    Carve(tr, to, to + len);
+    s.lengthSteps = static_cast<uint8_t>(len);
+    tr.steps[static_cast<size_t>(to)] = s;
+    const std::vector<Blk> nb = Blocks(tr);
+    for (size_t i = 0; i < nb.size(); ++i) if (nb[i].start == to) selBlock_ = static_cast<int>(i);
+}
+
+// C3: LEN of the chord loop. 0 = the scene's length (and it follows the scene's LEN from then on); otherwise the chord track's own
+// length, the same setting as the track length of the Chord row in the sequencer. Chords past the end stay but are not played.
+void ChordLabPanel::SetLoopLen(AppState& app, int len) {
+    SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
+    const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
+    {   // the length it already has: no undo step
+        const Track& cur = JamTrack(app);
+        const bool scene = len <= 0 || len == pat.masterLength;
+        if (scene ? !cur.useOwnLength : (cur.useOwnLength && cur.length == std::clamp(len, 1, kMaxSteps))) return;
+    }
+    BeginEdit(app);
+    Track& tr = JamTrack(app);
+    if (len <= 0 || len == pat.masterLength) { tr.useOwnLength = false; tr.length = std::clamp(pat.masterLength, 1, kMaxSteps); }
+    else { tr.useOwnLength = true; tr.length = std::clamp(len, 1, kMaxSteps); }
 }
 
 void ChordLabPanel::Split(AppState& app, int bi) {
@@ -222,14 +267,12 @@ void ChordLabPanel::Split(AppState& app, int bi) {
 
 void ChordLabPanel::DeleteBlock(AppState& app, int bi) {
     SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
-    const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
     Track& tr = JamTrack(app);
     const std::vector<Blk> bl = Blocks(tr);
     if (bi < 0 || bi >= static_cast<int>(bl.size())) return;
     BeginEdit(app);
     Track& et = JamTrack(app);
     et.steps[static_cast<size_t>(bl[static_cast<size_t>(bi)].start)] = Step{};
-    FitLoop(et, PerBar(pat));
     selBlock_ = -1;
 }
 
@@ -237,8 +280,7 @@ void ChordLabPanel::ClearJam(AppState& app) {
     SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
     BeginEdit(app);
     Track& tr = JamTrack(app);
-    for (Step& s : tr.steps) s = Step{};
-    tr.useOwnLength = false;
+    for (Step& s : tr.steps) s = Step{};   // C3: the length stays (only LEN changes it)
     selBlock_ = -1;
 }
 
@@ -246,18 +288,22 @@ void ChordLabPanel::StartFrom(AppState& app, int pi) {
     const auto& all = AllChordProgressions();
     if (pi < 0 || pi >= static_cast<int>(all.size())) return;
     const Pattern& pat = app.project.patterns[static_cast<size_t>(SceneShown(app))];
-    const int len = DefaultLen(app);
     const int row = 0;   // C2 part 3b: START FROM writes triads (the 7TH / TRIAD setting of the old CHORDS tab is gone)
     {
         SceneLock lock(app.sequencer.PatternMutex(), "CHORD LAB");
         BeginEdit(app);
         Track& tr = JamTrack(app);
         for (Step& s : tr.steps) s = Step{};
+        // C3: the progression is fitted into the loop (it does not make the loop longer): shorter chords when they do not fit
+        const int loop = TrackLoop(tr, pat), beat = PerBeat(pat);
+        const int count = static_cast<int>(all[static_cast<size_t>(pi)].degrees.size());
+        int len = DefaultLen(app);
+        if (count > 0 && count * len > loop) { len = (loop / count / beat) * beat; if (len < 1) len = std::max(1, loop / count); }
         int at = 0;
         for (int d : all[static_cast<size_t>(pi)].degrees) {
             const LabChord* pick = nullptr;
             for (const LabChord& c : pal_) if (c.row == row && c.degree == d) pick = &c;
-            if (!pick || at + len > kMaxSteps) continue;
+            if (!pick || at + len > loop) continue;
             Step s; s.active = true; s.lengthSteps = static_cast<uint8_t>(len);
             const std::vector<int> n = pick->Notes(48);
             s.chordSize = static_cast<uint8_t>(std::min<int>(kMaxChordVoices, static_cast<int>(n.size())));
@@ -265,7 +311,6 @@ void ChordLabPanel::StartFrom(AppState& app, int pi) {
             tr.steps[static_cast<size_t>(at)] = s;
             at += len;
         }
-        FitLoop(tr, PerBar(pat));
     }
     selBlock_ = -1;
     app.SetStatus(std::string("CHORD LAB: STARTED FROM ") + all[static_cast<size_t>(pi)].name);
@@ -348,15 +393,16 @@ std::string NotesUnder(const Pattern& pat, const std::vector<int>& tracks, int f
 }  // namespace
 
 ChordLabPanel::Slot ChordLabPanel::AdviceSlot(const AppState& app, const Track& jam, const std::vector<Blk>& blocks) const {
-    (void)jam;
     Slot s;
     if (selBlock_ >= 0 && selBlock_ < static_cast<int>(blocks.size())) {
         s.start = blocks[static_cast<size_t>(selBlock_)].start; s.len = blocks[static_cast<size_t>(selBlock_)].len; s.block = selBlock_;
         return s;
     }
+    // C3: the room after the last chord, inside the loop; when the loop is full, the last chord
+    const int loop = TrackLoop(jam, app.project.patterns[static_cast<size_t>(SceneShown(app))]);
     s.start = blocks.empty() ? 0 : blocks.back().start + blocks.back().len;
-    s.len = DefaultLen(app);
-    if (s.start + s.len > kMaxSteps) { s.start = blocks.empty() ? 0 : blocks.back().start; s.len = blocks.empty() ? s.len : blocks.back().len; s.block = blocks.empty() ? -1 : static_cast<int>(blocks.size()) - 1; }
+    s.len = std::max(1, std::min(DefaultLen(app), loop - s.start));
+    if (s.start >= loop) { s.start = blocks.empty() ? 0 : blocks.back().start; s.len = blocks.empty() ? s.len : blocks.back().len; s.block = blocks.empty() ? -1 : static_cast<int>(blocks.size()) - 1; }
     return s;
 }
 
@@ -732,7 +778,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
 
     // what sounds now (the white frame)
     unsigned nowMask = 0; int nowRoot = -1;
-    const int loopSteps = std::max(perBar, jt.useOwnLength ? jt.length : pat.masterLength);
+    const int loopSteps = TrackLoop(jt, pat);
     if (app.sequencer.IsPlaying()) {
         const int pos = app.sequencer.ChordLoopPos(loopSteps);
         for (const Blk& b : blocks) if (pos >= b.start && pos < b.start + b.len) {
@@ -760,7 +806,7 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         Text(dl, ImVec2(o.x + rowLabelW + c * (chipW + gap) + chipW * 0.5f - TextW(rn, 11.0f) * 0.5f, o.y + y), vis::kTextDim, rn, 11.0f);
     }
     const float palTop = y + 16.0f;
-    const float loopMinH = 150.0f;
+    const float loopMinH = 205.0f;   // C3: the strip of the sequencer (ruler, Kick, chords, three rows of notes)
     const float chipH = std::clamp((H - palTop - 26.0f - loopMinH - gap * 3) / 4.0f, 24.0f, 48.0f);
     static const char* kRowName[4] = {"TRIADS", "7THS", "SUS \xC2\xB7 ADD", "BORROWED"};
     const char* rowNames[4] = {kRowName[0], nine_ ? "9THS" : kRowName[1], kRowName[2], kRowName[3]};
@@ -821,12 +867,21 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
         Text(dl, ImVec2(lx + 4, o.y + ly), vis::kTextDim, "dashed = borrowed    white frame = sounding now    bar = notes it holds", 11.0f);
     }
 
-    // ---- 2 THE LOOP
+    // ---- 2 THE LOOP. C3 chord grid: a piece of the sequencer. The same pages of 16 steps (12 on the triplet grids), the same step
+    // numbers and the same page as the grid of LIVE (AppState::deskStepPage), the chord track's own length (TrackLoop), Kick above
+    // the chords and the notes WHAT FITS reads below them. Nothing changes width when a chord is clicked, dropped or recorded.
     const float loopTop = palTop + 4 * (chipH + gap) + 24.0f;
-    const int ghostEnd = slot.block < 0 ? slot.start + slot.len : 0;
-    const int showSteps = std::min(kMaxSteps, std::max(loopSteps, ghostEnd));
+    const int gridSpb = ClampGrid(pat.stepsPerBeat);
+    const int pageSteps = PageStepsFor(gridSpb), groupSteps = GroupStepsFor(gridSpb);
+    int maxLen = pat.masterLength;   // the pages of the sequencer (SequencerPanel::Draw counts them the same way)
+    for (int ti = 0; ti < kNumTracks; ++ti) { const Track& t = app.StepTrack(pat, ti); if (t.useOwnLength) maxLen = std::max(maxLen, t.length); }
+    const int numPages = std::max(1, (maxLen + pageSteps - 1) / pageSteps);
+    app.deskStepPage = std::clamp(app.deskStepPage, 0, numPages - 1);
+    const int base = app.deskStepPage * pageSteps;
     {
-        char hd[64]; std::snprintf(hd, sizeof hd, "THE LOOP \xC2\xB7 %d BAR%s", std::max(1, loopSteps / perBar), loopSteps / perBar == 1 ? "" : "S");
+        char hd[64];
+        if (loopSteps % perBar == 0) std::snprintf(hd, sizeof hd, "THE LOOP \xC2\xB7 %d BAR%s", loopSteps / perBar, loopSteps / perBar == 1 ? "" : "S");
+        else std::snprintf(hd, sizeof hd, "THE LOOP \xC2\xB7 %d STEPS", loopSteps);
         Text(dl, ImVec2(o.x + 2, o.y + loopTop + 4), vis::kTextDim, hd, 12.0f);
         ImGui::SetCursorScreenPos(ImVec2(o.x + 130, o.y + loopTop));
         ImGui::BeginDisabled(readOnly);
@@ -836,115 +891,225 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
             for (int i = 0; i < static_cast<int>(progs.size()); ++i) if (ImGui::Selectable(progs[static_cast<size_t>(i)].name, false)) StartFrom(app, i);
             ChoiceEnd();
         }
-        if (ImGui::IsItemHovered()) Hint("Start the loop from a typical progression, in this key.");
+        if (ImGui::IsItemHovered()) Hint("Start the loop from a typical progression, in this key. It is fitted into the loop (shorter chords when it does not fit).");
         ImGui::SameLine(0, 4);
         {
             const bool rec = recLive_;
             if (rec) ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(170, 40, 48, 255));
             if (MiniButton(rec ? "\xE2\x97\x8F REC WHAT I PLAY" : "\xE2\x97\x8B REC WHAT I PLAY", 150.0f)) recLive_ = !recLive_;
             if (rec) ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered()) Hint("While the loop plays, a click on a chord sounds from the next beat until the next chord of the loop. With REC on, every chord you play that way is written into the loop where it sounded (each one undoable).");
+            if (ImGui::IsItemHovered()) Hint("While the loop plays, a click on a chord sounds from the next beat until the next chord of the loop. With REC on, every chord you play that way is written into the loop where it sounded (each one undoable). The loop keeps its length.");
         }
         ImGui::SameLine(0, 4);
         if (MiniButton("EMPTY", 58.0f)) ClearJam(app);
-        if (ImGui::IsItemHovered()) Hint("Take every chord out of the loop (undoable). The scene's own chords are not touched.");
+        if (ImGui::IsItemHovered()) Hint("Take every chord out of the loop (undoable). The scene's own chords and the length of the loop are not touched.");
         ImGui::SameLine(0, 4);
         const char* dls[3] = {"1/2 BAR", "1 BAR", "2 BARS"};
         ImGui::SetNextItemWidth(84.0f);
         Choice("##newlen", &defLen_, dls, 3, 84.0f);
-        if (ImGui::IsItemHovered()) Hint("Length of a chord that is dropped into the loop. Drag the orange edge of a block to change it afterwards.");
+        if (ImGui::IsItemHovered()) Hint("Length of a chord that is dropped into the loop. Drag the orange edge of a chord to change it afterwards.");
         ImGui::EndDisabled();
     }
-    const float bx0 = o.x + 2, bx1 = o.x + leftW - 2, by0 = o.y + loopTop + 28.0f, bh = std::max(80.0f, H - loopTop - 28.0f - 4.0f);
-    const float unit = (bx1 - bx0) / static_cast<float>(showSteps);
-    const float lineTop = by0 + 14.0f, lineH = std::min(30.0f, bh * 0.22f);   // the tension line above the blocks
-    const float blkTop = lineTop + lineH + 6.0f, blkBot = by0 + bh - 4.0f;
-    dl->AddRectFilled(ImVec2(bx0, by0), ImVec2(bx1, by0 + bh), IM_COL32(20, 22, 28, 255), 5.0f);
-    dl->AddRect(ImVec2(bx0, by0), ImVec2(bx1, by0 + bh), vis::kLine, 5.0f);
-    for (int s = 0; s <= showSteps; s += perBeat) {
-        const bool bar = (s % perBar) == 0;
-        dl->AddLine(ImVec2(bx0 + s * unit, by0), ImVec2(bx0 + s * unit, bar ? by0 + bh : by0 + 6.0f), bar ? vis::kLineHi : vis::kGrid, 1.0f);
-        if (bar && s < showSteps) { char n[12]; std::snprintf(n, sizeof n, "%d", s / perBar + 1); Text(dl, ImVec2(bx0 + s * unit + 4, by0 + 1), vis::kTextDim, n, 10.0f); }
+    {   // the second row: the page of steps (the same as on LIVE) and LEN of the chord loop
+        ImGui::SetCursorScreenPos(ImVec2(o.x + 2, o.y + loopTop + 28.0f));
+        const bool canPrev = app.deskStepPage > 0, canNext = app.deskStepPage < numPages - 1;
+        ImGui::BeginDisabled(!canPrev);
+        if (ImGui::ArrowButton("##loopPgPrev", ImGuiDir_Left)) app.deskStepPage--;
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, 6);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("STEPS %d-%d", base + 1, std::min(base + pageSteps, std::max(maxLen, base + 1)));
+        ImGui::SameLine(0, 6);
+        ImGui::BeginDisabled(!canNext);
+        if (ImGui::ArrowButton("##loopPgNext", ImGuiDir_Right)) app.deskStepPage++;
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("The page of steps: the same page as the grid of LIVE.");
+        if (numPages > 1) { ImGui::SameLine(0, 10); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("page %d/%d", app.deskStepPage + 1, numPages); }
+        ImGui::SameLine(0, 18);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("LEN");
+        ImGui::SameLine(0, 6);
+        char lenTxt[40];
+        if (jt.useOwnLength) std::snprintf(lenTxt, sizeof lenTxt, "%d \xC2\xB7 OWN", loopSteps);
+        else std::snprintf(lenTxt, sizeof lenTxt, "%d = SCENE", loopSteps);
+        ImGui::BeginDisabled(readOnly);
+        ImGui::SetNextItemWidth(110.0f);
+        if (ChoiceBegin("##looplen", lenTxt)) {
+            char it[48]; std::snprintf(it, sizeof it, "Same as the scene (%d)", pat.masterLength);
+            if (ImGui::Selectable(it, !jt.useOwnLength)) SetLoopLen(app, 0);
+            static const int kBars[4] = {1, 2, 4, 8};
+            for (int nb : kBars) {
+                const int len = nb * perBar;
+                if (len > kMaxSteps) break;
+                std::snprintf(it, sizeof it, "%d bar%s (%d)", nb, nb == 1 ? "" : "s", len);
+                if (ImGui::Selectable(it, jt.useOwnLength && jt.length == len)) SetLoopLen(app, len);
+            }
+            ChoiceEnd();
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) Hint("Length of the chord loop. = SCENE: as long as the scene (it follows the scene's LEN), so the chords meet the same notes every time round. A length of its own is the track length of the Chord row in the sequencer; chords past the end stay but are not played.");
     }
-    Text(dl, ImVec2(bx1 - TextW("tension", 10.0f) - 4, lineTop - 12), vis::kTextDim, "tension", 10.0f);
-    Text(dl, ImVec2(bx1 - TextW("home", 10.0f) - 4, lineTop + lineH - 12), vis::kTextDim, "home", 10.0f);
-    {   // the tension line: one level per block (home low, tension high)
+    const float bx0 = o.x + 2, bx1 = o.x + leftW - 2;
+    const float rulerY = o.y + loopTop + 58.0f, gridTop = rulerY + 15.0f, gridBot = o.y + H - 4.0f;
+    const float labelW = 50.0f, cellGap = 2.0f, groupGap = 6.0f;
+    const float cellW = std::max(6.0f, CellWidthFor(bx1 - bx0, labelW, cellGap, groupGap, pageSteps, groupSteps));
+    const PageGeom geom{bx0 + labelW, cellW, cellGap, groupGap, base, pageSteps, groupSteps};
+    const int pageEnd = base + pageSteps;
+    auto stepAtX = [&](float x) { return base + geom.ColAtX(x); };
+    // the part of the steps [s0, s1) on this page, as screen x; false when none of it is here
+    auto spanX = [&](int s0, int s1, float& x0, float& x1) {
+        const int a = std::max(s0, base), e = std::min(s1, pageEnd);
+        if (a >= e) return false;
+        x0 = geom.X(a - base); x1 = geom.X(e - 1 - base) + cellW;
+        return true;
+    };
+    const float rowsH = std::max(0.0f, gridBot - gridTop);
+    const float kickH = std::clamp(rowsH * 0.06f, 12.0f, 16.0f), noteH = std::clamp(rowsH * 0.06f, 10.0f, 16.0f), rowGap = 3.0f;
+    const float kickTop = gridTop;
+    const float lineTop = kickTop + kickH + 6.0f, lineH = std::clamp((gridBot - gridTop) * 0.12f, 12.0f, 24.0f);   // the tension line above the chords
+    const float blkTop = lineTop + lineH + 4.0f;
+    const float notesTop = gridBot - kSynthRows * (noteH + rowGap) + rowGap;
+    const float blkBot = std::max(blkTop + 30.0f, notesTop - 6.0f);
+    for (int c = 0; c < pageSteps; ++c) {   // the step numbers, as on the grid of LIVE
+        char n[16]; std::snprintf(n, sizeof n, "%d", base + c + 1);
+        Text(dl, ImVec2(geom.X(c) + 2, rulerY), c % groupSteps == 0 ? vis::kText : vis::kTextDim, n, c % groupSteps == 0 ? 11.0f : 10.0f);
+    }
+    auto cellCol = [&](int s) { return s >= loopSteps ? IM_COL32(22, 23, 30, 255) : (((s / groupSteps) & 1) ? IM_COL32(36, 38, 52, 255) : IM_COL32(42, 44, 58, 255)); };
+    auto rowLabel = [&](float y, float h, const std::string& name, ImU32 col) { Text(dl, ImVec2(bx0, y + h * 0.5f - 6.0f), col, name.c_str(), 11.0f); };
+    {   // Kick (shown, not edited here)
+        const Track& kt = app.StepTrack(pat, 0);
+        rowLabel(kickTop, kickH, TrackDisplayName(kt), vis::kTextDim);
+        const int klen = std::max(1, kt.useOwnLength ? kt.length : pat.masterLength);
+        for (int c = 0; c < pageSteps; ++c) {
+            const int st = base + c;
+            const bool hit = st < kMaxSteps && kt.steps[static_cast<size_t>(st)].active && st < klen;
+            dl->AddRectFilled(ImVec2(geom.X(c), kickTop), ImVec2(geom.X(c) + cellW, kickTop + kickH), hit ? TrackColor(0) : cellCol(st), 3.0f);
+        }
+    }
+    for (int r = 0; r < kSynthRows; ++r) {   // the notes under the chords (BASS / SYN 2 / SYN 3; the ones WHAT FITS reads are bright)
+        const int ti = kNumDrumTracks + r;
+        const Track& t = app.StepTrack(pat, ti);
+        const float y = notesTop + r * (noteH + rowGap);
+        const bool used = (srcMask_ & (1 << r)) != 0;
+        rowLabel(y, noteH, TrackDisplayName(t), used ? vis::kTextDim : IM_COL32(90, 90, 104, 255));
+        for (int c = 0; c < pageSteps; ++c) dl->AddRectFilled(ImVec2(geom.X(c), y), ImVec2(geom.X(c) + cellW, y + noteH), cellCol(base + c), 2.0f);
+        const int tlen = std::max(1, t.useOwnLength ? t.length : pat.masterLength);
+        const ImU32 col = (TrackColor(ti) & ~IM_COL32_A_MASK) | (static_cast<ImU32>(used ? 230 : 90) << IM_COL32_A_SHIFT);
+        for (int j = 0; j < std::min(tlen, kMaxSteps); ++j) {
+            const Step& st = t.steps[static_cast<size_t>(j)];
+            if (!st.active) continue;
+            float x0, x1;
+            if (spanX(j, j + StepSpan(st, j, tlen), x0, x1)) dl->AddRectFilled(ImVec2(x0, y + 1), ImVec2(x1, y + noteH - 1), col, 2.0f);
+        }
+    }
+    rowLabel(blkTop, blkBot - blkTop, "Chord", IM_COL32(201, 184, 255, 255));
+    for (int c = 0; c < pageSteps; ++c) dl->AddRectFilled(ImVec2(geom.X(c), blkTop), ImVec2(geom.X(c) + cellW, blkBot), cellCol(base + c), 3.0f);
+    if (loopSteps > base && loopSteps < pageEnd) {   // the end of the loop on this page
+        const float ex = geom.X(loopSteps - base) - (cellGap + ((loopSteps - base) % groupSteps == 0 ? groupGap : 0.0f)) * 0.5f;
+        dl->AddLine(ImVec2(ex, rulerY), ImVec2(ex, gridBot), vis::kAccent, 1.5f);
+    }
+    Text(dl, ImVec2(bx1 - TextW("tension", 10.0f) - 4, lineTop - 2), vis::kTextDim, "tension", 10.0f);
+    Text(dl, ImVec2(bx1 - TextW("home", 10.0f) - 4, lineTop + lineH - 10), vis::kTextDim, "home", 10.0f);
+    {   // the tension line: one level per chord (home low, tension high)
         ImVec2 last(-1, -1);
         for (const Blk& b : blocks) {
             const Step& st = jt.steps[static_cast<size_t>(b.start)];
             LabChord lc = LabChordFromNotes(st.chordNotes.data(), st.chordSize);
             int deg = 0; for (const LabChord& pc : pal_) if (pc.root == lc.root && LabMask(pc) == LabMask(lc)) { deg = pc.degree; break; }
             lc.degree = deg;
+            float x0, x1;
+            if (!spanX(b.start, b.start + b.len, x0, x1)) { last = ImVec2(-1, -1); continue; }
             const float lv = LabFnLevel(LabFunctionOf(lc, key, scale));
             const float yy = lineTop + lineH * (1.0f - lv);
-            const ImVec2 p0(bx0 + b.start * unit, yy), p1(bx0 + (b.start + b.len) * unit, yy);
-            if (last.x >= 0) dl->AddLine(last, ImVec2(p0.x, p0.y), vis::kViolet, 2.0f);
-            dl->AddLine(p0, p1, vis::kViolet, 2.0f);
-            last = p1;
+            if (last.x >= 0) dl->AddLine(last, ImVec2(x0, yy), vis::kViolet, 2.0f);
+            dl->AddLine(ImVec2(x0, yy), ImVec2(x1, yy), vis::kViolet, 2.0f);
+            last = ImVec2(x1, yy);
         }
     }
-    const bool overLoop = !readOnly && mouse.x >= bx0 && mouse.x <= bx1 && mouse.y >= by0 && mouse.y <= by0 + bh;
+    const bool overLoop = !readOnly && mouse.x >= geom.x0 && mouse.x <= bx1 && mouse.y >= blkTop - 8.0f && mouse.y <= blkBot + 8.0f;
+    if (moveBlk_ >= static_cast<int>(blocks.size()) || readOnly) moveBlk_ = -1;
     int newSel = -2;
     for (size_t i = 0; i < blocks.size(); ++i) {
         const Blk& b = blocks[i];
+        float x0, x1;
+        if (!spanX(b.start, b.start + b.len, x0, x1)) continue;   // on another page
+        const bool startsHere = b.start >= base, endsHere = b.start + b.len <= pageEnd;
         const Step& st = jt.steps[static_cast<size_t>(b.start)];
         LabChord lc = LabChordFromNotes(st.chordNotes.data(), st.chordSize);
         std::string roman;
         for (const LabChord& pc : pal_) if (pc.root == lc.root && LabMask(pc) == LabMask(lc)) { lc.degree = pc.degree; roman = pc.roman; break; }
         const LabFn fn = LabFunctionOf(lc, key, scale);
-        const ImVec2 a(bx0 + b.start * unit + 2, blkTop), e(bx0 + (b.start + b.len) * unit - 2, blkBot);
+        const ImVec2 a(x0, blkTop), e(x1, blkBot);
+        const bool past = b.start >= loopSteps;   // after the end of the loop: kept, not played
+        const bool editEdge = !readOnly && endsHere;
         ImGui::SetCursorScreenPos(a);
         const ImGuiID blkMenuId = ImGui::GetID("##blkmenu");   // the id BeginPopup("##blkmenu") below uses (outside the PushID of the block)
         ImGui::PushID(1000 + static_cast<int>(i));
-        ImGui::InvisibleButton("##blk", ImVec2(std::max(4.0f, e.x - a.x - 9.0f), e.y - a.y));
+        ImGui::InvisibleButton("##blk", ImVec2(std::max(4.0f, e.x - a.x - (editEdge ? 8.0f : 0.0f)), e.y - a.y));
         const bool hov = ImGui::IsItemHovered();
         if (ImGui::IsItemClicked(0)) newSel = static_cast<int>(i);
         if (!readOnly && ImGui::IsItemClicked(1)) { selBlock_ = static_cast<int>(i); ImGui::OpenPopup(blkMenuId); }
+        if (!readOnly && ImGui::IsItemActive() && ImGui::IsMouseDragging(0, 4.0f) && moveBlk_ < 0 && resizeBlk_ < 0) {
+            moveBlk_ = static_cast<int>(i);
+            moveGrab_ = stepAtX(ImGui::GetIO().MouseClickedPos[0].x) - b.start;
+        }
+        if (hov || moveBlk_ == static_cast<int>(i)) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         const bool sel = selBlock_ == static_cast<int>(i);
-        dl->AddRectFilled(a, e, FnFill(fn), 5.0f);
-        if (lc.degree == 0) DashedRect(dl, a, e, FnEdge(fn)); else dl->AddRect(a, e, FnEdge(fn), 5.0f);
-        if (sel) dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(e.x + 1, e.y + 1), vis::kAccent, 5.0f, 0, 2.0f);
-        Text(dl, ImVec2(a.x + 8, a.y + 5), vis::kText, lc.name.c_str(), 18.0f);
+        const float ra = startsHere ? 5.0f : 0.0f;
+        dl->AddRectFilled(a, e, FnFill(fn), ra);
+        if (lc.degree == 0) DashedRect(dl, a, e, FnEdge(fn)); else dl->AddRect(a, e, FnEdge(fn), ra);
+        if (past) dl->AddRectFilled(a, e, IM_COL32(16, 17, 22, 170), ra);
+        if (moveBlk_ == static_cast<int>(i)) dl->AddRectFilled(a, e, IM_COL32(16, 17, 22, 140), ra);   // where it was
+        if (sel) dl->AddRect(ImVec2(a.x - 1, a.y - 1), ImVec2(e.x + 1, e.y + 1), vis::kAccent, ra, 0, 2.0f);
+        dl->PushClipRect(a, ImVec2(e.x - 2, e.y), true);
+        Text(dl, ImVec2(a.x + 6, a.y + 4), vis::kText, startsHere ? lc.name.c_str() : (lc.name + " \xE2\x80\xA6").c_str(), e.y - a.y > 40.0f ? 17.0f : 14.0f);
         {
             char sub[64]; const float bars = static_cast<float>(b.len) / perBar;
             const std::string rn = roman.empty() ? std::string("") : roman + " \xC2\xB7 ";
-            if (bars >= 1.0f && std::fabs(bars - std::round(bars)) < 0.01f) std::snprintf(sub, sizeof sub, "%s%d bar%s", rn.c_str(), static_cast<int>(std::round(bars)), std::round(bars) == 1.0f ? "" : "s");
-            else std::snprintf(sub, sizeof sub, "%s%d/%d bar", rn.c_str(), std::max(1, b.len), perBar);
-            if (e.y - a.y > 44.0f) Text(dl, ImVec2(a.x + 8, a.y + 27), IM_COL32(200, 196, 230, 220), sub, 11.0f);
+            if (past) std::snprintf(sub, sizeof sub, "after the loop end: not played");
+            else if (bars >= 1.0f && std::fabs(bars - std::round(bars)) < 0.01f) std::snprintf(sub, sizeof sub, "%s%d bar%s", rn.c_str(), static_cast<int>(std::round(bars)), std::round(bars) == 1.0f ? "" : "s");
+            else { const int n = std::max(1, b.len), g = std::gcd(n, perBar); std::snprintf(sub, sizeof sub, "%s%d/%d bar", rn.c_str(), n / g, perBar / g); }
+            if (e.y - a.y > 44.0f) Text(dl, ImVec2(a.x + 6, a.y + 25), IM_COL32(200, 196, 230, 220), sub, 11.0f);
         }
-        {   // the notes under THIS block that THIS chord holds
+        {   // the notes under THIS chord that THIS chord holds
             LabChord tmp = lc;
             const LabMelody under = LabMelodyFromRange(pat, SrcTracks(), b.start, b.start + b.len);
             LabFitOne(tmp, under);
             const float w = e.x - a.x - 12.0f;
             if (under.notes > 0 && e.y - a.y > 56.0f) {
-                Bar(dl, ImVec2(a.x + 8, e.y - 12), std::min(60.0f, w * 0.3f), 3.0f, tmp.fit, vis::kTeal);
+                Bar(dl, ImVec2(a.x + 6, e.y - 12), std::min(60.0f, w * 0.3f), 3.0f, tmp.fit, vis::kTeal);
                 char fb[32]; std::snprintf(fb, sizeof fb, "%d of %d notes", tmp.covered, under.notes);
-                if (w > 140.0f) Text(dl, ImVec2(a.x + 14 + std::min(60.0f, w * 0.3f), e.y - 18), IM_COL32(214, 210, 236, 230), fb, 11.0f);
+                if (w > 140.0f) Text(dl, ImVec2(a.x + 12 + std::min(60.0f, w * 0.3f), e.y - 18), IM_COL32(214, 210, 236, 230), fb, 11.0f);
             }
         }
-        if (hov && !ImGui::IsMouseDown(0)) Hint("%s (%s)  -  click: select it (WHAT FITS shows what could stand here)  -  drag the orange edge: length  -  right-click: length, split, delete", lc.name.c_str(), LabFnName(fn));
-        if (!readOnly) {   // the length handle
+        dl->PopClipRect();
+        if (hov && !ImGui::IsMouseDown(0)) Hint("%s (%s)  -  click: select it (WHAT FITS shows what could stand here)  -  drag: move it (Option copies)  -  drag the orange edge: length  -  Left / Right: move the selected chord by a step  -  right-click: length, split, delete", lc.name.c_str(), LabFnName(fn));
+        if (editEdge) {   // the length handle (on the page where the chord ends)
             const ImVec2 ha(e.x - 7, a.y), hb(e.x, e.y);
             ImGui::SetCursorScreenPos(ha);
             ImGui::InvisibleButton("##edge", ImVec2(7.0f, e.y - a.y));
             const bool hh = ImGui::IsItemHovered() || resizeBlk_ == static_cast<int>(i);
-            if (ImGui::IsItemHovered()) { ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); if (!ImGui::IsMouseDown(0)) Hint("Drag to make the chord longer or shorter. The next chord gives way (one beat is the smallest)."); }
-            dl->AddRectFilled(ImVec2(ha.x + 1, ha.y + 10), ImVec2(hb.x - 1, hb.y - 10), hh ? vis::kAccentHi : vis::kAccent, 3.0f);
-            if (ImGui::IsItemActivated()) { resizeBlk_ = static_cast<int>(i); BeginEdit(app); }
+            if (ImGui::IsItemHovered()) { ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); if (!ImGui::IsMouseDown(0)) Hint("Drag to make the chord longer or shorter, step by step. The next chord gives way."); }
+            dl->AddRectFilled(ImVec2(ha.x + 1, ha.y + 8), ImVec2(hb.x - 1, hb.y - 8), hh ? vis::kAccentHi : vis::kAccent, 3.0f);
+            if (ImGui::IsItemActivated() && moveBlk_ < 0) { resizeBlk_ = static_cast<int>(i); BeginEdit(app); }
             if (resizeBlk_ == static_cast<int>(i) && ImGui::IsItemActive()) {
-                const int target = static_cast<int>(std::round((mouse.x - bx0) / unit / perBeat)) * perBeat;
+                const int target = stepAtX(mouse.x) + 1;   // the step under the mouse is the last one the chord holds (as in the sequencer)
                 if (target != b.start + b.len) Resize(app, static_cast<int>(i), target);
             }
             if (resizeBlk_ == static_cast<int>(i) && !ImGui::IsMouseDown(0)) resizeBlk_ = -1;
         }
         ImGui::PopID();
     }
-    if (slot.block < 0 && !readOnly) {   // the place WHAT FITS is about: the room after the last chord
-        const ImVec2 a(bx0 + slot.start * unit + 2, blkTop), e(bx0 + (slot.start + slot.len) * unit - 2, blkBot);
-        DashedRect(dl, a, e, vis::kAccent);
-        Text(dl, ImVec2(a.x + 8, a.y + 5), vis::kAccent, blocks.empty() ? "first chord" : "next chord ?", 15.0f);
-        if (e.y - a.y > 44.0f) Text(dl, ImVec2(a.x + 8, a.y + 27), vis::kTextDim, "drop here", 11.0f);
+    if (slot.block < 0 && !readOnly) {   // the place WHAT FITS is about: the room after the last chord (always inside the loop)
+        float x0, x1;
+        if (spanX(slot.start, slot.start + slot.len, x0, x1)) {
+            const ImVec2 a(x0, blkTop), e(x1, blkBot);
+            DashedRect(dl, a, e, vis::kAccent);
+            dl->PushClipRect(a, e, true);
+            Text(dl, ImVec2(a.x + 6, a.y + 4), vis::kAccent, blocks.empty() ? "first chord" : "next chord ?", 14.0f);
+            if (e.y - a.y > 44.0f) Text(dl, ImVec2(a.x + 6, a.y + 25), vis::kTextDim, "drop here", 11.0f);
+            dl->PopClipRect();
+        }
     }
     if (newSel >= 0) {
         selBlock_ = newSel == selBlock_ ? -1 : newSel;   // a second click lets go: WHAT FITS goes back to the room after the loop
@@ -959,10 +1124,49 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
             app.engine.ChordAuditionOn(nn, cnt, 0.85f); auditionUntil_ = ImGui::GetTime() + 0.9;
         }
     }
-    if (blocks.empty() && readOnly) Text(dl, ImVec2(bx0 + 10, blkTop + 10), vis::kTextDim, "The scene has no chords of its own.", 13.0f);
+    if (moveBlk_ >= 0) {   // C3: a chord dragged to another step: the orange frame shows where it lands (Option: a copy)
+        const Blk& b = blocks[static_cast<size_t>(moveBlk_)];
+        const int to = std::clamp(stepAtX(mouse.x) - moveGrab_, 0, std::max(0, loopSteps - b.len));
+        const bool copy = ImGui::GetIO().KeyAlt;
+        float x0, x1;
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        if (spanX(to, to + std::min(b.len, loopSteps - to), x0, x1)) {
+            fg->AddRectFilled(ImVec2(x0, blkTop - 3), ImVec2(x1, blkBot + 3), IM_COL32(242, 163, 61, 50), 5.0f);
+            fg->AddRect(ImVec2(x0, blkTop - 3), ImVec2(x1, blkBot + 3), vis::kAccent, 5.0f, 0, 2.0f);
+            if (copy) fg->AddText(ImVec2(x0 + 6, blkBot - 18), vis::kAccentHi, "+ copy");
+        }
+        Hint("Step %d%s  -  let go to put it there  -  Option: copy  -  the chords it lands on give way", to + 1, copy ? " (copy)" : "");
+        if (!ImGui::IsMouseDown(0)) {
+            if (to != b.start) MoveBlock(app, moveBlk_, to, copy);
+            moveBlk_ = -1;
+        }
+    }
+    if (!readOnly && moveBlk_ < 0 && resizeBlk_ < 0 && selBlock_ >= 0 && selBlock_ < static_cast<int>(blocks.size())) {   // C3: Left / Right move the selected chord
+        const ImGuiIO& io = ImGui::GetIO();
+        const bool free = !io.WantTextInput && !io.KeyAlt && !interaction::IsCmd() && !ImGui::IsAnyItemActive() &&
+                          !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        if (free) {
+            const int by = io.KeyShift ? perBeat : 1;   // Shift: by a beat (as in the piano roll)
+            int d = 0;
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true)) d = -by;
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, true)) d = by;
+            if (d != 0) {
+                const Blk& b = blocks[static_cast<size_t>(selBlock_)];
+                MoveBlock(app, selBlock_, b.start + d, false);
+                app.rollKeysFrame = ImGui::GetFrameCount();   // the instrument block does not take the same key
+            }
+            ImGui::SetKeyOwner(ImGuiKey_LeftArrow, ImGuiKeyOwner_Any, ImGuiInputFlags_LockThisFrame);
+            ImGui::SetKeyOwner(ImGuiKey_RightArrow, ImGuiKeyOwner_Any, ImGuiInputFlags_LockThisFrame);
+        }
+    }
+    if (blocks.empty() && readOnly) Text(dl, ImVec2(geom.x0 + 10, blkTop + 10), vis::kTextDim, "The scene has no chords of its own.", 13.0f);
     if (app.sequencer.IsPlaying()) {   // the playhead: the chord loop runs on its own length
         const int pos = app.sequencer.ChordLoopPos(loopSteps);
-        dl->AddLine(ImVec2(bx0 + pos * unit, by0), ImVec2(bx0 + pos * unit, by0 + bh), IM_COL32(255, 255, 255, 190), 2.0f);
+        if (pos >= base && pos < pageEnd) {
+            const float px = geom.X(pos - base);
+            dl->AddRectFilled(ImVec2(px, rulerY + 12), ImVec2(px + cellW, rulerY + 14), IM_COL32(255, 255, 255, 220));
+            dl->AddLine(ImVec2(px, kickTop), ImVec2(px, gridBot), IM_COL32(255, 255, 255, 190), 2.0f);
+        }
     }
     if (ImGui::BeginPopup("##blkmenu")) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ImGui::CloseCurrentPopup();   // Esc closes the menu (the keys wait while it is open)
@@ -988,14 +1192,16 @@ void ChordLabPanel::Draw(AppState& app, float W, float H) {
             fg->AddRectFilled(a, ImVec2(a.x + chipW, a.y + chipH), FnFill(fn), 5.0f);
             fg->AddRect(a, ImVec2(a.x + chipW, a.y + chipH), vis::kAccent, 5.0f, 0, 2.0f);
             ImGui::PushFont(nullptr, 15.0f); fg->AddText(ImVec2(a.x + 7, a.y + 4), vis::kText, dc->name.c_str()); ImGui::PopFont();
-            const int s = std::clamp(static_cast<int>(std::floor((mouse.x - bx0) / unit / perBeat)) * perBeat, 0, std::max(0, showSteps - perBeat));
-            const int ln = std::min(DefaultLen(app), kMaxSteps - s);
-            if (overLoop) {
-                fg->AddRectFilled(ImVec2(bx0 + s * unit, blkTop), ImVec2(bx0 + (s + ln) * unit, blkBot), IM_COL32(242, 163, 61, 50), 5.0f);
-                fg->AddRect(ImVec2(bx0 + s * unit, blkTop), ImVec2(bx0 + (s + ln) * unit, blkBot), vis::kAccent, 5.0f, 0, 2.0f);
+            const int s = (stepAtX(mouse.x) / perBeat) * perBeat;   // a dropped chord starts on a beat
+            const bool fits = overLoop && s < loopSteps;
+            const int ln = std::max(1, std::min(DefaultLen(app), loopSteps - s));
+            float x0, x1;
+            if (fits && spanX(s, s + ln, x0, x1)) {
+                fg->AddRectFilled(ImVec2(x0, blkTop), ImVec2(x1, blkBot), IM_COL32(242, 163, 61, 50), 5.0f);
+                fg->AddRect(ImVec2(x0, blkTop), ImVec2(x1, blkBot), vis::kAccent, 5.0f, 0, 2.0f);
             }
             if (!ImGui::IsMouseDown(0)) {
-                if (overLoop) { if (!app.sequencer.IsPlaying()) Audition(app, *dc); Place(app, *dc, s, ln); Select(dragRow_, dragCol_); }
+                if (fits) { if (!app.sequencer.IsPlaying()) Audition(app, *dc); Place(app, *dc, s, ln); Select(dragRow_, dragCol_); }
                 dragRow_ = dragCol_ = -1;
             }
         } else dragRow_ = dragCol_ = -1;
