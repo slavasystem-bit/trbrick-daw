@@ -39,6 +39,8 @@ private:
     void Carve(Track& tr, int start, int end);
     void Resize(AppState& app, int blockIndex, int newEnd);
     void Split(AppState& app, int blockIndex);
+    void MoveBlock(AppState& app, int blockIndex, int to, bool copy);
+    void SetLoopLen(AppState& app, int len);
     void DeleteBlock(AppState& app, int blockIndex);
     void StartFrom(AppState& app, int progression);
     void ListenAB(AppState& app, bool before);
@@ -73,6 +75,7 @@ private:
     int defLen_ = 1;                     // new block: 0 half a bar, 1 a bar, 2 two bars
     int dragRow_ = -1, dragCol_ = -1;    // a palette chip being dragged towards the loop
     int resizeBlk_ = -1;                 // a block edge being dragged
+    int moveBlk_ = -1, moveGrab_ = 0;    // C3: a block being dragged to another step (the step of the block under the mouse)
     double auditionUntil_ = 0.0;
     bool recLive_ = false;               // C2: REC WHAT I PLAY
     LabChord liveChord_;                 // the chord last played live (waits for the sequencer to start it)
