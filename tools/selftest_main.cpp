@@ -7903,6 +7903,17 @@ int main(int argc, char** argv) {
                               "src/ui_desktop/ContextPanel.cpp", "src/ui_desktop/BricksPanel.cpp", "src/ui_desktop/MixerSync.h"})
             if (slurp(f).find("std::lock_guard<SceneMutex>") != std::string::npos) { unnamed = true; std::cout << "  unnamed scene lock in " << f << "\n"; }
         check(!unnamed, "lock-5 names: the screen's scene locks all have a name (the XRUN hint never says OTHER for them)");
+        {   // LIVE-5 (Mac, after #53: BROWSERS held the sound 39 ms): the SAMPLES list is built before the scene lock, never inside it
+            const std::string bp = slurp("src/ui_desktop/BottomPanel.cpp"), sb = slurp("src/ui_desktop/SampleBrowser.cpp");
+            const size_t db = bp.find("void BottomPanel::DrawBrowsers"), prep = bp.find("sampleBrowser_.Prepare(app);", db), lk = bp.find("SceneLock lock(", db);
+            const size_t draw = sb.find("void SampleBrowser::Draw(AppState& app) {"), drawEnd = sb.find("\n}\n", draw);
+            check(db != std::string::npos && prep != std::string::npos && lk != std::string::npos && prep < lk,
+                  "lock-5 browsers: DrawBrowsers builds the SAMPLES list before it takes the scene lock");
+            check(draw != std::string::npos && sb.substr(draw, drawEnd - draw).find("Rebuild(app)") == std::string::npos,
+                  "lock-5 browsers: the SAMPLES window never rebuilds its list while it draws (under the lock)");
+            check(sb.substr(draw, drawEnd - draw).find("++folderCounts_[") == std::string::npos && sb.find("++folderCounts_[") != std::string::npos,
+                  "lock-5 browsers: the LIBRARY FOLDERS counts are made in Prepare, not while drawing (review of #58)");
+        }
     }
     {   // N1 (LIVE-5 / LIVE-6): Settings > Audio rules
         using namespace t8::audiosettings;

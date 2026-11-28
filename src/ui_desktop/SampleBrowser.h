@@ -49,6 +49,9 @@ public:
     // target: Drum = the selected drum track (seqCursorTrack), Sampler = app.libSampleTarget, Transition = the brick `brick`.
     void Open(AppState& app, AppState::LibTarget target, int brick);
     bool IsOpen() const { return wantOpen_ || open_; }
+    // LIVE-5: builds the list when it changed (the whole library, sorting, samples/ on disk). Call once per frame BEFORE taking the
+    // scene lock; Draw only shows the list it has (a change made while drawing is built on the next frame).
+    void Prepare(AppState& app);
     void Draw(AppState& app);   // under the scene lock, once per frame
 
     // Pure helpers, used by the tests.
