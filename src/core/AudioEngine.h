@@ -78,6 +78,8 @@ public:
     // the grid), which fires the pumps whose source is a steady beat (Every 1/4, 1/8, 1/16). See PumpSettings in Types.h.
     void PumpTick(int tick, int stepsPerBeat);
     // For the UI: how far pump p is down right now (0 = untouched, 1 = fully), updated once per audio block.
+    // The UI's way to change the pumps: under the engine lock, so a drag in MIX LAB never lands half-copied in a Render block.
+    void SetPumps(const std::array<PumpSettings, kNumPumps>& pumps) { std::lock_guard<std::mutex> lock(mutex_); mixer_.fx.pumps = pumps; }
     float PumpLevel(int p) const { return (p >= 0 && p < kNumPumps) ? pumpMeter_[static_cast<size_t>(p)].load(std::memory_order_relaxed) : 0.0f; }
     void SynthNoteOn(int synthIndex, int midiNote, float velocity, bool slide);
     void SynthNoteOff(int synthIndex);
@@ -191,7 +193,7 @@ private:
     // Sidechain pumps (see PumpSettings in Types.h, core/Pump.h). Triggered by PumpSourceHit (from TriggerDrum / SynthNoteOn /
     // ChordNoteOn / ChordVoiceOn / SamplerNoteOn) and PumpTick (the sequencer's grid), all under mutex_ like Render, so no atomics.
     // Render computes every active pump's envelope for the block into pumpEnv_ first, then each instrument multiplies its dry
-    // buffer by min over pumps of (1 - depth * env), through a short one-pole smoother (pumpGain_) so even ATTACK 0 never clicks.
+    // buffer by min over pumps of (1 - depth * env), through a short one-pole smoother (pumpGain_); with the 2 ms minimum ATTACK no duck clicks.
     void PumpSourceHit(int sourceTrack);              // mutex_ held
     void PumpPrepareBlock(int numFrames, double samplesPerSixteenth);   // mutex_ held, top of Render
     void PumpApply(int track, float* dry, int numFrames);               // mutex_ held, per instrument before its insert FX

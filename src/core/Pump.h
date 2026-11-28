@@ -11,10 +11,10 @@
 
 namespace t8 {
 
-constexpr float kPumpOffMs = 10.0f;
+constexpr float kPumpOffMs = 10.0f;   // the way back when a pump is switched off (or its source changes) while it is down
 // The fastest ATTACK. A 0.5 ms smoother alone cannot stop a deep instant duck from ticking on a sub bass; a 2 ms ramp before
 // it can (selftest: ATTACK at its minimum on a 55 Hz sine ducked by 90 % stays below the click threshold).
-constexpr float kPumpMinAttackMs = 2.0f;   // the way back when a pump is switched off (or its source changes) while it is down
+constexpr float kPumpMinAttackMs = 2.0f;
 
 // The shape of the way back: r = 0..1 progress of RELEASE, returns env relative to where RELEASE started.
 inline float PumpReleaseShape(int curve, float r) {

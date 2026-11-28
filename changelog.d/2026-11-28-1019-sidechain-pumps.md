@@ -11,7 +11,7 @@
 - Project format 13: `pumpOnN`, `pumpSrcN`, `pumpAttackMsN`, `pumpHoldMsN`, `pumpReleaseMsN`, `pumpReleaseDivN`, `pumpCurveN`,
   `pumpDepthN` in `[fx]`. A file from before keeps its sound: its `sidechainEnabled / Amount / Release` become pump 1
   (Kick -> Bass, LINE, attack 6 ms x amount, release amount x release - attack); selftest checks the converted envelope stays
-  within 0.03 of the old one.
+  within 0.06 of the old one (it measures 0.024).
 - MASTER FX's SIDECHAIN row now edits pump 1's Bass depth and release until the full editor lands in MIX LAB > SIDECHAIN (part 2).
 - Tests: envelope stages and curves, steady-beat sources on straight and triplet grids, the deeper dip wins, untouched
   instruments stay untouched, click-free fastest attack and switch-off on a 55 Hz sine, save / load round trip, old-file conversion.
