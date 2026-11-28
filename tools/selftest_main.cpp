@@ -1776,6 +1776,29 @@ int main(int argc, char** argv) {
             check(fired(2, 4) == (2 | 4 | 8), "pumps: on the off-beat 1/8 only 1/8 and 1/16 fire");
             check(fired(1, 4) == 4, "pumps: on the second sixteenth only 1/16 fires");
             check(fired(3, 3) == 0xF && fired(1, 3) == 0, "pumps: on a triplet grid straight 1/8 and 1/16 fire only on the beat");
+            // with swing, the sequencer fires the off-beat 1/16 late, where the swung hats land
+            auto onsetOfTick1 = [&](float swing) {
+                auto pjHold = std::make_unique<Project>(); Project& pj = *pjHold;
+                pj.patterns[0].bpm = 120.0f; pj.patterns[0].stepsPerBeat = 4; pj.patterns[0].swing = swing; pj.patterns[0].masterLength = 16;
+                auto engHold = std::make_unique<AudioEngine>(); AudioEngine& eng = *engHold; eng.Init(kSampleRate);
+                auto sqHold = std::make_unique<Sequencer>(); Sequencer& sq = *sqHold; sq.Init(&eng, &pj);
+                auto pumps = DefaultPumps();
+                for (auto& p : pumps) p.on = false;
+                pumps[0].on = true; pumps[0].source = kPumpSourceEvery16; pumps[0].attackMs = 2.0f; pumps[0].holdMs = 0.0f; pumps[0].releaseMs = 10.0f;
+                sq.Play();
+                eng.SetPumps(pumps);
+                std::vector<float> o(16 * 2);
+                const int stepLen = static_cast<int>(kSampleRate * 60.0 / 120.0 / 4.0);
+                for (int f = 0; f < 4 * stepLen; f += 16) {
+                    sq.RenderAndAdvance(o.data(), 16, kSampleRate);
+                    if (f > stepLen / 2 && eng.PumpLevel(0) > 0.0f) return f;   // the first hit after the one on tick 0 has died away
+                }
+                return -1;
+            };
+            const int straight = onsetOfTick1(0.0f), swung = onsetOfTick1(0.5f);
+            const int stepLen = static_cast<int>(kSampleRate * 60.0 / 120.0 / 4.0);
+            check(std::abs(straight - stepLen) < 64 && std::abs(swung - (stepLen + stepLen / 4)) < 64,
+                  "pumps: Every 1/16 follows the scene's swing (off-beat late by swing / 2 of a step; straight " + std::to_string(straight) + ", swung " + std::to_string(swung) + ")");
         }
 
         // 5. Save / load round trip, and an old file with the one sidechain converts into pump 1.

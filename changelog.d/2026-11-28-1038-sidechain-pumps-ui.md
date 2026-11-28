@@ -11,5 +11,8 @@
   presets (CLASSIC PUMP, SOFT GLUE, HARD EDM, SNARE MAKES ROOM, GHOST 1/4) filling the first free pump, and how to use it.
 - Edits go into `project.fx.pumps` and the engine's copy under the scene lock with one coalesced sound undo.
 - MASTER FX's SIDECHAIN row is now a status line with OPEN SIDECHAIN (the stopgap knobs from part 1 are gone).
+- Review #62 advice: steady-beat pumps now follow the scene's swing (the sequencer schedules a swung off-beat like a hat:
+  `AudioEngine::PumpBeatMask` + `PumpFire`, a `RatchetEvent` with `pumpIndex`); MIX LAB writes the pumps through
+  `AudioEngine::SetPumps`, under the engine lock.
 - Not in this part (differs from the mockup): Option+click on a cell removes it (the app-wide reset gesture) instead of
   soloing the source and the instrument.
