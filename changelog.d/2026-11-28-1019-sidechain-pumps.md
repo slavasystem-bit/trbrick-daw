@@ -12,6 +12,10 @@
   `pumpDepthN` in `[fx]`. A file from before keeps its sound: its `sidechainEnabled / Amount / Release` become pump 1
   (Kick -> Bass, LINE, attack 6 ms x amount, release amount x release - attack); selftest checks the converted envelope stays
   within 0.06 of the old one (it measures 0.024).
+- Known, accepted change (person's choice 2026-11-28): the old sidechain advanced its duck only while the bass synth was
+  sounding, so a kick in a bass rest left the duck frozen until the next bass note, which then started ducked. The pumps run all
+  the time, as they should. Old projects where the bass plays with rests therefore pump less than before (in the review's
+  example file, about a third of the old effect); a held bass sounds the same.
 - MASTER FX's SIDECHAIN row now edits pump 1's Bass depth and release until the full editor lands in MIX LAB > SIDECHAIN (part 2).
 - Tests: envelope stages and curves, steady-beat sources on straight and triplet grids, the deeper dip wins, untouched
   instruments stay untouched, click-free fastest attack and switch-off on a 55 Hz sine, save / load round trip, old-file conversion.
