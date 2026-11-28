@@ -277,6 +277,7 @@ void Sequencer::StartChord(const Pattern& p, std::array<int8_t, 6> cNotes, int c
 void Sequencer::FireTick(int tick) {
     SceneLock lock(patternMutex_, "Sequencer::FireTick");
     ApplyRepeaterRequest(false, tick);
+    engine_->PumpTick(tick, StepsPerBeat());   // sidechain pumps whose source is a steady beat (Every 1/4, 1/8, 1/16)
     // Queued chord-scene launch (see LaunchChordScene)
     {
         int pc = pendingChordScene_.load();

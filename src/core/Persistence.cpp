@@ -92,9 +92,10 @@
 //   reverbSize=0.6
 //   reverbLevel=0
 //   distortionDrive=0
-//   sidechainEnabled=0
-//   sidechainAmount=0.5
-//   sidechainRelease=0.2
+//   pumpOn0=0 pumpSrc0=0 pumpAttackMs0=3 pumpHoldMs0=0 pumpReleaseMs0=100 pumpReleaseDiv0=-1 pumpCurve0=0
+//   pumpDepth0=0,0,0,0,0,0,0.5,0,0,0,0    (one line per key; pumps 0..3, depth per track 0..10, format 13)
+//   (sidechainEnabled / sidechainAmount / sidechainRelease from a file before format 13 are converted into pump 0:
+//   Kick -> Bass, see the end of LoadProjectOnce)
 //   (also optional on read for backward compat with saves from before
 //   effects/sidechain/tempo-synced-delay existed -- missing keys leave
 //   FxSettings at its defaults. delayTimeSec on read is immediately
@@ -352,9 +353,19 @@ void WriteFxBlock(std::ostream& f, const Project& project) {
     f << "kickClick=" << project.fx.kick.click << "\n";
     f << "kickDrive=" << project.fx.kick.drive << "\n";
     f << "kickLevel=" << project.fx.kick.level << "\n";
-    f << "sidechainEnabled=" << (project.fx.sidechainEnabled ? 1 : 0) << "\n";
-    f << "sidechainAmount=" << project.fx.sidechainAmount << "\n";
-    f << "sidechainRelease=" << project.fx.sidechainRelease << "\n";
+    for (int pi = 0; pi < kNumPumps; ++pi) {   // sidechain pumps (format 13)
+        const PumpSettings& pp = project.fx.pumps[static_cast<size_t>(pi)];
+        f << "pumpOn" << pi << "=" << (pp.on ? 1 : 0) << "\n";
+        f << "pumpSrc" << pi << "=" << pp.source << "\n";
+        f << "pumpAttackMs" << pi << "=" << pp.attackMs << "\n";
+        f << "pumpHoldMs" << pi << "=" << pp.holdMs << "\n";
+        f << "pumpReleaseMs" << pi << "=" << pp.releaseMs << "\n";
+        f << "pumpReleaseDiv" << pi << "=" << pp.releaseDiv << "\n";
+        f << "pumpCurve" << pi << "=" << pp.curve << "\n";
+        f << "pumpDepth" << pi << "=";
+        for (int t = 0; t < kNumTracks; ++t) f << (t ? "," : "") << pp.depth[static_cast<size_t>(t)];
+        f << "\n";
+    }
     {   // master compressor + finished-track chain (optional keys on read)
         const MasterChainSettings& m = project.fx.master;
         f << "mcChainOn=" << (m.chainOn ? 1 : 0) << "\n";
@@ -717,8 +728,16 @@ struct Sanitizer {
         F(fx.reverbSize, 0.0f, 0.97f, d.reverbSize);
         F(fx.reverbLevel, 0.0f, 1.0f, d.reverbLevel);
         F(fx.distortionDrive, 0.0f, 1.0f, d.distortionDrive);
-        F(fx.sidechainAmount, 0.0f, 1.0f, d.sidechainAmount);
-        F(fx.sidechainRelease, 0.02f, 1.0f, d.sidechainRelease);
+        for (auto& pp : fx.pumps) {
+            const PumpSettings dp;
+            I(pp.source, 0, kNumPumpSources - 1);
+            F(pp.attackMs, 2.0f, 50.0f, dp.attackMs);
+            F(pp.holdMs, 0.0f, 500.0f, dp.holdMs);
+            F(pp.releaseMs, 10.0f, 1000.0f, dp.releaseMs);
+            I(pp.releaseDiv, -1, kNumPumpReleaseDivs - 1);
+            I(pp.curve, 0, kNumPumpCurves - 1);
+            for (auto& dv : pp.depth) F(dv, 0.0f, 1.0f, 0.0f);
+        }
         I(fx.master.chainPreset, -1, kNumMasterPresets - 1);
         I(fx.master.compPreset, -1, kNumCompPresets - 1);
     }
@@ -748,6 +767,8 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
     [[maybe_unused]] bool curChordPatch = false; // Phase 6 (tracked for symmetry, never read): "[chordpatch]" section
     SynthPatch* curPatchPtr = nullptr;   // v44.5.4: the patch a [synthN] / [chordpatch] / [patternP.synthN] / [patternP.chordpatch] section fills
     std::array<bool, kNumSlotsTotal> ownSound{}, ownKick{};   // scenes whose file carries their own sound (older files do not)
+    struct { bool seen = false, on = false; float amount = 0.5f, release = 0.2f; } legacySc;   // the one Kick -> Bass sidechain before format 13
+    bool sawPumps = false;
 
     auto trim = [](std::string s) {
         size_t a = s.find_first_not_of(" \t\r\n");
@@ -943,9 +964,26 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
             else if (key == "kickClick") fx.kick.click = std::clamp(std::stof(val), 0.0f, 1.0f);
             else if (key == "kickDrive") fx.kick.drive = std::clamp(std::stof(val), 0.0f, 1.0f);
             else if (key == "kickLevel") fx.kick.level = std::clamp(std::stof(val), 0.0f, 1.0f);
-            else if (key == "sidechainEnabled") fx.sidechainEnabled = std::atoi(val.c_str()) != 0;
-            else if (key == "sidechainAmount") fx.sidechainAmount = std::stof(val);
-            else if (key == "sidechainRelease") fx.sidechainRelease = std::stof(val);
+            else if (key == "sidechainEnabled") { legacySc.seen = true; legacySc.on = std::atoi(val.c_str()) != 0; }   // before format 13
+            else if (key == "sidechainAmount") { legacySc.seen = true; legacySc.amount = std::stof(val); }
+            else if (key == "sidechainRelease") { legacySc.seen = true; legacySc.release = std::stof(val); }
+            else if (key.size() > 5 && key.rfind("pump", 0) == 0 && key.back() >= '0' && key.back() < '0' + kNumPumps) {
+                sawPumps = true;
+                PumpSettings& pp = fx.pumps[static_cast<size_t>(key.back() - '0')];
+                const std::string fld = key.substr(4, key.size() - 5);
+                if (fld == "On") pp.on = std::atoi(val.c_str()) != 0;
+                else if (fld == "Src") pp.source = std::atoi(val.c_str());
+                else if (fld == "AttackMs") pp.attackMs = std::stof(val);
+                else if (fld == "HoldMs") pp.holdMs = std::stof(val);
+                else if (fld == "ReleaseMs") pp.releaseMs = std::stof(val);
+                else if (fld == "ReleaseDiv") pp.releaseDiv = std::atoi(val.c_str());
+                else if (fld == "Curve") pp.curve = std::atoi(val.c_str());
+                else if (fld == "Depth") {
+                    pp.depth.fill(0.0f);
+                    std::istringstream ds(val); std::string tok; int t = 0;
+                    while (std::getline(ds, tok, ',') && t < kNumTracks) pp.depth[static_cast<size_t>(t++)] = std::stof(tok);
+                }
+            }
             else if (key.rfind("mc", 0) == 0) {
                 MasterChainSettings& m = fx.master;
                 float v = std::stof(val);
@@ -1262,6 +1300,25 @@ bool LoadProjectOnce(Project& project, const std::string& path, std::string& pro
             folded[static_cast<size_t>(sl)] = true;
         }
         for (int sl = kNumLiveScenes; sl < kNumPatterns; ++sl) if (folded[static_cast<size_t>(sl)]) ClearSceneMuteFlags(project.patterns[static_cast<size_t>(sl)]);
+    }
+    // Before format 13 there was one sidechain: every Kick hit ducked Bass (synth 1) by `amount`, falling at a fixed 6 ms per
+    // full scale and climbing back at `amount` per `release` seconds (so it was fully back amount x release after the hit). Pump 0
+    // with LINE, attack 6 ms x amount and release (amount x release - attack) sounds practically the same (selftest compares the
+    // two envelopes).
+    if (legacySc.seen && !sawPumps) {
+        const float a = std::isfinite(legacySc.amount) ? std::clamp(legacySc.amount, 0.0f, 1.0f) : 0.5f;
+        const float r = std::isfinite(legacySc.release) ? std::clamp(legacySc.release, 0.02f, 1.0f) : 0.2f;
+        project.fx.pumps = DefaultPumps();
+        PumpSettings& p0 = project.fx.pumps[0];
+        p0.on = legacySc.on;
+        p0.source = static_cast<int>(DrumSlot::Kick);
+        p0.depth.fill(0.0f);
+        p0.depth[static_cast<size_t>(kNumDrumTracks)] = a;
+        p0.attackMs = std::max(2.0f, 6.0f * a);
+        p0.holdMs = 0.0f;
+        p0.releaseMs = std::clamp(1000.0f * a * r - p0.attackMs, 10.0f, 1000.0f);
+        p0.releaseDiv = -1;
+        p0.curve = static_cast<int>(PumpCurve::Line);
     }
     project.currentPattern = std::clamp(project.currentPattern, 0, kNumLiveScenes - 1);
     project.liveScene = project.currentPattern;

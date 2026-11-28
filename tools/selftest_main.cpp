@@ -1583,7 +1583,7 @@ int main(int argc, char** argv) {
         Mixer& cm = cEngine.GetMixer();
         for (int i = 0; i < kNumTracks; ++i) cm.tracks[i].volume = 0.0f;
         cm.tracks[kNumDrumTracks].volume = 1.0f;
-        cm.fx.sidechainEnabled = true; cm.fx.sidechainAmount = 0.8f; cm.fx.sidechainRelease = 0.2f; cm.fx.delayLevel = 0; cm.fx.reverbLevel = 0;
+        cm.fx.pumps[0].on = true; cm.fx.pumps[0].depth[kNumDrumTracks] = 0.8f; cm.fx.pumps[0].attackMs = 4.8f; cm.fx.pumps[0].releaseMs = 160.0f; cm.fx.delayLevel = 0; cm.fx.reverbLevel = 0;
         cEngine.SynthNoteOn(0, 33, 1.0f, false);
         std::vector<float> cb(512 * 2), cmono;
         DrumVoiceParams dvp;
@@ -1609,7 +1609,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < kNumTracks; ++i) hmx.tracks[i].volume = 0.0f;       // kick muted: it only drives the duck
         hmx.tracks[kNumDrumTracks].volume = 0.9f; hmx.fx.delayLevel = 0; hmx.fx.reverbLevel = 0; hmx.masterVolume = 1.0f;
         hmx.masterHpfAmount = 0.6f;
-        hmx.fx.sidechainEnabled = true; hmx.fx.sidechainAmount = 0.8f; hmx.fx.sidechainRelease = 0.2f;
+        hmx.fx.pumps[0].on = true; hmx.fx.pumps[0].depth[kNumDrumTracks] = 0.8f; hmx.fx.pumps[0].attackMs = 4.8f; hmx.fx.pumps[0].releaseMs = 160.0f;
         std::vector<float> hb(128 * 2); double clickPk = 0;
         for (int blk = 0; blk < 240; ++blk) {
             if (blk == 20) hEng.SynthNoteOn(0, 33, 1.0f, false);
@@ -1619,6 +1619,201 @@ int main(int argc, char** argv) {
         }
         check(clickPk < 0.005, "sub bass behind the master HPF: a (muted) kick's sidechain duck leaves no click");
     }
+
+    // ---- Sidechain pumps (any source -> any instruments, format 13) --------------------------------
+    // (engines and projects on the heap: main's stack frame is already several MB)
+    [&] {
+        auto slurp = [](const std::string& path) { std::ifstream in(path); return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()); };
+        // 1. An old project's Kick -> Bass sidechain converts into pump 0 and its envelope stays practically the same.
+        double worstConv = 0;
+        for (float a : {0.3f, 0.5f, 0.8f}) for (float rel : {0.2f, 0.5f, 1.0f}) {
+            const float sr = static_cast<float>(kSampleRate);
+            // the old algorithm, as it was in AudioEngine::Render (kick hit at sample 0)
+            float tgt = 1.0f - a, app = 1.0f, sm = 1.0f;
+            const float down = 1.0f / (0.006f * sr), up = 1.0f / (0.010f * sr), step = 1.0f / (rel * sr);
+            // the converted pump
+            PumpSettings p; p.on = true; p.attackMs = std::max(2.0f, 6.0f * a); p.releaseMs = std::clamp(1000.0f * a * rel - p.attackMs, 10.0f, 1000.0f); p.curve = 0;
+            PumpEnvelope env; env.Trigger();
+            const PumpTiming tm = MakePumpTiming(p, sr, 5512.5);
+            const float k = 1.0f - std::exp(-1.0f / (0.0005f * sr));
+            float g = 1.0f;
+            for (int i = 0; i < static_cast<int>(sr * 1.2f); ++i) {
+                if (app > tgt) app = std::max(tgt, app - down); else app = std::min(tgt, app + up);
+                sm += (app - sm) * 0.04f;
+                tgt = std::min(1.0f, tgt + step);
+                g += ((1.0f - a * env.Next(tm)) - g) * k;
+                worstConv = std::max(worstConv, static_cast<double>(std::fabs(g - sm)));
+            }
+        }
+        check(worstConv < 0.06, "pumps: an old Kick -> Bass sidechain converted into pump 1 follows the old envelope within 0.06 (worst " + std::to_string(worstConv) + ")");
+
+        // 2. Envelope stages: ATTACK, HOLD, RELEASE, curves, retrigger from where it is, switch-off glide.
+        {
+            const float sr = static_cast<float>(kSampleRate);
+            PumpSettings p; p.attackMs = 10.0f; p.holdMs = 20.0f; p.releaseMs = 100.0f;
+            PumpTiming tm = MakePumpTiming(p, sr, 5512.5);
+            PumpEnvelope e; e.Trigger();
+            float v = 0; for (int i = 0; i < static_cast<int>(0.005f * sr); ++i) v = e.Next(tm);
+            check(v > 0.45f && v < 0.55f, "pumps: halfway through a 10 ms ATTACK the envelope is half down");
+            for (int i = 0; i < static_cast<int>(0.025f * sr); ++i) v = e.Next(tm);
+            check(v == 1.0f && e.StageNow() == PumpEnvelope::Hold, "pumps: after ATTACK it stays fully down for HOLD");
+            for (int i = 0; i < static_cast<int>(0.010f * sr); ++i) v = e.Next(tm);
+            check(e.StageNow() == PumpEnvelope::Release && v < 1.0f, "pumps: after HOLD the way back starts");
+            for (int i = 0; i < static_cast<int>(0.040f * sr); ++i) v = e.Next(tm);
+            const float mid = v;
+            e.Trigger();
+            const float again = e.Next(tm);
+            check(again > mid && again < mid + 0.01f, "pumps: a new hit during the way back dips again from where it is (no jump)");
+            for (int i = 0; i < static_cast<int>(0.3f * sr); ++i) v = e.Next(tm);
+            check(!e.Active() && v == 0.0f, "pumps: after RELEASE it is idle and untouched");
+            check(std::fabs(PumpReleaseShape(0, 0.5f) - 0.5f) < 1e-6f && std::fabs(PumpReleaseShape(1, 0.5f) - 0.5f) < 1e-6f &&
+                  PumpReleaseShape(2, 0.5f) > 0.9f && PumpReleaseShape(1, 0.1f) > PumpReleaseShape(0, 0.1f),
+                  "pumps: LINE is straight, SMOOTH is an S-curve, HARD stays down and snaps back");
+            p.releaseDiv = 3;   // 1/4
+            tm = MakePumpTiming(p, sr, 1000.0);
+            check(std::fabs(1.0f / tm.releaseStep - 4000.0f) < 1.0f, "pumps: RELEASE 1/4 lasts four sixteenths of the tempo");
+            PumpEnvelope o; o.Trigger(); for (int i = 0; i < 1000; ++i) o.Next(tm);
+            o.Off(sr);
+            int n = 0; while (o.Active() && n < 48000) { o.Next(tm); ++n; }
+            check(n <= static_cast<int>(kPumpOffMs * 0.001f * sr) + 2, "pumps: a pump switched off while down comes back in 10 ms");
+        }
+
+        // 3. In the engine: the chord ducks the bass (synth 1) and leaves synth 2 alone; two pumps on one instrument: the deeper wins.
+        {
+            auto makeEngine = [&](AudioEngine& e) {
+                e.Init(kSampleRate);
+                SynthPatch sp; sp.waveform = Waveform::Sine; sp.cutoffHz = 2000; sp.sustain = 1.0f; sp.volume = 0.8f; sp.attack = 0.0f;
+                e.Synth(0).SetPatch(sp); e.Synth(1).SetPatch(sp);
+                Mixer& m = e.GetMixer();
+                for (int i = 0; i < kNumTracks; ++i) m.tracks[i].volume = 0.0f;
+                m.fx.delayLevel = 0; m.fx.reverbLevel = 0;
+                m.fx.pumps = DefaultPumps();
+            };
+            auto rms = [&](AudioEngine& e, int blocks) {   // only one instrument is audible in each engine
+                std::vector<float> b(256 * 2); double acc = 0; int cnt = 0;
+                for (int k = 0; k < blocks; ++k) { e.Render(b.data(), 256, 5512.5); for (int i = 0; i < 256; ++i) { acc += b[2 * i] * b[2 * i]; ++cnt; } }
+                return std::sqrt(acc / std::max(1, cnt));
+            };
+            auto eHold = std::make_unique<AudioEngine>(); AudioEngine& e = *eHold; makeEngine(e);
+            Mixer& m = e.GetMixer();
+            PumpSettings& p = m.fx.pumps[1];
+            p.on = true; p.source = kChordTrackIndex; p.attackMs = 0.0f; p.holdMs = 300.0f; p.releaseMs = 100.0f;
+            p.depth.fill(0.0f); p.depth[static_cast<size_t>(kNumDrumTracks)] = 0.75f;
+            m.tracks[kNumDrumTracks].volume = 1.0f;   // only the bass is heard
+            auto fHold = std::make_unique<AudioEngine>(); AudioEngine& f = *fHold; makeEngine(f);             // the same pump, only synth 2 heard
+            f.GetMixer().fx.pumps[1] = p;
+            f.GetMixer().tracks[kNumDrumTracks + 1].volume = 1.0f;
+            e.SynthNoteOn(0, 57, 1.0f, false); f.SynthNoteOn(1, 57, 1.0f, false);
+            std::vector<float> warm(256 * 2); for (int k = 0; k < 40; ++k) { e.Render(warm.data(), 256, 5512.5); f.Render(warm.data(), 256, 5512.5); }
+            const double bassBefore = rms(e, 8), s2Before = rms(f, 8);
+            const int8_t ch[3] = {60, 64, 67};
+            e.ChordNoteOn(ch, 3, 1.0f, false); f.ChordNoteOn(ch, 3, 1.0f, false);
+            for (int k = 0; k < 2; ++k) { e.Render(warm.data(), 256, 5512.5); f.Render(warm.data(), 256, 5512.5); }
+            const double bassDucked = rms(e, 8), s2After = rms(f, 8);
+            check(bassDucked > bassBefore * 0.2 && bassDucked < bassBefore * 0.3, "pumps: a chord hit ducks the bass by its depth (75 %)");
+            check(s2After > s2Before * 0.97 && s2After < s2Before * 1.03, "pumps: an instrument with no depth in the pump is not touched");
+            PumpSettings& q = m.fx.pumps[2];
+            q.on = true; q.source = kChordTrackIndex; q.attackMs = 0.0f; q.holdMs = 300.0f; q.depth.fill(0.0f); q.depth[static_cast<size_t>(kNumDrumTracks)] = 0.3f;
+            e.ChordNoteOn(ch, 3, 1.0f, false);
+            for (int k = 0; k < 2; ++k) e.Render(warm.data(), 256, 5512.5);
+            const double both = rms(e, 8);
+            check(both > bassBefore * 0.2 && both < bassBefore * 0.3, "pumps: two pumps on one instrument: the deeper dip wins (not 0.25 x 0.7)");
+            check(e.PumpLevel(1) > 0.99f && e.PumpLevel(0) == 0.0f, "pumps: the UI meter shows which pump is down");
+            // a slide (legato glide) is not a new hit
+            auto e2Hold = std::make_unique<AudioEngine>(); AudioEngine& e2 = *e2Hold; makeEngine(e2);
+            PumpSettings& s = e2.GetMixer().fx.pumps[1];
+            s.on = true; s.source = kNumDrumTracks + 1; s.depth.fill(0.0f); s.depth[static_cast<size_t>(kNumDrumTracks)] = 1.0f;
+            e2.SynthNoteOn(1, 60, 1.0f, true);
+            e2.Render(warm.data(), 256, 5512.5);
+            check(e2.PumpLevel(1) == 0.0f, "pumps: a slide note does not fire its pump");
+            e2.SynthNoteOn(1, 60, 1.0f, false);
+            e2.Render(warm.data(), 64, 5512.5);
+            check(e2.PumpLevel(1) > 0.0f, "pumps: a new synth note fires its pump");
+            // switching a pump off while the bass is down: back up without a click
+            auto e3Hold = std::make_unique<AudioEngine>(); AudioEngine& e3 = *e3Hold; makeEngine(e3);
+            PumpSettings& c = e3.GetMixer().fx.pumps[0];
+            c.on = true; c.attackMs = kPumpMinAttackMs; c.holdMs = 500.0f; c.depth[static_cast<size_t>(kNumDrumTracks)] = 0.9f;
+            SynthPatch lo; lo.waveform = Waveform::Sine; lo.cutoffHz = 150; lo.sustain = 1.0f; lo.volume = 0.8f;
+            e3.Synth(0).SetPatch(lo);
+            for (int i = 0; i < kNumTracks; ++i) e3.GetMixer().tracks[i].volume = (i == kNumDrumTracks) ? 1.0f : 0.0f;
+            e3.SynthNoteOn(0, 33, 1.0f, false);
+            std::vector<float> mono, bb(128 * 2);
+            for (int k = 0; k < 400; ++k) {
+                if (k == 150) { DrumVoiceParams dp; e3.TriggerDrum(DrumSlot::Kick, 1.0f, 0, dp); }
+                if (k == 250) c.on = false;
+                e3.Render(bb.data(), 128, 5512.5);
+                if (k >= 140) for (int i = 0; i < 128; ++i) mono.push_back(bb[2 * i]);
+            }
+            double kinkOn = 0, kinkOff = 0, kinkBase = 0;   // before the hit (the bare sine), around the hit, around the switch-off
+            for (size_t i = 2; i < mono.size(); ++i) {
+                const double kv = std::fabs(mono[i] - 2 * mono[i - 1] + mono[i - 2]);
+                if (i < 10 * 128) kinkBase = std::max(kinkBase, kv); else if (i < 110 * 128) kinkOn = std::max(kinkOn, kv); else kinkOff = std::max(kinkOff, kv);
+            }
+            check(kinkOn < 0.0005 && kinkOff < 0.0005, "pumps: the fastest ATTACK on a sub bass and switching the pump off while down are both click-free (base " +
+                  std::to_string(kinkBase) + ", hit " + std::to_string(kinkOn) + ", off " + std::to_string(kinkOff) + ")");
+        }
+
+        // 4. Steady-beat sources: fired by the sequencer's grid.
+        {
+            auto eHold = std::make_unique<AudioEngine>(); AudioEngine& e = *eHold; e.Init(kSampleRate);
+            Mixer& m = e.GetMixer();
+            m.fx.pumps = DefaultPumps();
+            for (auto& p : m.fx.pumps) { p.on = true; p.holdMs = 500.0f; p.attackMs = 0.0f; }
+            m.fx.pumps[0].source = kPumpSourceEvery4; m.fx.pumps[1].source = kPumpSourceEvery8; m.fx.pumps[2].source = kPumpSourceEvery16; m.fx.pumps[3].source = kPumpSourceEvery8;
+            std::vector<float> b(64 * 2);
+            auto fired = [&](int tick, int spb) {
+                for (int p = 0; p < kNumPumps; ++p) m.fx.pumps[p].on = false;
+                e.Render(b.data(), 64, 5512.5);   // let the switch-off glides run out
+                for (int k = 0; k < 20; ++k) e.Render(b.data(), 64, 5512.5);
+                for (int p = 0; p < kNumPumps; ++p) m.fx.pumps[p].on = true;
+                e.Render(b.data(), 64, 5512.5);
+                e.PumpTick(tick, spb);
+                e.Render(b.data(), 64, 5512.5);
+                int mask = 0; for (int p = 0; p < kNumPumps; ++p) if (e.PumpLevel(p) > 0.5f) mask |= 1 << p;
+                return mask;
+            };
+            check(fired(0, 4) == 0xF, "pumps: on the beat every steady-beat pump fires");
+            check(fired(2, 4) == (2 | 4 | 8), "pumps: on the off-beat 1/8 only 1/8 and 1/16 fire");
+            check(fired(1, 4) == 4, "pumps: on the second sixteenth only 1/16 fires");
+            check(fired(3, 3) == 0xF && fired(1, 3) == 0, "pumps: on a triplet grid straight 1/8 and 1/16 fire only on the beat");
+        }
+
+        // 5. Save / load round trip, and an old file with the one sidechain converts into pump 1.
+        {
+            auto pjHold = std::make_unique<Project>(); Project& pj = *pjHold;
+            pj.fx.pumps[2].on = true; pj.fx.pumps[2].source = kPumpSourceEvery8; pj.fx.pumps[2].attackMs = 2.5f; pj.fx.pumps[2].holdMs = 40.0f;
+            pj.fx.pumps[2].releaseDiv = 2; pj.fx.pumps[2].curve = 2; pj.fx.pumps[2].depth[kChordTrackIndex] = 0.6f; pj.fx.pumps[2].depth[3] = 0.25f;
+            pj.fx.pumps[0].releaseMs = 333.0f;
+            check(SaveProject(pj, "selftest_pumps.t8proj", false), "pumps: a project with pumps saves");
+            auto backHold = std::make_unique<Project>(); Project& back = *backHold;
+            check(LoadProject(back, "selftest_pumps.t8proj"), "pumps: and loads");
+            bool same = true;
+            for (int p = 0; p < kNumPumps; ++p) {
+                const PumpSettings &x = pj.fx.pumps[p], &y = back.fx.pumps[p];
+                same = same && x.on == y.on && x.source == y.source && std::fabs(x.attackMs - y.attackMs) < 1e-3f && std::fabs(x.holdMs - y.holdMs) < 1e-3f &&
+                       std::fabs(x.releaseMs - y.releaseMs) < 1e-3f && x.releaseDiv == y.releaseDiv && x.curve == y.curve;
+                for (int t = 0; t < kNumTracks; ++t) same = same && std::fabs(x.depth[t] - y.depth[t]) < 1e-4f;
+            }
+            check(same, "pumps: every pump comes back exactly as saved");
+            std::string txt = slurp("selftest_pumps.t8proj"), old;
+            { std::istringstream in(txt); std::string line; while (std::getline(in, line)) {
+                if (line.rfind("pump", 0) == 0) continue;   // pumpOn0= ...
+                if (line == "format=" + std::to_string(kProjectFormatVersion)) line = "format=12";
+                old += line + "\n";
+                if (line == "[fx]") old += "sidechainEnabled=1\nsidechainAmount=0.8\nsidechainRelease=0.5\n";
+            } }
+            { std::ofstream o("selftest_pumps_old.t8proj"); o << old; }
+            auto convHold = std::make_unique<Project>(); Project& conv = *convHold;
+            check(LoadProject(conv, "selftest_pumps_old.t8proj"), "pumps: an old file (format 12) with the Kick -> Bass sidechain loads");
+            const PumpSettings& c0 = conv.fx.pumps[0];
+            check(c0.on && c0.source == 0 && std::fabs(c0.depth[kNumDrumTracks] - 0.8f) < 1e-4f && c0.curve == 0 && c0.releaseDiv < 0 &&
+                  std::fabs(c0.attackMs - 4.8f) < 1e-3f && std::fabs(c0.releaseMs - (400.0f - 4.8f)) < 1e-2f && !conv.fx.pumps[1].on && !conv.fx.pumps[2].on,
+                  "pumps: the old sidechain became pump 1 (Kick -> Bass 80 %, same timing), the other pumps are off");
+            float otherDepth = 0; for (int t = 0; t < kNumTracks; ++t) if (t != kNumDrumTracks) otherDepth += c0.depth[t];
+            check(otherDepth == 0.0f, "pumps: the converted pump 1 ducks only the bass");
+            std::remove("selftest_pumps.t8proj"); std::remove("selftest_pumps_old.t8proj");
+        }
+    }();
 
     // ---- Chord editor core + chain slots that carry a chord scene ---------------------------
     {

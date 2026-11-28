@@ -325,6 +325,51 @@ struct KickSynthSettings {
     float level = 0.85f;      // 0..1, layer / synth level
 };
 
+// Sidechain pumps: up to kNumPumps independent "duckers". Each one is started by a SOURCE -- every hit / note-on of one
+// instrument (track 0..kNumTracks-1, muted or not, so a muted kick can still drive it) or a steady beat (kPumpSourceEvery4 /
+// 8 / 16, fired by the sequencer on the grid while it plays) -- and turns every instrument with a non-zero depth[] down by that
+// much for a moment: down over ATTACK, stays down for HOLD, comes back over RELEASE (milliseconds, or a note length that follows
+// the tempo when releaseDiv >= 0) along the chosen curve. Where several pumps duck one instrument, the deepest dip wins at every
+// sample. See core/Pump.h for the envelope and AudioEngine::Render for where it is applied (pre-insert, on the raw dry buffer).
+constexpr int kNumPumps = 4;
+constexpr int kPumpSourceEvery4  = kNumTracks;       // a steady 1/4 beat, no instrument needed
+constexpr int kPumpSourceEvery8  = kNumTracks + 1;
+constexpr int kPumpSourceEvery16 = kNumTracks + 2;
+constexpr int kNumPumpSources    = kNumTracks + 3;
+enum class PumpCurve : int { Line = 0, Smooth = 1, Hard = 2 };
+constexpr int kNumPumpCurves = 3;
+// RELEASE as a note length (releaseDiv = index), in sixteenths: 1/32, 1/16, 1/8, 1/4, 1/2.
+constexpr int kNumPumpReleaseDivs = 5;
+inline float PumpReleaseDivSixteenths(int div) {
+    static const float k[kNumPumpReleaseDivs] = {0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+    return k[div < 0 ? 0 : (div >= kNumPumpReleaseDivs ? kNumPumpReleaseDivs - 1 : div)];
+}
+inline const char* PumpReleaseDivName(int div) {
+    static const char* k[kNumPumpReleaseDivs] = {"1/32", "1/16", "1/8", "1/4", "1/2"};
+    return k[div < 0 ? 0 : (div >= kNumPumpReleaseDivs ? kNumPumpReleaseDivs - 1 : div)];
+}
+struct PumpSettings {
+    bool  on = false;
+    int   source = 0;            // 0..kNumTracks-1 = that instrument's hits, kPumpSourceEvery4/8/16 = a steady beat
+    float attackMs = 3.0f;       // 2..50: how fast it goes down (2 ms = the fastest that never clicks, see kPumpMinAttackMs)
+    float holdMs = 0.0f;         // 0..500: how long it stays down
+    float releaseMs = 100.0f;    // 10..1000: how long it takes to come back (when releaseDiv < 0)
+    int   releaseDiv = -1;       // -1 = releaseMs, 0..kNumPumpReleaseDivs-1 = a note length that follows the tempo
+    int   curve = 0;             // PumpCurve: the shape of the way back
+    std::array<float, kNumTracks> depth{};   // 0..1 per instrument: how deep it is turned down (0 = not in this pump)
+};
+// The pumps of a new project: pump 1 is the classic Kick -> Bass at 50 % (off), which is what an old project's default
+// sidechain (amount 0.5, release 0.2 s) converts to; the others are empty, with handy sources picked in advance.
+inline std::array<PumpSettings, kNumPumps> DefaultPumps() {
+    std::array<PumpSettings, kNumPumps> p{};
+    p[0].source = 0;                         // Kick
+    p[0].depth[kNumDrumTracks] = 0.5f;       // Bass (synth 1)
+    p[1].source = 1;                         // Snare
+    p[2].source = kPumpSourceEvery4;
+    p[3].source = 2;                         // Clap
+    return p;
+}
+
 struct FxSettings {
     // The actual value DelayEffect::Process reads, and what gets written
     // to the save file -- but no longer hand-tweaked directly. Continuously
@@ -352,17 +397,9 @@ struct FxSettings {
     float reverbPreMs    = 12.0f;  // v37: 0..120 ms pre-delay
     float distortionDrive= 0.0f;   // 0..1, master-bus saturation amount
 
-    // Kick -> Bass sidechain ducking (FX tab's MASTER FX mode). Every Kick
-    // hit instantly ducks the bass synth (synth track 0) down to
-    // (1 - sidechainAmount) of its normal level, then releases linearly
-    // back to full volume over sidechainRelease seconds -- the classic
-    // "pumping" effect a four-on-the-floor kick gives a bassline. See
-    // AudioEngine::sidechainGain_ for the actual envelope; this struct only
-    // holds the user-facing knobs (project-wide, like the rest of
-    // FxSettings, not per-pattern).
-    bool  sidechainEnabled = false;
-    float sidechainAmount  = 0.5f;  // 0..1, how deep the duck goes (0 = no effect even if enabled)
-    float sidechainRelease = 0.2f;  // 0.02..1.0s, time to recover back to full volume
+    // Sidechain "pumps" (replaces the old single Kick -> Bass sidechainEnabled / Amount / Release, see PumpSettings above).
+    // Project-wide, like the rest of FxSettings. A project saved before the pumps existed is converted into pump 1 on load.
+    std::array<PumpSettings, kNumPumps> pumps = DefaultPumps();
 
     MasterChainSettings master;     // master compressor + "finished track" chain
     KickSynthSettings kick;         // built-in kick synth (Kick track)
