@@ -418,6 +418,11 @@ void SampleBrowser::Prepare(AppState& app) {
     // a source that needs data still on its way (a kit bank, the kit scan) is rebuilt every frame until it is there
     if (waitKit_ || waitLib_) dirty_ = true;   // the kit or the library is still being read
     if (dirty_) Rebuild(app);
+    if (const std::vector<LibSample>* lib = app.LibraryListIfReady(); lib && folderCountsOf_ != lib->size()) {   // LIBRARY FOLDERS counts
+        folderCounts_.clear();
+        for (const LibSample& ls : *lib) for (const std::string& f : FolderChain(ls.rel)) ++folderCounts_[f];
+        folderCountsOf_ = lib->size();
+    }
 }
 
 void SampleBrowser::Draw(AppState& app) {
@@ -613,13 +618,7 @@ void SampleBrowser::Draw(AppState& app) {
     ImGui::Dummy(ImVec2(1, 6));
     ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "LIBRARY FOLDERS");
     {   // the folder tree of the library, with the number of files below each folder
-        static const std::vector<LibSample> kNone;
-        const auto& lib = libList ? *libList : kNone;
-        if (libList && folderCountsOf_ != lib.size()) {
-            folderCounts_.clear();
-            for (const LibSample& ls : lib) for (const std::string& f : FolderChain(ls.rel)) ++folderCounts_[f];
-            folderCountsOf_ = lib.size();
-        }
+        // the counts are made in Prepare (outside the scene lock; review of #58: 4-5 ms for a big library on every open)
         const std::map<std::string, int>& counts = folderCounts_;
         if (!libList) ImGui::TextDisabled("  (reading...)");
         else if (counts.empty()) ImGui::TextDisabled("  (no folders)");

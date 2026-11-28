@@ -7884,6 +7884,8 @@ int main(int argc, char** argv) {
                   "lock-5 browsers: DrawBrowsers builds the SAMPLES list before it takes the scene lock");
             check(draw != std::string::npos && sb.substr(draw, drawEnd - draw).find("Rebuild(app)") == std::string::npos,
                   "lock-5 browsers: the SAMPLES window never rebuilds its list while it draws (under the lock)");
+            check(sb.substr(draw, drawEnd - draw).find("++folderCounts_[") == std::string::npos && sb.find("++folderCounts_[") != std::string::npos,
+                  "lock-5 browsers: the LIBRARY FOLDERS counts are made in Prepare, not while drawing (review of #58)");
         }
     }
     {   // N1 (LIVE-5 / LIVE-6): Settings > Audio rules
