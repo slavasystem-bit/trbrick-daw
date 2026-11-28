@@ -2,6 +2,7 @@
 #include "KnobWidgets.h"
 #include "LiveWidgets.h"
 #include "ValueField.h"
+#include "core/MixAnalysis.h"
 #include "Visual.h"
 #include "imgui.h"
 #include "InfoLine.h"
@@ -105,21 +106,27 @@ void FxPanel::Draw(AppState& app) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ---- SIDECHAIN (Kick -> Bass ducking) ----------------------------------
-    ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "SIDECHAIN (Kick -> Bass ducking)");
-    bool scOn = fx.sidechainEnabled;
+    // ---- SIDECHAIN: pump 1's Bass row (the full pumps editor comes with MIX LAB > SIDECHAIN) -------------
+    PumpSettings& p0 = fx.pumps[0];
+    const size_t bassRow = static_cast<size_t>(kNumDrumTracks);
+    char scTitle[96];
+    std::snprintf(scTitle, sizeof(scTitle), "SIDECHAIN  PUMP 1: %s -> Bass", p0.source < kNumTracks ? MixTrackName(p0.source) : "steady beat");
+    ImGui::TextColored(ImVec4(0.95f, 0.64f, 0.24f, 1.0f), "%s", scTitle);
+    bool scOn = p0.on;
     Check("ENABLED", &scOn);
     ImGui::SameLine(0, 24);
-    float newScAmount = fx.sidechainAmount;
-    char scaBuf[8]; std::snprintf(scaBuf, sizeof(scaBuf), "%d%%", static_cast<int>(fx.sidechainAmount * 100));
+    float newScAmount = p0.depth[bassRow];
+    char scaBuf[8]; std::snprintf(scaBuf, sizeof(scaBuf), "%d%%", static_cast<int>(p0.depth[bassRow] * 100 + 0.5f));
     KnobColumn("AMOUNT", scaBuf, [&] {
-        newScAmount = KnobAbsolute("sca", fx.sidechainAmount, 0.0f, 1.0f, "SIDECHAIN AMOUNT %.0f%%", kKnobSize);
+        newScAmount = KnobAbsolute("sca", p0.depth[bassRow], 0.0f, 1.0f, "PUMP 1: HOW DEEP BASS GOES DOWN", kKnobSize);
     });
     ImGui::SameLine(0, 18);
-    float newScRelease = fx.sidechainRelease;
-    char screlBuf[12]; std::snprintf(screlBuf, sizeof(screlBuf), "%dMS", static_cast<int>(fx.sidechainRelease * 1000));
+    float newScRelease = p0.releaseMs;
+    char screlBuf[12];
+    if (p0.releaseDiv >= 0) std::snprintf(screlBuf, sizeof(screlBuf), "%s", PumpReleaseDivName(p0.releaseDiv));
+    else std::snprintf(screlBuf, sizeof(screlBuf), "%dMS", static_cast<int>(p0.releaseMs + 0.5f));
     KnobColumn("RELEASE", screlBuf, [&] {
-        newScRelease = KnobAbsolute("screl", fx.sidechainRelease, 0.02f, 1.0f, "SIDECHAIN RELEASE %.0fMS", kKnobSize);
+        newScRelease = KnobAbsolute("screl", p0.releaseMs, 10.0f, 1000.0f, "PUMP 1 RELEASE %.0fMS", kKnobSize);
     });
 
     // Single sync point at the end -- same "mutate the project copy, push
@@ -129,8 +136,8 @@ void FxPanel::Draw(AppState& app) {
     // app.project.fx by reference).
     bool changed = (newFeedback != fx.delayFeedback) || (newTone != fx.delayTone) || (newPing != fx.delayPingPong) || (newDelayLevel != fx.delayLevel) ||
                    (newSize != fx.reverbSize) || (newRevLevel != fx.reverbLevel) || (newDamp != fx.reverbDamp) || (newPre != fx.reverbPreMs) ||
-                   (newDrive != fx.distortionDrive) || (scOn != fx.sidechainEnabled) ||
-                   (newScAmount != fx.sidechainAmount) || (newScRelease != fx.sidechainRelease);
+                   (newDrive != fx.distortionDrive) || (scOn != p0.on) ||
+                   (newScAmount != p0.depth[bassRow]) || (newScRelease != p0.releaseMs);
     if (changed) app.PushSoundUndo();
     fx.delayFeedback = newFeedback;
     fx.delayTone = newTone;
@@ -141,9 +148,10 @@ void FxPanel::Draw(AppState& app) {
     fx.reverbDamp = newDamp;
     fx.reverbPreMs = newPre;
     fx.distortionDrive = newDrive;
-    fx.sidechainEnabled = scOn;
-    fx.sidechainAmount = newScAmount;
-    fx.sidechainRelease = newScRelease;
+    if (newScRelease != p0.releaseMs) p0.releaseDiv = -1;   // turning the knob means milliseconds again
+    p0.on = scOn;
+    p0.depth[bassRow] = newScAmount;
+    p0.releaseMs = newScRelease;
     if (changed) {
         app.engine.GetMixer().fx = fx;
     }

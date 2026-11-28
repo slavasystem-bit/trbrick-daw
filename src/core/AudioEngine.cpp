@@ -15,6 +15,10 @@ void AudioEngine::Init(int sampleRate) {
     delayWet_.resize(4096 * 2, 0.0f);
     reverbWet_.resize(4096 * 2, 0.0f);
     for (auto& b : stemBufs_) b.resize(4096 * 2, 0.0f);
+    for (auto& b : pumpBuf_) b.resize(4096, 0.0f);
+    for (auto& e : pumpEnv_) e.Reset();
+    pumpGain_.fill(1.0f);
+    for (auto& m : pumpMeter_) m.store(0.0f);
     delay_.Init(sampleRate);
     reverb_.Init(sampleRate);
     mixer_.InitInsertFx(sampleRate);
@@ -36,20 +40,100 @@ void AudioEngine::ResetDsp() {
     saturator_.Reset();
     limiter_.Reset();
     masterChain_.Reset();
-    sidechainGain_ = 1.0f; sidechainApplied_ = 1.0f; sidechainSmooth_ = 1.0f;
+    for (auto& e : pumpEnv_) e.Reset();
+    pumpGain_.fill(1.0f);
+    for (auto& m : pumpMeter_) m.store(0.0f);
 }
 
 void AudioEngine::TriggerDrum(DrumSlot slot, float velocity, int variant, const DrumVoiceParams& params) {
     std::lock_guard<std::mutex> lock(mutex_);
     drums_.Trigger(slot, velocity, variant, params, &mixer_.kickSynth);
     capture_.LogDrum(slot);
-    // Every Kick hit re-triggers the sidechain duck (see sidechainGain_'s
-    // comment) -- snapping straight back down even mid-release is what
-    // produces the classic "pumping" groove under a steady kick, rather
-    // than smoothly crossfading between overlapping ducks.
-    if (slot == DrumSlot::Kick && mixer_.fx.sidechainEnabled) {
-        sidechainGain_ = 1.0f - std::clamp(mixer_.fx.sidechainAmount, 0.0f, 1.0f);
+    PumpSourceHit(static_cast<int>(slot));
+}
+
+void AudioEngine::PumpSourceHit(int sourceTrack) {
+    // Every hit re-triggers its pumps from wherever they are now -- snapping back down even mid-release is what gives the
+    // classic "pumping" under a steady kick, rather than smoothly crossfading between overlapping ducks.
+    for (int p = 0; p < kNumPumps; ++p) {
+        const PumpSettings& ps = mixer_.fx.pumps[static_cast<size_t>(p)];
+        if (ps.on && ps.source == sourceTrack) pumpEnv_[static_cast<size_t>(p)].Trigger();
     }
+}
+
+void AudioEngine::PumpTick(int tick, int stepsPerBeat) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const int spb = std::max(1, stepsPerBeat);
+    for (int p = 0; p < kNumPumps; ++p) {
+        const PumpSettings& ps = mixer_.fx.pumps[static_cast<size_t>(p)];
+        if (!ps.on || ps.source < kPumpSourceEvery4 || ps.source > kPumpSourceEvery16) continue;
+        // hits per beat: 1, 2 or 4. A grid step lands on such a hit when tick * perBeat is a whole multiple of the grid; on a
+        // triplet grid (3 or 6 steps a beat) straight 1/8 and 1/16 hits fall between the steps, so only the ones on a step fire.
+        const int perBeat = ps.source == kPumpSourceEvery4 ? 1 : (ps.source == kPumpSourceEvery8 ? 2 : 4);
+        if ((static_cast<long long>(tick) * perBeat) % spb == 0) pumpEnv_[static_cast<size_t>(p)].Trigger();
+    }
+}
+
+void AudioEngine::PumpPrepareBlock(int numFrames, double samplesPerSixteenth) {
+    const float sr = static_cast<float>(sampleRate_);
+    for (int p = 0; p < kNumPumps; ++p) {
+        const size_t pi = static_cast<size_t>(p);
+        const PumpSettings& ps = mixer_.fx.pumps[pi];
+        PumpEnvelope& env = pumpEnv_[pi];
+        // switched off, or pointed at another source, while down: glide back instead of jumping (or hanging)
+        if ((!ps.on && pumpWasOn_[pi]) || (ps.on && pumpWasOn_[pi] && ps.source != pumpWasSource_[pi])) env.Off(sr);
+        pumpWasOn_[pi] = ps.on;
+        pumpWasSource_[pi] = ps.source;
+        pumpTiming_[pi] = MakePumpTiming(ps, sr, samplesPerSixteenth);
+        pumpLive_[pi] = env.Active() || env.Value() > 0.0f;
+        if (!pumpLive_[pi]) { pumpMeter_[pi].store(0.0f, std::memory_order_relaxed); continue; }
+        std::vector<float>& buf = pumpBuf_[pi];
+        if (buf.size() < static_cast<size_t>(numFrames)) buf.resize(static_cast<size_t>(numFrames));   // only if a host sends a bigger block than Init sized for
+        for (int i = 0; i < numFrames; ++i) buf[static_cast<size_t>(i)] = env.Next(pumpTiming_[pi]);
+        pumpMeter_[pi].store(env.Value(), std::memory_order_relaxed);
+    }
+}
+
+namespace {
+// ~0.5 ms one-pole: rounds the corners of the envelope (with the 2 ms minimum ATTACK no duck ever clicks)
+inline float PumpSmoothCoef(int sampleRate) { return 1.0f - std::exp(-1.0f / (0.0005f * static_cast<float>(std::max(1, sampleRate)))); }
+}
+
+void AudioEngine::PumpApply(int track, float* dry, int numFrames) {
+    const size_t ti = static_cast<size_t>(track);
+    // which pumps reach this instrument now
+    int idx[kNumPumps]; float dep[kNumPumps]; int n = 0;
+    for (int p = 0; p < kNumPumps; ++p) {
+        const size_t pi = static_cast<size_t>(p);
+        const float d = std::clamp(mixer_.fx.pumps[pi].depth[ti], 0.0f, 1.0f);
+        if (pumpLive_[pi] && d > 0.0f) { idx[n] = p; dep[n] = d; ++n; }
+    }
+    float g = pumpGain_[ti];
+    if (n == 0 && g >= 1.0f) return;   // the usual case: nothing to do
+    const float k = PumpSmoothCoef(sampleRate_);
+    for (int i = 0; i < numFrames; ++i) {
+        float target = 1.0f;
+        for (int j = 0; j < n; ++j) target = std::min(target, 1.0f - dep[j] * pumpBuf_[static_cast<size_t>(idx[j])][static_cast<size_t>(i)]);
+        g += (target - g) * k;
+        dry[static_cast<size_t>(i) * 2 + 0] *= g;
+        dry[static_cast<size_t>(i) * 2 + 1] *= g;
+    }
+    if (n == 0 && g > 0.99999f) g = 1.0f;   // settled: back on the fast path
+    pumpGain_[ti] = g;
+}
+
+void AudioEngine::PumpSkip(int track, int numFrames) {
+    // Not rendered (a synth whose note has fully ended): there is no sound to scale, so just land the smoother where the
+    // pumps are at the end of the block, as if it had run.
+    if (numFrames <= 0) return;
+    const size_t ti = static_cast<size_t>(track);
+    float target = 1.0f;
+    for (int p = 0; p < kNumPumps; ++p) {
+        const size_t pi = static_cast<size_t>(p);
+        const float d = std::clamp(mixer_.fx.pumps[pi].depth[ti], 0.0f, 1.0f);
+        if (pumpLive_[pi] && d > 0.0f) target = std::min(target, 1.0f - d * pumpBuf_[pi][static_cast<size_t>(numFrames - 1)]);
+    }
+    pumpGain_[ti] = target;
 }
 
 void AudioEngine::SynthNoteOn(int synthIndex, int midiNote, float velocity, bool slide) {
@@ -57,11 +141,13 @@ void AudioEngine::SynthNoteOn(int synthIndex, int midiNote, float velocity, bool
     std::lock_guard<std::mutex> lock(mutex_);
     synths_[synthIndex].NoteOn(midiNote, velocity, slide);
     capture_.LogSynth(synthIndex, static_cast<int8_t>(midiNote));
+    if (!slide) PumpSourceHit(kNumDrumTracks + synthIndex);   // a slide is a legato glide into the next note, not a new hit
 }
 
 void AudioEngine::SamplerNoteOn(int midiNote, float velocity) {
     std::lock_guard<std::mutex> lock(mutex_);
     sampler_.NoteOn(midiNote, velocity, sampleRate_);
+    PumpSourceHit(kSamplerTrackIndex);
 }
 
 void AudioEngine::SamplerSet(const SamplePtr& sample, const SamplerPatch& patch) {
@@ -132,6 +218,7 @@ void AudioEngine::ChordNoteOn(const int8_t* notes, int count, float velocity, bo
     std::lock_guard<std::mutex> lock(mutex_);
     chordVoice_.NoteOn(notes, count, velocity, slide);
     capture_.LogChord(notes, count);
+    if (!slide && count > 0) PumpSourceHit(kChordTrackIndex);
 }
 
 void AudioEngine::ChordNoteOff() {
@@ -143,6 +230,7 @@ void AudioEngine::ChordVoiceOn(int v, int8_t note, float velocity, bool slide) {
     std::lock_guard<std::mutex> lock(mutex_);
     chordVoice_.NoteOnVoice(v, note, velocity, slide);
     capture_.LogChord(&note, 1);
+    if (!slide) PumpSourceHit(kChordTrackIndex);
 }
 
 void AudioEngine::ChordVoiceOff(int v) {
@@ -183,6 +271,7 @@ void AudioEngine::Render(float* out, int numFrames, double samplesPerStep) {
     float* reverbBus = reverbBus_.data();
     std::memset(delayBus, 0, sizeof(float) * needed);
     std::memset(reverbBus, 0, sizeof(float) * needed);
+    PumpPrepareBlock(numFrames, samplesPerStep);   // every sidechain pump's envelope for this block (the third argument is a sixteenth)
 
     // Live multitrack stem capture (see MultitrackRecorder.h) -- only
     // costs anything while actually recording: the 7 stem buses are
@@ -209,6 +298,7 @@ void AudioEngine::Render(float* out, int numFrames, double samplesPerStep) {
     for (int i = 0; i < kNumDrumTracks; ++i) {
         std::memset(dry, 0, sizeof(float) * needed);
         drums_.RenderSlot(static_cast<DrumSlot>(i), dry, numFrames, sampleRate_);
+        PumpApply(i, dry, numFrames);   // sidechain pumps (a drum can be ducked too, e.g. hats by the kick)
         // Per-track insert FX (EQ tilt / drive / chorus) -- pre-fader, so
         // applied here on the raw dry buffer before MixTrack's volume/pan.
         // No-op (see TrackInsertFx::Process's fast path) when all three
@@ -230,47 +320,17 @@ void AudioEngine::Render(float* out, int numFrames, double samplesPerStep) {
         int trackIndex = kNumDrumTracks + s;
         if (!synths_[s].IsActive()) {
             mixer_.tracks[trackIndex].peak.store(mixer_.tracks[trackIndex].peak.load() * 0.9f);
+            PumpSkip(trackIndex, numFrames);
             continue;
         }
         std::memset(dry, 0, sizeof(float) * needed);
         synths_[s].SetMod(mixer_.ParamOff(trackIndex, AutoParam::Cutoff) * AutoParamScale(5), mixer_.ParamOff(trackIndex, AutoParam::Resonance) * AutoParamScale(6));   // v44.38
         synths_[s].Render(dry, numFrames, sampleRate_);
 
-        // Kick -> Bass sidechain ducking: synth 0 == bass (see Types.h/
-        // RandomView's "synth 1 == bass" convention). Applied here, on the
-        // raw dry buffer, so it's a plain extra gain stage ahead of the
-        // normal volume/pan/mute mixing below -- unaffected by, and not
-        // affecting, anything else in the chain.
-        if (s == 0) {
-            const float downStep = 1.0f / (0.006f * static_cast<float>(sampleRate_));
-            const float upStep = 1.0f / (0.010f * static_cast<float>(sampleRate_));
-            if (!mixer_.fx.sidechainEnabled) {
-                sidechainGain_ = 1.0f; // no stale duck left over if re-enabled later
-                if (sidechainApplied_ < 1.0f || sidechainSmooth_ < 0.9999f) {   // glide back to 1 instead of stepping
-                    for (int i = 0; i < numFrames; ++i) {
-                        sidechainSmooth_ += (sidechainApplied_ - sidechainSmooth_) * 0.04f;
-                        dry[static_cast<size_t>(i) * 2 + 0] *= sidechainSmooth_;
-                        dry[static_cast<size_t>(i) * 2 + 1] *= sidechainSmooth_;
-                        sidechainApplied_ = std::min(1.0f, sidechainApplied_ + upStep);
-                    }
-                }
-            } else {
-                float releaseSec = std::max(0.02f, mixer_.fx.sidechainRelease);
-                float perSampleStep = 1.0f / (releaseSec * static_cast<float>(sampleRate_));
-                for (int i = 0; i < numFrames; ++i) {
-                    if (sidechainApplied_ > sidechainGain_) sidechainApplied_ = std::max(sidechainGain_, sidechainApplied_ - downStep);
-                    else sidechainApplied_ = std::min(sidechainGain_, sidechainApplied_ + upStep);
-                    // one more short smoothing stage rounds the corners of the slewed ramp
-                    sidechainSmooth_ += (sidechainApplied_ - sidechainSmooth_) * 0.04f;
-                    dry[static_cast<size_t>(i) * 2 + 0] *= sidechainSmooth_;
-                    dry[static_cast<size_t>(i) * 2 + 1] *= sidechainSmooth_;
-                    sidechainGain_ = std::min(1.0f, sidechainGain_ + perSampleStep);
-                }
-            }
-        }
+        PumpApply(trackIndex, dry, numFrames);   // sidechain pumps: a plain gain stage on the raw dry buffer, ahead of EQ / inserts
 
         // Per-track insert FX -- same as the drum loop above, applied after
-        // the sidechain duck (if any) so drive/chorus react to the
+        // the pump duck (if any) so drive/chorus react to the
         // already-ducked signal rather than fighting it.
         auto& ts = mixer_.tracks[trackIndex];
         ts.eqDsp.Process(dry, numFrames, TrackEqOf(ts));
@@ -286,11 +346,13 @@ void AudioEngine::Render(float* out, int numFrames, double samplesPerStep) {
         const bool audition = auditionVoice_.IsActive();
         if (!chordVoice_.IsActive() && !audition) {
             mixer_.tracks[trackIndex].peak.store(mixer_.tracks[trackIndex].peak.load() * 0.9f);
+            PumpSkip(trackIndex, numFrames);
         } else {
             std::memset(dry, 0, sizeof(float) * needed);
             chordVoice_.SetMod(mixer_.ParamOff(trackIndex, AutoParam::Cutoff) * AutoParamScale(5), mixer_.ParamOff(trackIndex, AutoParam::Resonance) * AutoParamScale(6));   // v44.38
             chordVoice_.Render(dry, numFrames, sampleRate_);
             if (audition) auditionVoice_.Render(dry, numFrames, sampleRate_);
+            PumpApply(trackIndex, dry, numFrames);
             auto& ts = mixer_.tracks[trackIndex];
             ts.eqDsp.Process(dry, numFrames, TrackEqOf(ts));
         ts.insertFx.Process(dry, numFrames, ts.insertDrive, ts.insertEqTilt, ts.insertChorus);
@@ -305,6 +367,7 @@ void AudioEngine::Render(float* out, int numFrames, double samplesPerStep) {
         const int trackIndex = kSamplerTrackIndex;
         std::memset(dry, 0, sizeof(float) * needed);
         if (sampler_.IsActive()) sampler_.Render(dry, numFrames, sampleRate_);
+        PumpApply(trackIndex, dry, numFrames);
         auto& ts = mixer_.tracks[trackIndex];
         ts.eqDsp.Process(dry, numFrames, TrackEqOf(ts));
         ts.insertFx.Process(dry, numFrames, ts.insertDrive, ts.insertEqTilt, ts.insertChorus);

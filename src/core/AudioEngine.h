@@ -20,6 +20,7 @@
 #include "Risers.h"
 #include "MidiCapture.h"
 #include "MultitrackRecorder.h"
+#include "Pump.h"
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -73,6 +74,11 @@ public:
     SamplePtr SamplerCurrentSample();
 
     void TriggerDrum(DrumSlot slot, float velocity, int variant, const DrumVoiceParams& params);
+    // Sidechain pumps: the sequencer calls this on every grid step while it plays (`tick` = its step counter, `stepsPerBeat` =
+    // the grid), which fires the pumps whose source is a steady beat (Every 1/4, 1/8, 1/16). See PumpSettings in Types.h.
+    void PumpTick(int tick, int stepsPerBeat);
+    // For the UI: how far pump p is down right now (0 = untouched, 1 = fully), updated once per audio block.
+    float PumpLevel(int p) const { return (p >= 0 && p < kNumPumps) ? pumpMeter_[static_cast<size_t>(p)].load(std::memory_order_relaxed) : 0.0f; }
     void SynthNoteOn(int synthIndex, int midiNote, float velocity, bool slide);
     void SynthNoteOff(int synthIndex);
     // notes/count: up to kMaxChordVoices simultaneous MIDI notes -- see
@@ -182,20 +188,22 @@ private:
     MidiCapture capture_;           // live MIDI capture, see MidiCapture.h
     MultitrackRecorder multitrack_; // live multitrack stem recording, see MultitrackRecorder.h
 
-    // Kick -> Bass sidechain ducking envelope (see FxSettings::
-    // sidechainEnabled/Amount/Release). 1.0 = no ducking. Snapped down to
-    // (1 - sidechainAmount) by TriggerDrum whenever a Kick fires, then
-    // ramped back up toward 1.0 sample-by-sample in Render() while mixing
-    // the bass synth (synth track 0) -- audio-thread-only, no atomics
-    // needed since TriggerDrum/Render both run under mutex_ and, in
-    // practice, on the same thread (see Sequencer::RenderAndAdvance,
-    // which calls TriggerDrum synchronously from inside its own Render
-    // call chain).
-    float sidechainGain_ = 1.0f;
-    // What is actually applied to the bass: sidechainGain_ followed through a slew
-    // limiter (down 4 ms, up 10 ms) so a kick never steps a sub bass = no click.
-    float sidechainApplied_ = 1.0f;
-    float sidechainSmooth_ = 1.0f;
+    // Sidechain pumps (see PumpSettings in Types.h, core/Pump.h). Triggered by PumpSourceHit (from TriggerDrum / SynthNoteOn /
+    // ChordNoteOn / ChordVoiceOn / SamplerNoteOn) and PumpTick (the sequencer's grid), all under mutex_ like Render, so no atomics.
+    // Render computes every active pump's envelope for the block into pumpEnv_ first, then each instrument multiplies its dry
+    // buffer by min over pumps of (1 - depth * env), through a short one-pole smoother (pumpGain_) so even ATTACK 0 never clicks.
+    void PumpSourceHit(int sourceTrack);              // mutex_ held
+    void PumpPrepareBlock(int numFrames, double samplesPerSixteenth);   // mutex_ held, top of Render
+    void PumpApply(int track, float* dry, int numFrames);               // mutex_ held, per instrument before its insert FX
+    void PumpSkip(int track, int numFrames);          // an instrument that was not rendered this block: keep its smoother in step
+    std::array<PumpEnvelope, kNumPumps> pumpEnv_{};
+    std::array<PumpTiming, kNumPumps> pumpTiming_{};
+    std::array<bool, kNumPumps> pumpLive_{};         // this block: the envelope moves (or is not 0)
+    std::array<bool, kNumPumps> pumpWasOn_{};
+    std::array<int, kNumPumps> pumpWasSource_{};
+    std::array<std::vector<float>, kNumPumps> pumpBuf_;   // per-sample envelope of this block (sized in Init / grown in Render)
+    std::array<float, kNumTracks> pumpGain_{};      // smoothed gain each instrument has now (1 = untouched)
+    std::array<std::atomic<float>, kNumPumps> pumpMeter_{};   // for the UI: each pump's envelope at the end of the last block
     float arrGainApplied_ = 1.0f;   // v44.6: chain-step level as applied so far (ramped across each block)
 
     std::array<float, kScopeSize> scopeRing_{};
