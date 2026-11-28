@@ -3,9 +3,10 @@
 // caption, a small value box, and the value text -- editable with the mouse and the arrow keys.
 //
 // Interaction (the same for every parameter, whatever it edits):
-//   - click           -> selects the cell (the caller keeps the selection
-//                        index; arrow LEFT/RIGHT move it, UP/DOWN change the
-//                        selected cell's value -- see ContextPanel.cpp)
+//   - click, or the mouse coming onto the cell (C3) -> selects the cell (the
+//                        caller keeps the selection index; arrow LEFT/RIGHT move
+//                        it, UP/DOWN change the selected cell's value -- see
+//                        ContextPanel.cpp), so Up / Down change the cell under the mouse
 //   - drag up / down  -> changes the value; reported as integer `steps`
 //                        (pxPerStep pixels of drag per step) so patch params
 //                        (AdjustPatchParam-style +1/-1) and float params
@@ -32,6 +33,7 @@ struct ParamCellResult {
     bool activated = false;   // a drag gesture just started (push undo once here)
     int steps = 0;            // net +/- steps from drag, or +1/-1 from a click on a discrete cell
     bool reset = false;       // C3 (UI-2): Option(Alt)+click: put the default back (no steps this press)
+    bool hoverStarted = false;   // C3: the mouse just came onto the cell (the caller selects it, so Up / Down change the cell under the mouse)
 };
 
 // UI-7: a caption or value wider than its cell ("KEY LOCK", "SWEEP TIME", "FORWARD") is drawn smaller to fit instead of being cut
@@ -100,6 +102,11 @@ inline ParamCellResult ParamCell(const char* id, const char* caption, const char
         else { res.activated = true; st->SetInt(kSkip, 0); }
     }
     const bool skip = st->GetInt(kSkip, 0) != 0;
+    {
+        const ImGuiID kHov = ImGui::GetID("hov");
+        res.hoverStarted = hovered && st->GetInt(kHov, 0) == 0;
+        st->SetInt(kHov, hovered ? 1 : 0);
+    }
     if (active && !skip) {
         *accumPx -= ImGui::GetIO().MouseDelta.y * (interaction::IsFine() ? interaction::kFineFactor : 1.0f);   // Shift = finer
         while (*accumPx >= pxPerStep) { res.steps++; *accumPx -= pxPerStep; }
@@ -108,8 +115,8 @@ inline ParamCellResult ParamCell(const char* id, const char* caption, const char
         *accumPx = 0.0f;
     }
     if (hovered || active) {
-        HintGestures(discrete ? "Click: next   Right-click: back   Drag: scrub   Up / Down: change the selected cell"
-                              : "Drag up / down: change   Shift: finer   Option+click: default   Up / Down: change the selected cell (Shift: bigger)");
+        HintGestures(discrete ? "Click: next   Right-click: back   Drag: scrub   Up / Down: change"
+                              : "Drag up / down: change   Shift: finer   Option+click: default   Up / Down: change (Shift: bigger)");
     }
     if (discrete && !skip) {
         // A click that never turned into a drag cycles forward; a right
