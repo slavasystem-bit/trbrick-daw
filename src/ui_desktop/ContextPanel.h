@@ -11,8 +11,8 @@
 //          CUSTOM chords) and SOUND (identical to a synth's block)
 //
 // Every value is a ParamCell: click or drag it with the mouse, or select it
-// with LEFT / RIGHT and change it with UP / DOWN (hold SHIFT for bigger
-// jumps) -- the d-pad convention for this screen. Synth patch edits use the
+// with LEFT / RIGHT and change it with UP / DOWN (C3: the cell under the mouse
+// while the mouse is on it; SHIFT = finer, as everywhere). Synth patch edits use the
 // same SynthParams.h list and live-engine push everywhere.
 #include <functional>
 #include "PresetBrowser.h"
@@ -42,6 +42,8 @@ private:
     int cellCounter_ = 0;      // index handed to the next cell this frame
     int lastCellCount_ = 0;    // cells drawn last frame (bounds LEFT / RIGHT)
     int selCell_ = 0;          // selected cell
+    int hoverNow_ = -1, hoverPrev_ = -1;   // C3: the cell under the mouse this / last frame (-1 = none)
+    int KeyCell() const { return hoverPrev_ >= 0 ? hoverPrev_ : selCell_; }   // the cell Up / Down change
     bool pendingUndo_ = false; // push one undo before the next real change
     DpadKeys keys_;
     ImVec2 cellSize_{60.0f, 68.0f};

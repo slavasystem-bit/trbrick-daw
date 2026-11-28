@@ -135,7 +135,7 @@ template <class Apply>
 void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, float cur, float lo, float hi,
                              float step, const char* text, Apply&& apply, bool dim, float def) {
     int idx = cellCounter_++;
-    bool sel = (idx == selCell_);
+    bool sel = (idx == KeyCell());
     float norm = hi > lo ? (cur - lo) / (hi - lo) : 0.0f;
     ParamCellResult r = ParamCell(id, cap, text, norm, sel, &accum_[std::min(idx, 95)], 3.0f, cellSize_, dim);
     if (r.reset) {   // C3 (UI-2): Option+click = the default, one undo step
@@ -145,16 +145,15 @@ void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, flo
     }
     int steps = r.steps;
     int key = 0;
-    if (sel) {
-        int mul = keys_.coarse ? 4 : 1;
-        if (keys_.up) key += mul;
-        if (keys_.down) key -= mul;
+    if (sel) {   // C3 (review of #57): Shift = finer, as everywhere
+        if (keys_.up) key += 1;
+        if (keys_.down) key -= 1;
     }
-    if (r.clicked || r.hoverStarted) selCell_ = idx;   // C3: the cell under the mouse takes Up / Down
+    if (r.clicked) selCell_ = idx;
+    if (r.hovered) hoverNow_ = idx;   // C3: Up / Down go to the cell under the mouse while it is there
     if (r.activated || key != 0) pendingUndo_ = true;
-    steps += key;
-    if (steps != 0) {
-        float nv = std::clamp(cur + steps * step, lo, hi);
+    if (steps != 0 || key != 0) {
+        float nv = std::clamp(cur + steps * step + key * step * (keys_.coarse ? interaction::kFineFactor : 1.0f), lo, hi);
         if (nv != cur) {
             if (pendingUndo_) { app.PushUndo(); pendingUndo_ = false; }
             apply(nv);
@@ -164,10 +163,11 @@ void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, flo
 
 int ContextPanel::DiscreteCell(const char* id, const char* cap, const char* text, bool dim) {
     int idx = cellCounter_++;
-    bool sel = (idx == selCell_);
+    bool sel = (idx == KeyCell());
     ParamCellResult r = ParamCell(id, cap, text, -1.0f, sel, &accum_[std::min(idx, 95)], 9.0f, cellSize_, dim);
     int steps = r.steps;
-    if (r.clicked || r.hoverStarted) selCell_ = idx;   // C3: the cell under the mouse takes Up / Down
+    if (r.clicked) selCell_ = idx;
+    if (r.hovered) hoverNow_ = idx;   // C3: Up / Down go to the cell under the mouse while it is there
     if (sel) {
         if (keys_.up) steps += 1;
         if (keys_.down) steps -= 1;
@@ -183,7 +183,7 @@ void ContextPanel::PatchCell(AppState& app, int ti, int paramIndex) {
     std::string val = FormatPatchParam(patch, paramIndex);
     float norm = PatchNorm(patch, name);
     int idx = cellCounter_++;
-    bool sel = (idx == selCell_);
+    bool sel = (idx == KeyCell());
     char id[24];
     std::snprintf(id, sizeof(id), "p%d", paramIndex);
     ParamCellResult r = ParamCell(id, cap.c_str(), val.c_str(), norm, sel, &accum_[std::min(idx, 95)],
@@ -208,11 +208,11 @@ void ContextPanel::PatchCell(AppState& app, int ti, int paramIndex) {
         }
         steps = dir * n;
     }
-    if (r.clicked || r.hoverStarted) selCell_ = idx;   // C3: the cell under the mouse takes Up / Down
+    if (r.clicked) selCell_ = idx;
+    if (r.hovered) hoverNow_ = idx;   // C3: Up / Down go to the cell under the mouse while it is there
     if (sel) {
-        int mul = (keys_.coarse && norm >= 0.0f) ? 5 : 1;
-        if (keys_.up) steps += mul;
-        if (keys_.down) steps -= mul;
+        if (keys_.up) steps += 1;     // one step of the patch value (the smallest there is; C3: no bigger step with Shift)
+        if (keys_.down) steps -= 1;
     }
     int dir = steps > 0 ? 1 : -1;
     if (steps != 0) app.PushSoundUndo();
@@ -269,7 +269,7 @@ void ContextPanel::DrawHeader(AppState& app, int ti) {
     }
     if (ImGui::IsItemHovered()) Hint("Copy every sound parameter of this instrument (and its steps and effects) as text,\nto paste into a question.");
 
-    const char* hint = "LEFT / RIGHT  select      UP / DOWN  change      SHIFT  bigger steps";
+    const char* hint = "LEFT / RIGHT  select      UP / DOWN  change (the cell under the mouse)      SHIFT  finer";
     float hw = ImGui::CalcTextSize(hint).x;
     ImGui::SameLine();
     ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX() + 16.0f, ImGui::GetWindowContentRegionMax().x - hw));
@@ -1516,6 +1516,7 @@ void ContextPanel::Draw(AppState& app, const DpadKeys& keys) {
 
     if (hearOffAt_ > 0.0 && ImGui::GetTime() >= hearOffAt_) StopHear(app);   // v44.53: HEAR of a SAMPLE synth lets go of its note
     keys_ = keys;
+    hoverPrev_ = hoverNow_; hoverNow_ = -1;   // C3: the cell the mouse was on last frame takes Up / Down this frame
     cellCounter_ = 0;
     cellSize_ = ImVec2(60.0f, 60.0f);
     // LEFT / RIGHT move the selection through last frame's cell list.

@@ -5765,8 +5765,12 @@ int main(int argc, char** argv) {
                 if (call.find("kFxDef.") != std::string::npos || call.find("kChainDef.") != std::string::npos) ++withDef;
             }
             check(calls >= 11 && withDef == calls, "c3 keys: every MASTER FX knob has its default for Option+click");
-            check(pc.find("res.hoverStarted = hovered") != std::string::npos && cx.find("if (r.clicked || r.hoverStarted) selCell_ = idx;") != std::string::npos,
-                  "c3 keys: in the instrument block Up / Down change the cell under the mouse");
+            check(pc.find("res.hovered = hovered;") != std::string::npos && cx.find("if (r.hovered) hoverNow_ = idx;") != std::string::npos &&
+                  cx.find("r.hoverStarted") == std::string::npos && cx.find("bool sel = (idx == KeyCell());") != std::string::npos,
+                  "c3 keys: in the instrument block Up / Down change the cell under the mouse only while the mouse is on it (review of #57)");
+            check(cx.find("keys_.coarse ? 4") == std::string::npos && cx.find("keys_.coarse && norm >= 0.0f) ? 5") == std::string::npos &&
+                  cx.find("keys_.coarse ? interaction::kFineFactor : 1.0f") != std::string::npos,
+                  "c3 keys: Shift + arrows is finer on instrument cells too, never bigger (review of #57)");
             bool noOwnDrag = true; std::string who;
             for (const auto& e : std::filesystem::directory_iterator("src/ui_desktop")) {
                 const std::string name = e.path().filename().string();
