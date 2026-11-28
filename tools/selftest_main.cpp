@@ -5769,7 +5769,8 @@ int main(int argc, char** argv) {
                   cx.find("r.hoverStarted") == std::string::npos && cx.find("bool sel = (idx == KeyCell());") != std::string::npos,
                   "c3 keys: in the instrument block Up / Down change the cell under the mouse only while the mouse is on it (review of #57)");
             check(cx.find("keys_.coarse ? 4") == std::string::npos && cx.find("keys_.coarse && norm >= 0.0f) ? 5") == std::string::npos &&
-                  cx.find("keys_.coarse ? interaction::kFineFactor : 1.0f") != std::string::npos,
+                  cx.find("fine ? interaction::kFineFactor : 1.0f") != std::string::npos && cx.find("keys_.coarse && step < 1.0f && !wholeSteps") != std::string::npos &&
+                  cx.find("false, -0.01f, true);") != std::string::npos,
                   "c3 keys: Shift + arrows is finer on instrument cells too, never bigger (review of #57)");
             bool noOwnDrag = true; std::string who;
             for (const auto& e : std::filesystem::directory_iterator("src/ui_desktop")) {

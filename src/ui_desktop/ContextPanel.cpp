@@ -133,7 +133,7 @@ void DrawWaveIcon(ImDrawList* dl, ImVec2 a, ImVec2 b, const SynthPatch& p, ImU32
 
 template <class Apply>
 void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, float cur, float lo, float hi,
-                             float step, const char* text, Apply&& apply, bool dim, float def) {
+                             float step, const char* text, Apply&& apply, bool dim, float def, bool wholeSteps) {
     int idx = cellCounter_++;
     bool sel = (idx == KeyCell());
     float norm = hi > lo ? (cur - lo) / (hi - lo) : 0.0f;
@@ -153,7 +153,8 @@ void ContextPanel::FloatCell(AppState& app, const char* id, const char* cap, flo
     if (r.hovered) hoverNow_ = idx;   // C3: Up / Down go to the cell under the mouse while it is there
     if (r.activated || key != 0) pendingUndo_ = true;
     if (steps != 0 || key != 0) {
-        float nv = std::clamp(cur + steps * step + key * step * (keys_.coarse ? interaction::kFineFactor : 1.0f), lo, hi);
+        const bool fine = keys_.coarse && step < 1.0f && !wholeSteps;   // review of #59: whole-number cells (STEPS, FINE, GAIN, ROOT, SWING %) keep the normal step
+        float nv = std::clamp(cur + steps * step + key * step * (fine ? interaction::kFineFactor : 1.0f), lo, hi);
         if (nv != cur) {
             if (pendingUndo_) { app.PushUndo(); pendingUndo_ = false; }
             apply(nv);
@@ -347,7 +348,7 @@ void ContextPanel::DrawCommonRow(AppState& app, int ti) {
     if (t.swing < 0.0f) std::snprintf(buf, sizeof(buf), "SCENE");
     else std::snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(t.swing * 100.0f + 0.5f));
     FloatCell(app, "tsw", "SWING", t.swing < 0.0f ? -0.01f : t.swing, -0.01f, 0.75f, 0.01f, buf,
-              [&](float v) { t.swing = v < 0.0f ? -1.0f : std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 0.75f); }, false, -0.01f);
+              [&](float v) { t.swing = v < 0.0f ? -1.0f : std::clamp(std::round(v * 100.0f) / 100.0f, 0.0f, 0.75f); }, false, -0.01f, true);
     BlockEnd(false);
 }
 
