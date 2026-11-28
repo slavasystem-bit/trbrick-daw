@@ -6,6 +6,7 @@
 // except SHOW IT (a temporary solo, put back when you leave) and TRY IT (a real, undoable change to the instrument's channel EQ / level / pan).
 #include "app/AppState.h"
 #include "app/MixLab.h"
+#include "SidechainPanel.h"
 #include <functional>
 
 namespace t8::desktop {
@@ -14,6 +15,8 @@ class MixLabPanel {
 public:
     void Draw(AppState& app, float width, float height);
     void Leave(AppState& app);   // called while the tab is not shown: puts a SHOW IT solo back
+    // MIX LAB has two views: FREQUENCIES (the analysis) and SIDECHAIN (the pumps). MASTER FX's "OPEN" asks for SIDECHAIN.
+    static inline bool requestSidechain = false;
 
 private:
     void StartAnalysis(AppState& app);
@@ -37,6 +40,8 @@ private:
     const MixReport& ShownReport() const { return (lab_.showB && !lab_.TriedFixes().empty() && haveCur_) ? curRep_ : baseRep_; }
 
     MixLab lab_;
+    SidechainPanel sidechain_;
+    int view_ = 0;                   // 0 FREQUENCIES, 1 SIDECHAIN
     MixSpectra cur_, base_;          // cur_ = the latest analysis of the live state, base_ = before any fix
     MixReport curRep_, baseRep_;
     bool haveCur_ = false, haveBase_ = false;

@@ -190,6 +190,29 @@ void MixLabPanel::ApplyAll(AppState& app, int onlyTrack) {
 
 void MixLabPanel::Draw(AppState& app, float width, float /*height*/) {
     const int frame = ImGui::GetFrameCount();
+    if (requestSidechain) { requestSidechain = false; view_ = 1; }
+    // the view switch, at the left of the top row (both views)
+    auto viewSwitch = [&] {
+        ImGui::AlignTextToFramePadding();
+        if (ToggleButton("FREQUENCIES", view_ == 0, ImVec2(106, 0), ToggleTab())) view_ = 0;
+        if (ImGui::IsItemHovered()) Hint("FREQUENCIES: where instruments fight for the same frequencies, and what to turn to make room.");
+        ImGui::SameLine(0, 4);
+        if (ToggleButton("SIDECHAIN", view_ == 1, ImVec2(96, 0), ToggleTeal())) view_ = 1;
+        if (ImGui::IsItemHovered()) Hint("SIDECHAIN: one hit turns other instruments down for a moment (up to 4 pumps, any source, any instruments).");
+    };
+    if (view_ == 1) {
+        lastFrame_ = -10;   // coming back to FREQUENCIES listens to the scene again
+        ReleaseSolo(app);
+        ImGui::PushFont(nullptr, 14.0f);
+        viewSwitch();
+        ImGui::SameLine(width - 260.0f);
+        ImGui::TextColored(ImVec4(0.56f, 0.57f, 0.64f, 1), "WHOLE PROJECT (every scene)");
+        if (ImGui::IsItemHovered()) Hint("The pumps belong to the whole project, like MASTER FX: every scene and brick uses the same ones.");
+        ImGui::Dummy(ImVec2(0, 2));
+        sidechain_.Draw(app, width, ImGui::GetContentRegionAvail().y);
+        ImGui::PopFont();
+        return;
+    }
     if (lastFrame_ != frame - 1 && lastFrame_ != frame && !lab_.Busy() && lab_.TriedFixes().empty()) StartAnalysis(app);   // opened: look at the scene as it is now
     lastFrame_ = frame;
     Refresh(app);
@@ -199,8 +222,7 @@ void MixLabPanel::Draw(AppState& app, float width, float /*height*/) {
 
     // ---- top row
     // C1: the name and "where instruments fight for the same frequencies" are on the tool strip above (main)
-    ImGui::AlignTextToFramePadding();
-    ImGui::Dummy(ImVec2(1.0f, ImGui::GetFrameHeight()));
+    viewSwitch();
     ImGui::SameLine(width - 560.0f);
     char sc[64];
     {   // v44.45: a brick lives in a hidden slot (18, 19 ...); the person knows it as BRICK n
