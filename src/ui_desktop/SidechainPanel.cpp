@@ -141,7 +141,7 @@ void SidechainPanel::Draw(AppState& app, float width, float height) {
         SceneLock lock(app.sequencer.PatternMutex(), "MIX LAB SIDECHAIN");
         app.PushSoundUndo();   // coalesces a drag into one undo step
         app.project.fx.pumps = np;
-        app.engine.GetMixer().fx.pumps = np;   // only the pumps: delayTimeSec there follows the tempo on its own
+        app.engine.SetPumps(np);   // only the pumps, under the engine lock (delayTimeSec there follows the tempo on its own)
     }
 }
 
